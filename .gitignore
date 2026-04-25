@@ -1,0 +1,42 @@
+node_modules/
+dist/
+*.js.map
+*.d.ts.map
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# tree-sitter CLI binary (platform-specific, not needed at runtime)
+tree-sitter.exe
+tree-sitter
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test coverage
+coverage/
+
+# Logs
+*.log
+
+# Lock files (keep package-lock.json but ignore others)
+yarn.lock
+pnpm-lock.yaml
+benchmarks
+playwright-report
+
+# Local reference — not part of the repo
+reference/jcodemunch-mcp/

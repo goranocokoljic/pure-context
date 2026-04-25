@@ -1,0 +1,184 @@
+import type { Database } from 'better-sqlite3';
+import type Parser from 'web-tree-sitter';
+
+// web-tree-sitter types live in the Parser namespace
+export type Tree = Parser.Tree;
+export type SyntaxNode = Parser.SyntaxNode;
+
+// ─── Symbol kinds ────────────────────────────────────────────────────────────
+
+export type SymbolKind =
+  | 'function'
+  | 'class'
+  | 'method'
+  | 'const'
+  | 'type'
+  | 'interface'
+  | 'enum'
+  | 'component'
+  | 'composable'
+  | 'hook'
+  | 'route'
+  | 'decorator'
+  | 'middleware'
+  // Phase 5 additions
+  | 'model'      // ORM models: Django Model, Rails ActiveRecord, Laravel Eloquent
+  | 'view'       // Django views, Rails controllers (request handler entry points)
+  | 'struct'     // C/C++ struct — distinct from class; plain data container
+  | 'macro'      // C/C++ #define object-like macros; distinct from const
+  | 'signal'     // Django signals, framework event emitters
+  // Phase 6 additions
+  | 'namespace'  // C++ named namespace; PHP namespace (retroactive enrichment); Kotlin package object
+  | 'widget';    // Flutter StatelessWidget / StatefulWidget subclasses
+
+// ─── Core records ─────────────────────────────────────────────────────────────
+
+export interface SymbolRecord {
+  /** Deterministic hash: SHA-256(filePath:name:kind).slice(0, 16) */
+  id: string;
+  name: string;
+  kind: SymbolKind;
+  /** Relative to repo root */
+  filePath: string;
+  startByte: number;
+  endByte: number;
+  /** One-line declaration signature, max 120 chars */
+  signature: string;
+  /** One-line description (from docstring, framework meta, or signature fallback) */
+  summary: string;
+  frameworkMeta?: Record<string, unknown>;
+}
+
+export interface ImportRecord {
+  sourceFile: string;
+  /** Raw import path as written in source */
+  specifier: string;
+  /** Resolved path relative to repo root, null for external packages */
+  resolvedPath: string | null;
+  importedNames: string[];
+  isTypeOnly: boolean;
+}
+
+export interface DepEdge {
+  repoId: string;
+  sourceFile: string;
+  sourceSymbolId: string | null;
+  targetFile: string;
+  targetSymbolId: string | null;
+  /** 'import' | 'dynamic-import' | 're-export' */
+  edgeType: string;
+  specifier: string;
+}
+
+// ─── Repository ───────────────────────────────────────────────────────────────
+
+export interface RepoMetadata {
+  id: string;
+  rootPath: string;
+  symbolCount: number;
+  fileCount: number;
+  /** JSON-serialized string[] */
+  languages: string[];
+  indexedAt: number;
+  schemaVersion: number;
+  /** Path to the cloned repo directory, null for locally-indexed repos. */
+  clonePath: string | null;
+  /** Owning tenant. Defaults to 'local' for single-tenant deployments. */
+  tenantId?: string;
+}
+
+// ─── Indexing ─────────────────────────────────────────────────────────────────
+
+export interface AISummarizerService {
+  summarizeBatch(symbols: SymbolRecord[]): Promise<Map<string, string>>;
+}
+
+export interface IndexOptions {
+  fileLimit?: number;
+  excludePatterns?: string[];
+  watch?: boolean;
+  watchDebounceMs?: number;
+  /** Active framework adapters to apply during indexing. */
+  adapters?: FrameworkAdapter[];
+  /**
+   * Optional AI summarizer for Stage 3 summaries. When provided, symbols
+   * whose summaries are still the signature fallback after Stage 1/2 are
+   * sent to the AI for a human-readable one-line description.
+   */
+  aiSummarizer?: AISummarizerService;
+  /**
+   * Path to the cloned repo directory. Set when indexing a remote repo
+   * cloned by index_repo. Stored in the DB so deleteIndex can clean it up.
+   */
+  clonePath?: string;
+  /**
+   * Optional semantic indexer for Phase 11 HNSW embedding.
+   * When provided, triggers semantic indexing after symbol extraction
+   * if the repo meets the configured threshold.
+   */
+  semanticIndexer?: import('../semantic/semantic-indexer.js').SemanticIndexer;
+  /**
+   * Number of worker threads for parallel file parsing.
+   * Default: min(cpuCount, 8). Set to 1 to disable (sequential mode).
+   */
+  concurrency?: number;
+}
+
+export interface IndexResult {
+  repoId: string;
+  filesIndexed: number;
+  filesSkipped: number;
+  symbolsFound: number;       // Symbols found in this run (incremental)
+  totalSymbolsInDb: number;   // COUNT(*) from DB after indexing (authoritative total)
+  totalFilesInDb: number;     // COUNT(*) from DB after indexing
+  edgesFound: number;
+  durationMs: number;
+  errors: Array<{ file: string; message: string }>;
+}
+
+export interface DiscoveredFile {
+  path: string;
+  size: number;
+  priority: number;
+}
+
+// ─── Language handler interface ───────────────────────────────────────────────
+
+export interface LanguageHandler {
+  extensions(): string[];
+  /** Absolute path to the .wasm grammar file. filePath hint allows per-extension grammar selection (e.g. .tsx vs .ts). */
+  grammarPath(filePath?: string): string;
+  extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRecord[];
+  extractImports(tree: Tree, source: Buffer): ImportRecord[];
+  extractDocstring(node: SyntaxNode): string | null;
+}
+
+// ─── Framework adapter interface ─────────────────────────────────────────────
+
+export interface ProcessedBlock {
+  content: Buffer;
+  /** 'typescript' | 'javascript' | 'html' | 'css' */
+  language: string;
+  /** Byte offset where this block starts in the original file */
+  offsetInOriginal: number;
+}
+
+export interface FrameworkAdapter {
+  name: string;
+  /** Additional file extensions this adapter handles (e.g. ['.vue']). Used by file discovery. */
+  extensions(): string[];
+  detect(projectRoot: string): Promise<boolean>;
+  fileFilter(filePath: string): boolean;
+  preProcess?(source: Buffer, filePath: string): ProcessedBlock[];
+  /** tree is null when there is no parseable script block (e.g. template-only .vue files). */
+  extractFrameworkSymbols(tree: Tree | null, source: Buffer, filePath: string): SymbolRecord[];
+  enrichMetadata?(symbol: SymbolRecord): SymbolRecord;
+}
+
+// ─── Services container ───────────────────────────────────────────────────────
+
+export interface Services {
+  db: Database;
+  repoId: string;
+  rootPath: string;
+}
