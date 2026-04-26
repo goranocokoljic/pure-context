@@ -1,0 +1,226 @@
+{
+  "tool": "purecontext",
+  "tool_version": "0.1.0",
+  "repo_path": "D:\\private\\PureContext",
+  "repo_id": "8c61e968be84e8d7",
+  "indexing": {
+    "duration_ms": 781.9,
+    "file_count": 527,
+    "symbol_count": 3820
+  },
+  "baseline_tokens": 867013,
+  "dim1": {
+    "workflow": "search_symbols (top 5) + get_symbol_source x3",
+    "tasks": [
+      {
+        "query": "index",
+        "baseline_tokens": 867013,
+        "tool_tokens": 865,
+        "reduction_pct": 99.9,
+        "ratio": 1002.3,
+        "search_tokens": 364,
+        "fetch_tokens": 501,
+        "hits_fetched": 3,
+        "search_ms": 0.4
+      },
+      {
+        "query": "search",
+        "baseline_tokens": 867013,
+        "tool_tokens": 2096,
+        "reduction_pct": 99.8,
+        "ratio": 413.7,
+        "search_tokens": 357,
+        "fetch_tokens": 1739,
+        "hits_fetched": 3,
+        "search_ms": 0.3
+      },
+      {
+        "query": "graph",
+        "baseline_tokens": 867013,
+        "tool_tokens": 3515,
+        "reduction_pct": 99.6,
+        "ratio": 246.7,
+        "search_tokens": 399,
+        "fetch_tokens": 3116,
+        "hits_fetched": 3,
+        "search_ms": 0.3
+      },
+      {
+        "query": "watcher",
+        "baseline_tokens": 867013,
+        "tool_tokens": 154,
+        "reduction_pct": 100,
+        "ratio": 5630,
+        "search_tokens": 54,
+        "fetch_tokens": 100,
+        "hits_fetched": 1,
+        "search_ms": 1
+      },
+      {
+        "query": "error",
+        "baseline_tokens": 867013,
+        "tool_tokens": 561,
+        "reduction_pct": 99.9,
+        "ratio": 1545.5,
+        "search_tokens": 288,
+        "fetch_tokens": 273,
+        "hits_fetched": 3,
+        "search_ms": 0.2
+      }
+    ],
+    "avg": {
+      "reduction_pct": 99.8,
+      "ratio": 1767.6
+    }
+  },
+  "dim2": {
+    "mode": "keyword",
+    "tasks": [
+      {
+        "id": "gt-01",
+        "query": "orchestrate indexing pipeline",
+        "expected_symbol": "indexFolder",
+        "expected_file": "src/core/index-manager.ts",
+        "rank_found": null,
+        "p1": false,
+        "p3": false,
+        "p5": false
+      },
+      {
+        "id": "gt-02",
+        "query": "parse source file tree-sitter ast",
+        "expected_symbol": "parseFile",
+        "expected_file": "src/core/parse-dispatcher.ts",
+        "rank_found": null,
+        "p1": false,
+        "p3": false,
+        "p5": false
+      },
+      {
+        "id": "gt-03",
+        "query": "symbol name keyword search database",
+        "expected_symbol": "searchSymbols",
+        "expected_file": "src/core/db/symbol-store.ts",
+        "rank_found": null,
+        "p1": false,
+        "p3": false,
+        "p5": false
+      },
+      {
+        "id": "gt-04",
+        "query": "full text search fts5 symbols",
+        "expected_symbol": "ftsSearchSymbols",
+        "expected_file": "src/core/db/symbol-store.ts",
+        "rank_found": null,
+        "p1": false,
+        "p3": false,
+        "p5": false
+      },
+      {
+        "id": "gt-05",
+        "query": "compute blast radius impact analysis",
+        "expected_symbol": "getBlastRadius",
+        "expected_file": "src/graph/graph-traversal.ts",
+        "rank_found": null,
+        "p1": false,
+        "p3": false,
+        "p5": false
+      },
+      {
+        "id": "gt-06",
+        "query": "hybrid vector semantic search",
+        "expected_symbol": "HybridSearcher",
+        "expected_file": "src/semantic/hybrid-search.ts",
+        "rank_found": null,
+        "p1": false,
+        "p3": false,
+        "p5": false
+      },
+      {
+        "id": "gt-07",
+        "query": "discover files scan directory gitignore",
+        "expected_symbol": "discoverFiles",
+        "expected_file": "src/core/file-discovery.ts",
+        "rank_found": null,
+        "p1": false,
+        "p3": false,
+        "p5": false
+      },
+      {
+        "id": "gt-08",
+        "query": "watch file changes chokidar",
+        "expected_symbol": "startWatching",
+        "expected_file": "src/core/watcher/file-watcher.ts",
+        "rank_found": null,
+        "p1": false,
+        "p3": false,
+        "p5": false
+      },
+      {
+        "id": "gt-09",
+        "query": "build dependency graph import edges",
+        "expected_symbol": "buildGraph",
+        "expected_file": "src/graph/graph-builder.ts",
+        "rank_found": null,
+        "p1": false,
+        "p3": false,
+        "p5": false
+      },
+      {
+        "id": "gt-10",
+        "query": "generate docstring summary symbol",
+        "expected_symbol": "generateSummary",
+        "expected_file": "src/summarizer/summarizer.ts",
+        "rank_found": null,
+        "p1": false,
+        "p3": false,
+        "p5": false
+      },
+      {
+        "id": "gt-11",
+        "query": "typescript language handler extract symbols",
+        "expected_symbol": "typescriptHandler",
+        "expected_file": "src/handlers/typescript.ts",
+        "rank_found": null,
+        "p1": false,
+        "p3": false,
+        "p5": false
+      },
+      {
+        "id": "gt-12",
+        "query": "find unused dead code exports",
+        "expected_symbol": "findDeadCode",
+        "expected_file": "src/graph/graph-traversal.ts",
+        "rank_found": null,
+        "p1": false,
+        "p3": false,
+        "p5": false
+      }
+    ],
+    "precision_at_1": 0,
+    "recall_at_5": 0
+  },
+  "dim3": {
+    "symbol_count": 3820,
+    "file_count": 527,
+    "total_loc": 104866,
+    "symbols_per_kloc": 36.4,
+    "by_kind": {
+      "const": 886,
+      "function": 1502,
+      "interface": 201,
+      "class": 267,
+      "method": 851,
+      "macro": 13,
+      "struct": 13,
+      "enum": 19,
+      "namespace": 7,
+      "type": 61
+    }
+  },
+  "dim4": {
+    "skipped": true,
+    "reason": "No semantic index — re-index with embeddings enabled"
+  },
+  "total_runtime_ms": 1323.6
+}

@@ -35,8 +35,14 @@ coverage/
 # Lock files (keep package-lock.json but ignore others)
 yarn.lock
 pnpm-lock.yaml
-benchmarks
+benchmarks/harness/run_jmunch.py
+benchmarks/results/jmunch.json
+benchmarks/results/comparison*.md
 playwright-report
+docs
+CHANGELOG.md
+API_STABILITY.md
+TELEMETRY.md
 
 # Local reference — not part of the repo
 reference/jcodemunch-mcp/

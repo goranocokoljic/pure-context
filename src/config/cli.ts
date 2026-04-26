@@ -1,10 +1,12 @@
-import { writeFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
+import { writeFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
+import { createInterface } from 'readline';
 import { getConfigPath, validateConfig, DEFAULT_CONFIG } from './config-schema.js';
 import { loadConfig } from './config-loader.js';
 import { GRAMMARS_DIR } from '../core/parse-dispatcher.js';
 import { openInMemoryDatabase } from '../core/db/schema.js';
+import { VERSION } from '../version.js';
 
 // ─── Default config template (JSON with explanatory comments) ─────────────────
 
@@ -16,7 +18,16 @@ const CONFIG_TEMPLATE = `{
   "indexDir": "${defaultIndexDir}",
 
   // Maximum number of source files to index per project.
-  "fileLimit": 1000,
+  // Set to 0 for unlimited. Raise for large monorepos (e.g. 50000).
+  "fileLimit": 10000,
+
+  // Worker threads for parallel file parsing.
+  // Default: number of CPU cores, up to 8. Set to 1 to disable parallelism.
+  "concurrency": 4,
+
+  // Maximum file size in bytes to index. Files larger than this are skipped silently.
+  // Default: 524288 (512 KB). Raise if you have large generated files you want indexed.
+  "maxFileSizeBytes": 524288,
 
   // Debounce window in milliseconds for the file watcher.
   "watchDebounceMs": 2000,
@@ -58,8 +69,9 @@ const CONFIG_TEMPLATE = `{
  * `purecontext-mcp config --init`
  * Write a default config.json to ~/.purecontext/config.json.
  * No-op if the file already exists.
+ * Prompts the user to opt in to anonymous telemetry.
  */
-export function cmdInit(): void {
+export async function cmdInit(): Promise<void> {
   const path = getConfigPath();
 
   if (existsSync(path)) {
@@ -71,6 +83,138 @@ export function cmdInit(): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, CONFIG_TEMPLATE, 'utf8');
   console.log(`Created config at ${path}`);
+
+  // ── Telemetry opt-in prompt ────────────────────────────────────────────────
+  const telemetryEnabled = await promptTelemetryOptIn();
+
+  // Append the telemetry section to the written config
+  try {
+    const existing = JSON.parse(readFileSync(path, 'utf8'));
+    existing.telemetry = { enabled: telemetryEnabled };
+    writeFileSync(path, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+  } catch {
+    // Non-fatal: if the append fails, telemetry defaults to disabled
+  }
+
+  if (telemetryEnabled) {
+    console.log('Telemetry enabled. Thank you! You can disable it anytime by setting telemetry.enabled to false.');
+  } else {
+    console.log('Telemetry disabled. You can enable it anytime by setting telemetry.enabled to true in the config.');
+  }
+}
+
+/**
+ * Prompt the user to opt in to anonymous telemetry.
+ * Returns true if user answered 'y', false otherwise.
+ * Only shown interactively (stdin is a TTY).
+ */
+async function promptTelemetryOptIn(): Promise<boolean> {
+  // Skip prompt when running non-interactively (e.g. in CI or piped input)
+  if (!process.stdin.isTTY) return false;
+
+  process.stdout.write(
+    '\nHelp improve PureContext by sharing anonymous usage stats?\n' +
+    'This sends only aggregate counts (languages used, file counts, timing).\n' +
+    'No code, file names, or personal data is ever collected.\n' +
+    'See docs/TELEMETRY.md for the full list of what is sent.\n\n' +
+    'Enable telemetry? (y/N): ',
+  );
+
+  return new Promise<boolean>((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.once('line', (answer) => {
+      rl.close();
+      resolve(answer.trim().toLowerCase() === 'y');
+    });
+    // If stdin closes without input, default to false
+    rl.once('close', () => resolve(false));
+  });
+}
+
+/**
+ * `purecontext-mcp --health`
+ * Quick self-check: Node.js version, SQLite, grammar files, config, index dir.
+ * All output goes to stdout so it is easy to grep/capture.
+ * Returns true if all checks passed (exit 0), false if any failed (exit 1).
+ */
+export function cmdHealth(write: (line: string) => void = (l) => process.stdout.write(l + '\n')): boolean {
+  const failures: string[] = [];
+
+  // ── Version header ───────────────────────────────────────────────────────
+  write(`purecontext-mcp v${VERSION}`);
+
+  // ── Node.js version ──────────────────────────────────────────────────────
+  const nodeVersion = process.version.replace(/^v/, '');
+  const [nodeMajor] = nodeVersion.split('.').map(Number);
+  if (nodeMajor >= 18) {
+    write(`✓ Node.js ${nodeVersion} (supported)`);
+  } else {
+    write(`✗ Node.js ${nodeVersion} (unsupported — requires >= 18.0.0)`);
+    failures.push('node');
+  }
+
+  // ── SQLite / better-sqlite3 ──────────────────────────────────────────────
+  try {
+    const db = openInMemoryDatabase();
+    db.prepare('SELECT 1').get();
+    db.close();
+    write('✓ better-sqlite3 loaded (prebuilt binary)');
+  } catch {
+    write('✗ better-sqlite3 failed to load — try: npm rebuild better-sqlite3');
+    failures.push('sqlite');
+  }
+
+  // ── Grammar WASM files ────────────────────────────────────────────────────
+  try {
+    const wasmFiles = readdirSync(GRAMMARS_DIR).filter((f) => f.endsWith('.wasm'));
+    if (wasmFiles.length > 0) {
+      write(`✓ Grammars: ${wasmFiles.length} languages available`);
+    } else {
+      write('✗ Grammars: no grammar files found — try: npm install -g purecontext-mcp@latest');
+      failures.push('grammars');
+    }
+  } catch {
+    write('✗ Grammars: grammar directory not found — try: npm install -g purecontext-mcp@latest');
+    failures.push('grammars');
+  }
+
+  // ── Config file ──────────────────────────────────────────────────────────
+  const configPath = getConfigPath();
+  if (!existsSync(configPath)) {
+    write('✓ Config: defaults in use (no config.json found)');
+  } else {
+    try {
+      const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+      const { valid, errors } = validateConfig(raw);
+      if (valid) {
+        write(`✓ Config: ${configPath} (valid)`);
+      } else {
+        write(`✗ Config: ${configPath} (${errors.length} error(s) — run 'purecontext-mcp config --check')`);
+        failures.push('config');
+      }
+    } catch {
+      write(`✗ Config: ${configPath} (parse error — run 'purecontext-mcp config --check')`);
+      failures.push('config');
+    }
+  }
+
+  // ── Index directory ───────────────────────────────────────────────────────
+  const cfg = loadConfig();
+  const indexDir = cfg.indexDir;
+  if (!existsSync(indexDir)) {
+    write(`✓ Index dir: ${indexDir} (not yet created — will be on first index)`);
+  } else {
+    try {
+      const dbFiles = readdirSync(indexDir).filter((f) => f.endsWith('.db'));
+      const repoCount = dbFiles.length;
+      write(`✓ Index dir: ${indexDir} (exists, ${repoCount} repo${repoCount === 1 ? '' : 's'} indexed)`);
+    } catch {
+      write(`✗ Index dir: ${indexDir} (read error)`);
+      failures.push('index-dir');
+    }
+  }
+
+  return failures.length === 0;
 }
 
 /**
@@ -79,6 +223,10 @@ export function cmdInit(): void {
  * Returns true if all checks pass.
  */
 export function cmdCheck(): boolean {
+  // Show the quick health summary as a preamble
+  const healthOk = cmdHealth();
+  process.stdout.write('\n');
+
   const path = getConfigPath();
   const issues: string[] = [];
   const passing: string[] = [];
@@ -135,13 +283,13 @@ export function cmdCheck(): boolean {
   for (const msg of passing) console.log(`  ✓  ${msg}`);
   for (const msg of issues) console.error(`  ✗  ${msg}`);
 
-  if (issues.length === 0) {
+  if (issues.length === 0 && healthOk) {
     console.log('\nAll checks passed.');
   } else {
-    console.error(`\n${issues.length} check(s) failed.`);
+    console.error(`\n${issues.length + (healthOk ? 0 : 1)} check(s) failed.`);
   }
 
-  return issues.length === 0;
+  return issues.length === 0 && healthOk;
 }
 
 /**

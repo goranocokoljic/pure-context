@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { join, resolve } from 'path';
+import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { discoverFiles } from '../../src/core/file-discovery.js';
@@ -10,7 +10,7 @@ const FIXTURE = resolve(__dirname, '../fixtures/basic-ts-project');
 
 describe('discoverFiles', () => {
   it('finds TypeScript files in the fixture project', () => {
-    const files = discoverFiles(FIXTURE, { extensions: ['.ts'] });
+    const { files } = discoverFiles(FIXTURE, { extensions: ['.ts'] });
     const paths = files.map((f) => f.path);
     expect(paths).toContain('src/index.ts');
     expect(paths).toContain('src/utils.ts');
@@ -19,34 +19,47 @@ describe('discoverFiles', () => {
   });
 
   it('respects .gitignore — excluded file is absent', () => {
-    const files = discoverFiles(FIXTURE, { extensions: ['.ts'] });
+    const { files } = discoverFiles(FIXTURE, { extensions: ['.ts'] });
     const paths = files.map((f) => f.path);
     expect(paths).not.toContain('ignored-file.ts');
   });
 
   it('excludes test/ files without extensions filter', () => {
-    const files = discoverFiles(FIXTURE, { extensions: ['.ts'] });
+    const { files } = discoverFiles(FIXTURE, { extensions: ['.ts'] });
     // test/ files should still be found (lower priority), just ranked last
     const testFiles = files.filter((f) => f.path.startsWith('test/'));
     expect(testFiles.length).toBeGreaterThan(0);
   });
 
   it('filters by extension', () => {
-    const files = discoverFiles(FIXTURE);
+    const { files } = discoverFiles(FIXTURE);
     // tsconfig.json and .gitignore should NOT appear when extensions=['.ts']
-    const tsOnly = discoverFiles(FIXTURE, { extensions: ['.ts'] });
+    const { files: tsOnly } = discoverFiles(FIXTURE, { extensions: ['.ts'] });
     expect(tsOnly.every((f) => f.path.endsWith('.ts'))).toBe(true);
     // without extension filter we get more files
     expect(files.length).toBeGreaterThanOrEqual(tsOnly.length);
   });
 
   it('respects the fileLimit option', () => {
-    const files = discoverFiles(FIXTURE, { fileLimit: 2 });
+    const { files } = discoverFiles(FIXTURE, { fileLimit: 2 });
     expect(files).toHaveLength(2);
   });
 
+  it('returns totalBeforeLimit reflecting the full count before slicing', () => {
+    const { files: allFiles, totalBeforeLimit: total } = discoverFiles(FIXTURE);
+    const { files: limited } = discoverFiles(FIXTURE, { fileLimit: 2 });
+    expect(limited).toHaveLength(2);
+    expect(total).toBeGreaterThanOrEqual(2);
+  });
+
+  it('fileLimit=0 returns all files', () => {
+    const { files: all } = discoverFiles(FIXTURE);
+    const { files: unlimited } = discoverFiles(FIXTURE, { fileLimit: 0 });
+    expect(unlimited.length).toEqual(all.length);
+  });
+
   it('sorts src/ files before lib/ before test/', () => {
-    const files = discoverFiles(FIXTURE, { extensions: ['.ts'] });
+    const { files } = discoverFiles(FIXTURE, { extensions: ['.ts'] });
     const priorities = files.map((f) => f.priority);
     // priorities should be non-increasing
     for (let i = 1; i < priorities.length; i++) {
@@ -59,7 +72,7 @@ describe('discoverFiles', () => {
   });
 
   it('lib/ files have higher priority than test/', () => {
-    const files = discoverFiles(FIXTURE, { extensions: ['.ts'] });
+    const { files } = discoverFiles(FIXTURE, { extensions: ['.ts'] });
     const libFile = files.find((f) => f.path.startsWith('lib/'));
     const testFile = files.find((f) => f.path.startsWith('test/'));
     expect(libFile).toBeDefined();
@@ -68,7 +81,7 @@ describe('discoverFiles', () => {
   });
 
   it('returns DiscoveredFile with path, size, priority fields', () => {
-    const files = discoverFiles(FIXTURE, { extensions: ['.ts'], fileLimit: 1 });
+    const { files } = discoverFiles(FIXTURE, { extensions: ['.ts'], fileLimit: 1 });
     expect(files[0]).toHaveProperty('path');
     expect(files[0]).toHaveProperty('size');
     expect(files[0]).toHaveProperty('priority');
@@ -77,7 +90,7 @@ describe('discoverFiles', () => {
   });
 
   it('excludes extra patterns provided in options', () => {
-    const files = discoverFiles(FIXTURE, {
+    const { files } = discoverFiles(FIXTURE, {
       extensions: ['.ts'],
       extraExcludePatterns: ['lib/**'],
     });
@@ -86,7 +99,7 @@ describe('discoverFiles', () => {
 
   it('handles a directory with no matching files gracefully', () => {
     // Point at a subdirectory that has no .json files
-    const files = discoverFiles(FIXTURE, { extensions: ['.json'] });
+    const { files } = discoverFiles(FIXTURE, { extensions: ['.json'] });
     // tsconfig.json exists at root level
     const paths = files.map((f) => f.path);
     expect(paths).toContain('tsconfig.json');

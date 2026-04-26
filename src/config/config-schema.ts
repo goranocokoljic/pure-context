@@ -1,4 +1,4 @@
-import { homedir } from 'os';
+import { homedir, cpus } from 'os';
 import { join } from 'path';
 
 // ─── Config shape ─────────────────────────────────────────────────────────────
@@ -6,10 +6,12 @@ import { join } from 'path';
 export interface PureContextConfig {
   /** Directory where SQLite index files are stored. */
   indexDir: string;
-  /** Maximum number of source files to index per project (default 1000). */
+  /** Maximum number of source files to index per project. 0 = unlimited. Default: 10000. */
   fileLimit: number;
   /** Debounce window in ms for the file watcher (default 2000). */
   watchDebounceMs: number;
+  /** Worker threads for parallel parsing. Default: min(CPU count, 8). */
+  concurrency: number;
   /** Additional glob patterns to exclude during file discovery. */
   excludePatterns: string[];
   /**
@@ -179,6 +181,16 @@ export interface PureContextConfig {
    * null means no layer config — the tool will report an error if called without inline config.
    */
   layers: LayersConfig | null;
+  /** Anonymous opt-in telemetry settings. Default: disabled. */
+  telemetry: {
+    /** Send anonymous usage stats (languages used, file counts, timing). Default: false. */
+    enabled: boolean;
+    /**
+     * Endpoint to POST telemetry events to.
+     * Default: 'https://telemetry.purecontext.dev/v1/event'.
+     */
+    endpoint: string;
+  };
 }
 
 // ─── Layers config ────────────────────────────────────────────────────────────
@@ -205,8 +217,9 @@ export interface LayersConfig {
 
 export const DEFAULT_CONFIG: PureContextConfig = {
   indexDir: join(homedir(), '.purecontext', 'indexes'),
-  fileLimit: 1000,
+  fileLimit: 10000,
   watchDebounceMs: 2000,
+  concurrency: Math.min(cpus().length, 8),
   excludePatterns: [],
   adapters: 'auto',
   ai: {
@@ -229,7 +242,7 @@ export const DEFAULT_CONFIG: PureContextConfig = {
     batchSize: 500,
     concurrency: 2,
   },
-  maxFileSizeBytes: 1_048_576,
+  maxFileSizeBytes: 524_288,
   allowSymlinks: false,
   transport: 'stdio',
   http: {
@@ -284,6 +297,10 @@ export const DEFAULT_CONFIG: PureContextConfig = {
       { from: 'handlers', to: 'adapters', allowed: false },
     ],
   },
+  telemetry: {
+    enabled: false,
+    endpoint: 'https://telemetry.purecontext.dev/v1/event',
+  },
 };
 
 // ─── Config file location ─────────────────────────────────────────────────────
@@ -313,8 +330,14 @@ export function validateConfig(raw: unknown): ValidationResult {
   }
   if ('fileLimit' in cfg) {
     const v = cfg['fileLimit'];
-    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) {
-      errors.push('fileLimit must be a positive integer');
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+      errors.push('fileLimit must be a non-negative integer (0 = unlimited)');
+    }
+  }
+  if ('concurrency' in cfg) {
+    const v = cfg['concurrency'];
+    if (typeof v !== 'number' || !Number.isInteger(v) || (v as number) < 1) {
+      errors.push('concurrency must be a positive integer');
     }
   }
   if ('watchDebounceMs' in cfg) {
@@ -561,6 +584,21 @@ export function validateConfig(raw: unknown): ValidationResult {
             }
           }
         }
+      }
+    }
+  }
+
+  if ('telemetry' in cfg) {
+    const t = cfg['telemetry'];
+    if (typeof t !== 'object' || t === null || Array.isArray(t)) {
+      errors.push('telemetry must be an object');
+    } else {
+      const tel = t as Record<string, unknown>;
+      if ('enabled' in tel && typeof tel['enabled'] !== 'boolean') {
+        errors.push('telemetry.enabled must be a boolean');
+      }
+      if ('endpoint' in tel && typeof tel['endpoint'] !== 'string') {
+        errors.push('telemetry.endpoint must be a string');
       }
     }
   }

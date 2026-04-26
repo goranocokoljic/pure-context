@@ -5,7 +5,7 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import type { LanguageHandler } from './types.js';
 import type { Tree } from './types.js';
-import { ParseError } from './errors.js';
+import { GrammarNotFoundError, ParseError } from './errors.js';
 
 // web-tree-sitter is CJS. ESM interop varies between Node.js native ESM and
 // bundler/test-runner transforms (e.g. vitest). Handle both shapes defensively:
@@ -89,7 +89,11 @@ async function loadLanguage(grammarPath: string): Promise<ParserType.Language> {
   const cached = languageCache.get(grammarPath);
   if (cached) return cached;
 
-  const language = await Parser.Language.load(grammarPath);
-  languageCache.set(grammarPath, language);
-  return language;
+  try {
+    const language = await Parser.Language.load(grammarPath);
+    languageCache.set(grammarPath, language);
+    return language;
+  } catch (err) {
+    throw new GrammarNotFoundError(grammarPath, err);
+  }
 }

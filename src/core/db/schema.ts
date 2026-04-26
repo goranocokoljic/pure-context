@@ -1,10 +1,41 @@
-import Database from 'better-sqlite3';
+import { createRequire } from 'module';
 import { createHash } from 'crypto';
 import { mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import type { RepoMetadata } from '../types.js';
 import { EMBEDDINGS_DDL } from './embedding-store.js';
+import { NativeDependencyError } from '../errors.js';
+
+// ─── Lazy-load better-sqlite3 ─────────────────────────────────────────────────
+// We defer the native-addon load so any binary mismatch throws a
+// NativeDependencyError (with an actionable user message) rather than an
+// opaque module-load crash.
+
+const _require = createRequire(import.meta.url);
+
+// better-sqlite3 uses `export =` (not `export default`), so its type is the
+// constructor itself when accessed via the module namespace.
+import type _BetterSqlite3 from 'better-sqlite3';
+type DatabaseConstructor = typeof _BetterSqlite3;
+let _Database: DatabaseConstructor | null = null;
+let _dbLoadError: unknown = null;
+let _dbLoaded = false;
+
+function getDatabase(): DatabaseConstructor {
+  if (!_dbLoaded) {
+    try {
+      _Database = _require('better-sqlite3') as DatabaseConstructor;
+    } catch (err) {
+      _dbLoadError = err;
+    }
+    _dbLoaded = true;
+  }
+  if (_dbLoadError !== null || _Database === null) {
+    throw new NativeDependencyError(_dbLoadError);
+  }
+  return _Database;
+}
 
 export const SCHEMA_VERSION = 3;
 
@@ -90,21 +121,23 @@ export function getIndexDir(): string {
   return join(homedir(), '.pureconfig', 'indexes');
 }
 
-export function openDatabase(repoId: string, indexDir?: string): Database.Database {
+export function openDatabase(repoId: string, indexDir?: string): InstanceType<DatabaseConstructor> {
+  const DB = getDatabase();
   const dir = indexDir ?? getIndexDir();
   mkdirSync(dir, { recursive: true });
-  const db = new Database(join(dir, `${repoId}.db`));
+  const db = new DB(join(dir, `${repoId}.db`));
   initializeDatabase(db);
   return db;
 }
 
-export function openInMemoryDatabase(): Database.Database {
-  const db = new Database(':memory:');
+export function openInMemoryDatabase(): InstanceType<DatabaseConstructor> {
+  const DB = getDatabase();
+  const db = new DB(':memory:');
   initializeDatabase(db);
   return db;
 }
 
-export function initializeDatabase(db: Database.Database): void {
+export function initializeDatabase(db: InstanceType<DatabaseConstructor>): void {
   db.exec(DDL);
   db.exec(EMBEDDINGS_DDL);
   runMigrations(db);
@@ -112,7 +145,7 @@ export function initializeDatabase(db: Database.Database): void {
 
 // ─── Migrations ───────────────────────────────────────────────────────────────
 
-function runMigrations(db: Database.Database): void {
+function runMigrations(db: InstanceType<DatabaseConstructor>): void {
   // Read the highest schema_version present in repos (if any rows exist).
   // If the table is empty or new, no migration needed — rows are written at
   // SCHEMA_VERSION by callers.
@@ -179,7 +212,7 @@ function runMigrations(db: Database.Database): void {
 
 // ─── Repo operations ──────────────────────────────────────────────────────────
 
-export function upsertRepo(db: Database.Database, meta: RepoMetadata): void {
+export function upsertRepo(db: InstanceType<DatabaseConstructor>, meta: RepoMetadata): void {
   db.prepare(`
     INSERT INTO repos (id, root_path, symbol_count, file_count, languages, indexed_at, schema_version, clone_path, tenant_id)
     VALUES (@id, @rootPath, @symbolCount, @fileCount, @languages, @indexedAt, @schemaVersion, @clonePath, @tenantId)
@@ -205,14 +238,14 @@ export function upsertRepo(db: Database.Database, meta: RepoMetadata): void {
   });
 }
 
-export function getRepo(db: Database.Database, repoId: string): RepoMetadata | null {
+export function getRepo(db: InstanceType<DatabaseConstructor>, repoId: string): RepoMetadata | null {
   const row = db.prepare<[string], DbRepoRow>(
     'SELECT * FROM repos WHERE id = ?',
   ).get(repoId);
   return row ? rowToRepo(row) : null;
 }
 
-export function listRepos(db: Database.Database): RepoMetadata[] {
+export function listRepos(db: InstanceType<DatabaseConstructor>): RepoMetadata[] {
   return db.prepare<[], DbRepoRow>('SELECT * FROM repos ORDER BY indexed_at DESC').all().map(rowToRepo);
 }
 

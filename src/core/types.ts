@@ -134,6 +134,8 @@ export interface IndexResult {
   edgesFound: number;
   durationMs: number;
   errors: Array<{ file: string; message: string }>;
+  /** Non-fatal issues that affect completeness (limit reached, parse errors, etc.). */
+  warnings: string[];
 }
 
 export interface DiscoveredFile {

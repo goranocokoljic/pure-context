@@ -1,0 +1,39 @@
+{
+  "version": "1.1",
+  "description": "Benchmark tasks for comparing jcodemunch-mcp vs purecontext-mcp. Uses the PureContext repo itself as the test subject — pure TypeScript, both tools support it.",
+  "tokenizer": "cl100k_base",
+  "repos": [
+    {
+      "id": "local/PureContext",
+      "description": "PureContext MCP itself — TypeScript source, ~100 files. Path resolved at runtime from the repo root."
+    }
+  ],
+  "note": "Single-keyword queries are used for Dimension 1 (token efficiency) so that both tools' substring-based keyword search can produce results. Multi-word natural-language queries are used in ground-truth.json for Dimension 2 (quality), where jcodemunch's word-level scoring vs PureContext keyword LIKE is a genuine differentiator.",
+  "tasks": [
+    {
+      "id": "index",
+      "query": "index",
+      "description": "Find indexing-related symbols (indexFolder, indexRepo, etc.)."
+    },
+    {
+      "id": "search",
+      "query": "search",
+      "description": "Find symbol search logic (searchSymbols, ftsSearchSymbols, etc.)."
+    },
+    {
+      "id": "graph",
+      "query": "graph",
+      "description": "Find dependency graph construction and traversal."
+    },
+    {
+      "id": "watcher",
+      "query": "watcher",
+      "description": "Find file watcher logic (startWatching, FileWatcher, etc.)."
+    },
+    {
+      "id": "error",
+      "query": "error",
+      "description": "Find error classes and error handling (PureContextError, ParseError, etc.)."
+    }
+  ]
+}

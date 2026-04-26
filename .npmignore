@@ -1,0 +1,24 @@
+# Source files (compiled output in dist/ is included via `files` allowlist)
+src/
+*.ts
+!*.d.ts
+
+# Tests and benchmarks
+test/
+benchmarks/
+playwright.config.ts
+vitest.config.ts
+
+# Docs and reference
+docs/
+reference/
+
+# Build and CI config
+tsconfig.json
+.github/
+.eslintrc*
+.eslintignore
+
+# Development tooling
+node_modules/
+*.tgz

@@ -1,10 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { logger } from '../core/logger.js';
 import { VERSION } from '../version.js';
 import { getConfig } from '../config/config-loader.js';
 import { startHttpServer } from './http-server.js';
 import type { TransportMode } from './transport.js';
+import { PureContextError } from '../core/errors.js';
+import { track } from '../core/telemetry.js';
 
 // ── Tool modules ──────────────────────────────────────────────────────────────
 import * as indexFolderTool from './tools/index-folder.js';
@@ -24,6 +27,25 @@ import * as getLayerViolationsTool from './tools/get-layer-violations.js';
 import * as indexRepoTool from './tools/index-repo.js';
 import * as searchSemanticTool from './tools/search-semantic.js';
 import * as getSavingsStatsTool from './tools/get-savings-stats.js';
+
+// ─── Tool error handling ──────────────────────────────────────────────────────
+
+/**
+ * Convert a known PureContextError into a structured MCP error response so the
+ * AI agent sees the userMessage instead of a raw exception or server crash.
+ * Re-throws anything that is not a PureContextError (let the SDK handle it).
+ */
+function handleToolError(err: unknown): CallToolResult {
+  if (err instanceof PureContextError) {
+    const msg = err.userMessage ?? err.message;
+    const detail = err.suggestion ? `\n\nSuggestion: ${err.suggestion}` : '';
+    return {
+      content: [{ type: 'text', text: msg + detail }],
+      isError: true,
+    };
+  }
+  throw err;
+}
 
 // ─── Server factory ───────────────────────────────────────────────────────────
 
@@ -45,87 +67,87 @@ export function createMcpServer(): McpServer {
   server.registerTool(indexFolderTool.name, {
     description: indexFolderTool.description,
     inputSchema: indexFolderTool.inputSchema,
-  }, (args) => indexFolderTool.handler(args));
+  }, (args) => indexFolderTool.handler(args).catch(handleToolError));
 
   server.registerTool(listReposTool.name, {
     description: listReposTool.description,
     inputSchema: listReposTool.inputSchema,
-  }, () => listReposTool.handler());
+  }, () => listReposTool.handler().catch(handleToolError));
 
   server.registerTool(resolveRepoTool.name, {
     description: resolveRepoTool.description,
     inputSchema: resolveRepoTool.inputSchema,
-  }, (args) => resolveRepoTool.handler(args));
+  }, (args) => resolveRepoTool.handler(args).catch(handleToolError));
 
   server.registerTool(searchSymbolsTool.name, {
     description: searchSymbolsTool.description,
     inputSchema: searchSymbolsTool.inputSchema,
-  }, (args) => searchSymbolsTool.handler(args));
+  }, (args) => searchSymbolsTool.handler(args).catch(handleToolError));
 
   server.registerTool(getSymbolSourceTool.name, {
     description: getSymbolSourceTool.description,
     inputSchema: getSymbolSourceTool.inputSchema,
-  }, (args) => getSymbolSourceTool.handler(args));
+  }, (args) => getSymbolSourceTool.handler(args).catch(handleToolError));
 
   server.registerTool(getFileOutlineTool.name, {
     description: getFileOutlineTool.description,
     inputSchema: getFileOutlineTool.inputSchema,
-  }, (args) => getFileOutlineTool.handler(args));
+  }, (args) => getFileOutlineTool.handler(args).catch(handleToolError));
 
   server.registerTool(getRepoOutlineTool.name, {
     description: getRepoOutlineTool.description,
     inputSchema: getRepoOutlineTool.inputSchema,
-  }, (args) => getRepoOutlineTool.handler(args));
+  }, (args) => getRepoOutlineTool.handler(args).catch(handleToolError));
 
   server.registerTool(getFileTreeTool.name, {
     description: getFileTreeTool.description,
     inputSchema: getFileTreeTool.inputSchema,
-  }, (args) => getFileTreeTool.handler(args));
+  }, (args) => getFileTreeTool.handler(args).catch(handleToolError));
 
   server.registerTool(getContextBundleTool.name, {
     description: getContextBundleTool.description,
     inputSchema: getContextBundleTool.inputSchema,
-  }, (args) => getContextBundleTool.handler(args));
+  }, (args) => getContextBundleTool.handler(args).catch(handleToolError));
 
   server.registerTool(getBlastRadiusTool.name, {
     description: getBlastRadiusTool.description,
     inputSchema: getBlastRadiusTool.inputSchema,
-  }, (args) => getBlastRadiusTool.handler(args));
+  }, (args) => getBlastRadiusTool.handler(args).catch(handleToolError));
 
   server.registerTool(findImportersTool.name, {
     description: findImportersTool.description,
     inputSchema: findImportersTool.inputSchema,
-  }, (args) => findImportersTool.handler(args));
+  }, (args) => findImportersTool.handler(args).catch(handleToolError));
 
   server.registerTool(findDeadCodeTool.name, {
     description: findDeadCodeTool.description,
     inputSchema: findDeadCodeTool.inputSchema,
-  }, (args) => findDeadCodeTool.handler(args));
+  }, (args) => findDeadCodeTool.handler(args).catch(handleToolError));
 
   server.registerTool(searchTextTool.name, {
     description: searchTextTool.description,
     inputSchema: searchTextTool.inputSchema,
-  }, (args) => searchTextTool.handler(args));
+  }, (args) => searchTextTool.handler(args).catch(handleToolError));
 
   server.registerTool(getLayerViolationsTool.name, {
     description: getLayerViolationsTool.description,
     inputSchema: getLayerViolationsTool.inputSchema,
-  }, (args) => getLayerViolationsTool.handler(args));
+  }, (args) => getLayerViolationsTool.handler(args).catch(handleToolError));
 
   server.registerTool(indexRepoTool.name, {
     description: indexRepoTool.description,
     inputSchema: indexRepoTool.inputSchema,
-  }, (args) => indexRepoTool.handler(args));
+  }, (args) => indexRepoTool.handler(args).catch(handleToolError));
 
   server.registerTool(searchSemanticTool.name, {
     description: searchSemanticTool.description,
     inputSchema: searchSemanticTool.inputSchema,
-  }, (args) => searchSemanticTool.handler(args));
+  }, (args) => searchSemanticTool.handler(args).catch(handleToolError));
 
   server.registerTool(getSavingsStatsTool.name, {
     description: getSavingsStatsTool.description,
     inputSchema: getSavingsStatsTool.inputSchema,
-  }, (args) => getSavingsStatsTool.handler(args));
+  }, (args) => getSavingsStatsTool.handler(args).catch(handleToolError));
 
   return server;
 }
@@ -140,6 +162,9 @@ export interface StartServerOptions {
 }
 
 export async function startServer(options: StartServerOptions = {}): Promise<void> {
+  // Fire-and-forget telemetry on startup
+  track({ event: 'server_start' }).catch(() => { /* silently ignored */ });
+
   const cfg = getConfig();
   const mode: TransportMode = options.transport ?? cfg.transport;
   const port = options.port ?? cfg.http.port;

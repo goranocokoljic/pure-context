@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { randomBytes } from 'crypto';
 import { logger } from '../core/logger.js';
+import { ConfigValidationError } from '../core/errors.js';
 import {
   DEFAULT_CONFIG,
   getConfigPath,
@@ -44,7 +45,7 @@ export function loadConfig(configPath?: string): PureContextConfig {
 
   if (!existsSync(path)) {
     logger.debug(`No config file found at ${path} — using defaults`);
-    return { ...DEFAULT_CONFIG, ai: { ...DEFAULT_CONFIG.ai }, rateLimit: { ...DEFAULT_CONFIG.rateLimit, perToolLimits: { ...DEFAULT_CONFIG.rateLimit.perToolLimits } } };
+    return { ...DEFAULT_CONFIG, ai: { ...DEFAULT_CONFIG.ai }, rateLimit: { ...DEFAULT_CONFIG.rateLimit, perToolLimits: { ...DEFAULT_CONFIG.rateLimit.perToolLimits } }, telemetry: { ...DEFAULT_CONFIG.telemetry } };
   }
 
   let raw: unknown;
@@ -53,13 +54,18 @@ export function loadConfig(configPath?: string): PureContextConfig {
     raw = JSON.parse(text);
   } catch (err) {
     logger.warn(`Failed to parse config at ${path}: ${err} — using defaults`);
-    return { ...DEFAULT_CONFIG, ai: { ...DEFAULT_CONFIG.ai }, rateLimit: { ...DEFAULT_CONFIG.rateLimit, perToolLimits: { ...DEFAULT_CONFIG.rateLimit.perToolLimits } } };
+    return { ...DEFAULT_CONFIG, ai: { ...DEFAULT_CONFIG.ai }, rateLimit: { ...DEFAULT_CONFIG.rateLimit, perToolLimits: { ...DEFAULT_CONFIG.rateLimit.perToolLimits } }, telemetry: { ...DEFAULT_CONFIG.telemetry } };
   }
 
   const { valid, errors } = validateConfig(raw);
   if (!valid) {
-    logger.warn(`Invalid config at ${path}:\n${errors.map((e) => `  - ${e}`).join('\n')} — using defaults`);
-    return { ...DEFAULT_CONFIG, ai: { ...DEFAULT_CONFIG.ai } };
+    const formatted = errors.map((e) => `  ${e}`).join('\n');
+    const err = new ConfigValidationError(formatted, path);
+    logger.warn(
+      `${err.userMessage}\nRun 'purecontext-mcp config --check' for full validation.\n` +
+      'Falling back to defaults.',
+    );
+    return { ...DEFAULT_CONFIG, ai: { ...DEFAULT_CONFIG.ai }, telemetry: { ...DEFAULT_CONFIG.telemetry } };
   }
 
   return mergeConfig(raw as Partial<PureContextConfig>);
@@ -101,6 +107,7 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
     indexDir: partial.indexDir ?? DEFAULT_CONFIG.indexDir,
     fileLimit: partial.fileLimit ?? DEFAULT_CONFIG.fileLimit,
     watchDebounceMs: partial.watchDebounceMs ?? DEFAULT_CONFIG.watchDebounceMs,
+    concurrency: partial.concurrency ?? DEFAULT_CONFIG.concurrency,
     excludePatterns: partial.excludePatterns ?? DEFAULT_CONFIG.excludePatterns,
     adapters: partial.adapters ?? DEFAULT_CONFIG.adapters,
     ai: {
@@ -152,6 +159,10 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
         : { ...DEFAULT_CONFIG.rateLimit.perToolLimits },
     },
     layers: partial.layers !== undefined ? partial.layers : DEFAULT_CONFIG.layers,
+    telemetry: {
+      enabled: partial.telemetry?.enabled ?? DEFAULT_CONFIG.telemetry.enabled,
+      endpoint: partial.telemetry?.endpoint ?? DEFAULT_CONFIG.telemetry.endpoint,
+    },
   };
 
   // Warn if remote AI is enabled but no key is available

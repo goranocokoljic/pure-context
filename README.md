@@ -1,6 +1,24 @@
 # PureContext MCP
 
+[![CI](https://github.com/Goran-Ocokoljic/purecontext-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Goran-Ocokoljic/purecontext-mcp/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/purecontext-mcp.svg)](https://www.npmjs.com/package/purecontext-mcp)
+[![Stable](https://img.shields.io/badge/stability-stable-brightgreen.svg)](docs/API_STABILITY.md)
+
 Token-efficient source code navigation for AI agents. Indexes TypeScript/JavaScript projects using tree-sitter AST parsing, stores structured symbol metadata in SQLite, and exposes a Model Context Protocol (MCP) server so AI agents can retrieve precisely the code they need — signatures, dependencies, and source — without reading entire files.
+
+## What's New in 1.0
+
+Version 1.0.0 is the first stable release. The tool API is now under semver — breaking changes require a major version bump. See [CHANGELOG.md](CHANGELOG.md) for the full history and [docs/API_STABILITY.md](docs/API_STABILITY.md) for the public API contract.
+
+Highlights since the initial prototype:
+- **16 languages** — TypeScript, JavaScript, Python, Go, Rust, Java, C/C++, C#, Swift, Kotlin, Dart, Elixir, Haskell, Scala, R, PHP, Lua, Ruby
+- **20+ framework adapters** — Vue, Nuxt, React, Next.js, Angular, Express, Fastify, Django, FastAPI, Flask, Spring, and more
+- **FTS5 + semantic search** — keyword search with camelCase splitting and HNSW vector index
+- **Dependency graph tools** — blast radius, context bundle, dead code detection
+- **Worker thread pool** — parallel parsing for 10k–50k file enterprise repos
+- **Zero-build install** — prebuilt `better-sqlite3` binaries for Node 18/20/22 × Windows/macOS/Linux
+
+---
 
 ## Quick Start
 

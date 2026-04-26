@@ -69,9 +69,10 @@ import './adapters/hibernate.js';
 import './adapters/sqlalchemy.js';
 import './adapters/django-orm.js';
 import { startServer } from './server/mcp-server.js';
-import { cmdInit, cmdCheck, cmdShow } from './config/cli.js';
+import { cmdInit, cmdCheck, cmdShow, cmdHealth } from './config/cli.js';
 import { runKeysCommand } from './config/keys-cli.js';
 import { VERSION } from './version.js';
+import { PureContextError, formatErrorBox } from './core/errors.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -139,7 +140,7 @@ async function bootstrap(): Promise<void> {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
-  // ── Version / help flags (before bootstrap) ──────────────────────────────
+  // ── Version / help / health flags (before bootstrap) ────────────────────
   if (args.includes('--version') || args.includes('-v')) {
     process.stdout.write(`${NAME} v${VERSION}\n`);
     process.exit(0);
@@ -148,6 +149,11 @@ async function main(): Promise<void> {
   if (args.includes('--help') || args.includes('-h')) {
     printHelp();
     process.exit(0);
+  }
+
+  if (args.includes('--health')) {
+    const ok = cmdHealth();
+    process.exit(ok ? 0 : 1);
   }
 
   // ── keys sub-command ─────────────────────────────────────────────────────
@@ -163,7 +169,7 @@ async function main(): Promise<void> {
     const flag = args[1];
 
     if (flag === '--init') {
-      cmdInit();
+      await cmdInit();
       process.exit(0);
     }
 
@@ -206,17 +212,43 @@ async function main(): Promise<void> {
   try {
     await bootstrap();
     logger.info(`${NAME} v${VERSION} starting`);
+
+    // Print a startup hint only when running in an interactive terminal.
+    // stdin.isTTY is undefined when piped — writing to stdout when piped
+    // would corrupt the MCP stdio protocol stream. Always use stderr here.
+    if (process.stdin.isTTY) {
+      process.stderr.write(
+        `${NAME} v${VERSION} — ready for MCP connections (stdio)\n` +
+          `Run with --help for usage, --health to verify installation.\n`,
+      );
+    }
+
     await startServer({
       transport: transportFlag as import('./server/transport.js').TransportMode | undefined,
       port: portFlag,
     });
   } catch (err) {
-    logger.error(`Fatal startup error: ${err}`);
+    printFatalError(err);
     process.exit(1);
   }
 }
 
+function printFatalError(err: unknown): void {
+  if (err instanceof PureContextError && err.userMessage) {
+    process.stderr.write(formatErrorBox(err.userMessage, err.suggestion ?? '') + '\n');
+  } else {
+    process.stderr.write(
+      'Unexpected error — please report this at https://github.com/gococ/purecontext-mcp/issues\n',
+    );
+    if (err instanceof Error && err.stack) {
+      process.stderr.write(err.stack + '\n');
+    } else {
+      process.stderr.write(String(err) + '\n');
+    }
+  }
+}
+
 main().catch((err) => {
-  process.stderr.write(`Unhandled error: ${err}\n`);
+  printFatalError(err);
   process.exit(1);
 });

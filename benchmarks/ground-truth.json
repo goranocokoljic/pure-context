@@ -1,0 +1,189 @@
+{
+  "version": "1.1",
+  "description": "Manually curated precision tasks for the PureContext repo. Each entry defines a natural-language query an AI agent would realistically use, and the expected symbol name + file that should appear in the top results.",
+  "note": "Matching is by symbol name string (case-sensitive). Rank is 1-based; null means not found in top 5.",
+  "tasks": [
+    {
+      "id": "gt-01",
+      "query": "orchestrate indexing pipeline",
+      "expected_symbol": "indexFolder",
+      "expected_file": "src/core/index-manager.ts",
+      "description": "Main async function that orchestrates the full indexing pipeline for a local folder."
+    },
+    {
+      "id": "gt-02",
+      "query": "parse source file tree-sitter ast",
+      "expected_symbol": "parseFile",
+      "expected_file": "src/core/parse-dispatcher.ts",
+      "description": "Dispatches a source buffer through the tree-sitter parser and returns the AST."
+    },
+    {
+      "id": "gt-03",
+      "query": "symbol name keyword search database",
+      "expected_symbol": "searchSymbols",
+      "expected_file": "src/core/db/symbol-store.ts",
+      "description": "SQL LIKE-based symbol search used in keyword mode."
+    },
+    {
+      "id": "gt-04",
+      "query": "full text search fts5 symbols",
+      "expected_symbol": "ftsSearchSymbols",
+      "expected_file": "src/core/db/symbol-store.ts",
+      "description": "FTS5-powered full-text symbol search."
+    },
+    {
+      "id": "gt-05",
+      "query": "compute blast radius impact analysis",
+      "expected_symbol": "getBlastRadius",
+      "expected_file": "src/graph/graph-traversal.ts",
+      "description": "Computes the transitive dependents of a symbol for change impact analysis."
+    },
+    {
+      "id": "gt-06",
+      "query": "hybrid vector semantic search",
+      "expected_symbol": "HybridSearcher",
+      "expected_file": "src/semantic/hybrid-search.ts",
+      "description": "Class that fuses FTS5 keyword scores and HNSW vector scores via RRF."
+    },
+    {
+      "id": "gt-07",
+      "query": "discover files scan directory gitignore",
+      "expected_symbol": "discoverFiles",
+      "expected_file": "src/core/file-discovery.ts",
+      "description": "Scans a directory for source files, applying gitignore rules and extension filtering."
+    },
+    {
+      "id": "gt-08",
+      "query": "watch file changes chokidar",
+      "expected_symbol": "startWatching",
+      "expected_file": "src/core/watcher/file-watcher.ts",
+      "description": "Starts the chokidar file watcher for incremental reindexing."
+    },
+    {
+      "id": "gt-09",
+      "query": "build dependency graph import edges",
+      "expected_symbol": "buildGraph",
+      "expected_file": "src/graph/graph-builder.ts",
+      "description": "Constructs the dependency graph from ImportRecord lists."
+    },
+    {
+      "id": "gt-10",
+      "query": "generate docstring summary symbol",
+      "expected_symbol": "generateSummary",
+      "expected_file": "src/summarizer/summarizer.ts",
+      "description": "Generates a one-line summary for a symbol from its docstring or signature."
+    },
+    {
+      "id": "gt-11",
+      "query": "typescript language handler extract symbols",
+      "expected_symbol": "typescriptHandler",
+      "expected_file": "src/handlers/typescript.ts",
+      "description": "The LanguageHandler implementation for TypeScript that extracts symbols via AST."
+    },
+    {
+      "id": "gt-12",
+      "query": "find unused dead code exports",
+      "expected_symbol": "findDeadCode",
+      "expected_file": "src/graph/graph-traversal.ts",
+      "description": "Identifies exported symbols with no importers in the dependency graph."
+    },
+    {
+      "id": "gt-13",
+      "query": "preprocess camelCase query for fts5",
+      "expected_symbol": "preprocessQuery",
+      "expected_file": "src/core/search/query-preprocessor.ts",
+      "description": "Expands camelCase identifiers and normalises a query string before FTS5 MATCH."
+    },
+    {
+      "id": "gt-14",
+      "query": "rank symbols relevance scoring",
+      "expected_symbol": "rankSymbols",
+      "expected_file": "src/core/search/relevance-ranker.ts",
+      "description": "Post-FTS5 re-ranker that promotes exact and prefix name matches to the top."
+    },
+    {
+      "id": "gt-15",
+      "query": "vue single file component split blocks",
+      "expected_symbol": "splitVueSFC",
+      "expected_file": "src/adapters/vue-preprocessor.ts",
+      "description": "Splits a .vue SFC file into separate script, template, and style ProcessedBlocks."
+    },
+    {
+      "id": "gt-16",
+      "query": "express route adapter framework",
+      "expected_symbol": "expressAdapter",
+      "expected_file": "src/adapters/express.ts",
+      "description": "FrameworkAdapter that extracts Express.js route handlers and middleware."
+    },
+    {
+      "id": "gt-17",
+      "query": "react component adapter symbol extraction",
+      "expected_symbol": "reactAdapter",
+      "expected_file": "src/adapters/react.ts",
+      "description": "FrameworkAdapter for React — detects and extracts component and hook symbols."
+    },
+    {
+      "id": "gt-18",
+      "query": "load validate config file",
+      "expected_symbol": "loadConfig",
+      "expected_file": "src/config/config-loader.ts",
+      "description": "Loads and validates the PureContext config.json from disk."
+    },
+    {
+      "id": "gt-19",
+      "query": "get current active config",
+      "expected_symbol": "getConfig",
+      "expected_file": "src/config/config-loader.ts",
+      "description": "Returns the singleton PureContextConfig, loading it on first call."
+    },
+    {
+      "id": "gt-20",
+      "query": "base error class purecontext",
+      "expected_symbol": "PureContextError",
+      "expected_file": "src/core/errors.ts",
+      "description": "Base error class that all PureContext domain errors extend."
+    },
+    {
+      "id": "gt-21",
+      "query": "ast parse error handler",
+      "expected_symbol": "ParseError",
+      "expected_file": "src/core/errors.ts",
+      "description": "Error thrown when tree-sitter fails to parse a source file."
+    },
+    {
+      "id": "gt-22",
+      "query": "database storage error",
+      "expected_symbol": "StorageError",
+      "expected_file": "src/core/errors.ts",
+      "description": "Error thrown on SQLite read/write failures."
+    },
+    {
+      "id": "gt-23",
+      "query": "insert bulk populate fts index symbols",
+      "expected_symbol": "bulkUpsertFtsSymbols",
+      "expected_file": "src/core/db/symbol-store.ts",
+      "description": "Populates the fts_symbols FTS5 table for all symbols in a batch."
+    },
+    {
+      "id": "gt-24",
+      "query": "get file symbols outline structure",
+      "expected_symbol": "handler",
+      "expected_file": "src/server/tools/get-file-outline.ts",
+      "description": "MCP tool handler that returns the symbol outline for a single source file."
+    },
+    {
+      "id": "gt-25",
+      "query": "resolve import path tsconfig alias",
+      "expected_symbol": "createResolver",
+      "expected_file": "src/graph/path-resolver.ts",
+      "description": "Creates a path resolver that handles tsconfig path aliases and relative imports."
+    },
+    {
+      "id": "gt-26",
+      "query": "javascript handler ast symbol extraction",
+      "expected_symbol": "javascriptHandler",
+      "expected_file": "src/handlers/javascript.ts",
+      "description": "The LanguageHandler implementation for JavaScript that extracts symbols via AST."
+    }
+  ]
+}

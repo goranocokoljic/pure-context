@@ -32,6 +32,7 @@ import type { ParseJob } from './worker-pool.js';
 import { createResolver } from '../graph/path-resolver.js';
 import { buildGraph } from '../graph/graph-builder.js';
 import { join } from 'path';
+import { track } from './telemetry.js';
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -70,10 +71,11 @@ export async function indexFolder(
   // ── 3. Discover files ─────────────────────────────────────────────────────
   const adapters = options.adapters ?? [];
   const allExtensions = [...getSupportedExtensions(), ...getAdapterExtensions(adapters)];
+  const effectiveFileLimit = options.fileLimit ?? DEFAULT_FILE_LIMIT;
 
-  const discovered = discoverFiles(absRoot, {
+  const { files: discovered, totalBeforeLimit } = discoverFiles(absRoot, {
     extensions: allExtensions,
-    fileLimit: options.fileLimit ?? DEFAULT_FILE_LIMIT,
+    fileLimit: effectiveFileLimit,
     extraExcludePatterns: options.excludePatterns,
   });
 
@@ -86,6 +88,21 @@ export async function indexFolder(
     return supportedExts.has(ext) || adapterExts.has(ext);
   });
 
+  // ── 3c. Check if fileLimit was hit ────────────────────────────────────────
+  const warnings: string[] = [];
+  const limitSkipped =
+    effectiveFileLimit > 0 && totalBeforeLimit > effectiveFileLimit
+      ? totalBeforeLimit - effectiveFileLimit
+      : 0;
+
+  if (limitSkipped > 0) {
+    const msg =
+      `fileLimit of ${effectiveFileLimit} reached — ${limitSkipped} file(s) were skipped. ` +
+      `Raise 'fileLimit' in ~/.purecontext/config.json to index the full project.`;
+    warnings.push(msg);
+    logger.warn(msg);
+  }
+
   // ── 4. Load hash cache from DB ────────────────────────────────────────────
   const cache = createHashCache();
   const existingHashes = getAllFileHashes(db, repoId);
@@ -96,7 +113,7 @@ export async function indexFolder(
   // ── 5. Filter to changed / new files (carry content to avoid double-read) ──
   interface FileEntry { relPath: string; content: Buffer; hash: string }
   const toProcess: FileEntry[] = [];
-  let filesSkipped = 0;
+  let filesSkipped = limitSkipped;
 
   for (const df of supportedFiles) {
     let content: Buffer;
@@ -302,12 +319,24 @@ export async function indexFolder(
     edgesFound: edges.length,
     durationMs: Date.now() - start,
     errors,
+    warnings,
   };
 
   logger.info(
     `Index complete: ${result.filesIndexed} files, ${result.symbolsFound} symbols, ` +
       `${result.edgesFound} edges in ${result.durationMs}ms`,
   );
+
+  // Fire-and-forget telemetry — never awaited, never affects the result
+  track({
+    event: 'index_complete',
+    languages: ['typescript', 'javascript'],
+    adapterNames: adapters.map((a) => a.name),
+    fileCount: result.filesIndexed,
+    symbolCount: result.symbolsFound,
+    durationMs: result.durationMs,
+    workerCount: concurrency,
+  }).catch(() => { /* telemetry errors are always silent */ });
 
   return result;
 }
@@ -478,6 +507,7 @@ export async function reindexFiles(
     edgesFound: edges.length,
     durationMs: Date.now() - start,
     errors,
+    warnings: [],
   };
 }
 

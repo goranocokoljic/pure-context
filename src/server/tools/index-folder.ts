@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { indexFolder } from '../../core/index-manager.js';
+import { getConfig } from '../../config/config-loader.js';
 import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
@@ -15,15 +16,19 @@ export const inputSchema = {
   fileLimit: z
     .number()
     .int()
-    .positive()
+    .min(0)
     .optional()
-    .describe('Maximum number of files to index (default 1000)'),
+    .describe('Maximum number of files to index (0 = unlimited; default from config, typically 10000)'),
 };
 
 export async function handler(
   args: { path: string; fileLimit?: number },
 ): Promise<CallToolResult> {
-  const result = await indexFolder(args.path, { fileLimit: args.fileLimit });
+  const cfg = getConfig();
+  const result = await indexFolder(args.path, {
+    fileLimit: args.fileLimit ?? cfg.fileLimit,
+    concurrency: cfg.concurrency,
+  });
   return {
     content: [
       {
@@ -37,6 +42,7 @@ export async function handler(
             edgesFound: result.edgesFound,
             durationMs: result.durationMs,
             errors: result.errors,
+            warnings: result.warnings,
             _meta: buildMeta({ timingMs: result.durationMs }),
           },
           null,

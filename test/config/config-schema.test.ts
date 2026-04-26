@@ -30,10 +30,12 @@ describe('validateConfig', () => {
     expect(errors[0]).toContain('indexDir');
   });
 
-  it('rejects non-integer fileLimit', () => {
+  it('rejects non-integer or negative fileLimit', () => {
     expect(validateConfig({ fileLimit: 'lots' }).valid).toBe(false);
     expect(validateConfig({ fileLimit: 1.5 }).valid).toBe(false);
-    expect(validateConfig({ fileLimit: 0 }).valid).toBe(false);
+    expect(validateConfig({ fileLimit: -1 }).valid).toBe(false);
+    // 0 means unlimited — valid
+    expect(validateConfig({ fileLimit: 0 }).valid).toBe(true);
   });
 
   it('rejects negative watchDebounceMs', () => {

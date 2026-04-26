@@ -1,4 +1,5 @@
 import { estimateSavings, recordSavings, costAvoided } from '../../core/token-tracker.js';
+import { VERSION } from '../../version.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,7 @@ export interface MetaEnvelope {
   cost_avoided?: Record<string, number>;
   total_cost_avoided?: Record<string, number>;
   powered_by: string;
+  server_version: string;
 }
 
 // ─── Implementation ───────────────────────────────────────────────────────────
@@ -44,11 +46,13 @@ export function buildMeta(options: MetaOptions): MetaEnvelope {
       cost_avoided,
       total_cost_avoided,
       powered_by: POWERED_BY,
+      server_version: VERSION,
     };
   }
 
   return {
     timing_ms: timingMs,
     powered_by: POWERED_BY,
+    server_version: VERSION,
   };
 }

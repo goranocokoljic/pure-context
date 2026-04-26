@@ -34,16 +34,23 @@ const PRIORITY_MAP: Array<[string, number]> = [
   ['__tests__', 10],
 ];
 
-export const DEFAULT_FILE_LIMIT = 1000;
+export const DEFAULT_FILE_LIMIT = 10000;
 
 // ─── Options ──────────────────────────────────────────────────────────────────
 
 export interface DiscoveryOptions {
   extensions?: string[];
+  /** Maximum files to return. 0 = unlimited. Default: DEFAULT_FILE_LIMIT. */
   fileLimit?: number;
   extraExcludePatterns?: string[];
   /** Maximum file size in bytes — files larger than this are skipped. Default: 1 MB. */
   maxFileSizeBytes?: number;
+}
+
+export interface DiscoveryResult {
+  files: DiscoveredFile[];
+  /** Total files found before the fileLimit was applied. */
+  totalBeforeLimit: number;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -51,7 +58,7 @@ export interface DiscoveryOptions {
 export function discoverFiles(
   rootPath: string,
   options: DiscoveryOptions = {},
-): DiscoveredFile[] {
+): DiscoveryResult {
   const {
     extensions,
     fileLimit = DEFAULT_FILE_LIMIT,
@@ -69,7 +76,9 @@ export function discoverFiles(
     return a.path.localeCompare(b.path);
   });
 
-  return results.slice(0, fileLimit);
+  const totalBeforeLimit = results.length;
+  const files = fileLimit > 0 ? results.slice(0, fileLimit) : results;
+  return { files, totalBeforeLimit };
 }
 
 // ─── Internals ────────────────────────────────────────────────────────────────
