@@ -35,6 +35,22 @@ import * as getSavingsStatsTool from './tools/get-savings-stats.js';
  * AI agent sees the userMessage instead of a raw exception or server crash.
  * Re-throws anything that is not a PureContextError (let the SDK handle it).
  */
+/**
+ * Bridge the SDK's untyped args (unknown) to a strongly-typed handler.
+ * registerTool in SDK >=1.20 leaves the callback args as `unknown` unless
+ * InputArgs is explicitly provided; this helper restores the concrete type.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function typed(handler: (args: any) => CallToolResult | Promise<CallToolResult>) {
+  return async (args: unknown): Promise<CallToolResult> => {
+    try {
+      return await handler(args);
+    } catch (err) {
+      return handleToolError(err);
+    }
+  };
+}
+
 function handleToolError(err: unknown): CallToolResult {
   if (err instanceof PureContextError) {
     const msg = err.userMessage ?? err.message;
@@ -67,87 +83,87 @@ export function createMcpServer(): McpServer {
   server.registerTool(indexFolderTool.name, {
     description: indexFolderTool.description,
     inputSchema: indexFolderTool.inputSchema,
-  }, (args) => indexFolderTool.handler(args).catch(handleToolError));
+  }, typed((args) => indexFolderTool.handler(args)));
 
   server.registerTool(listReposTool.name, {
     description: listReposTool.description,
     inputSchema: listReposTool.inputSchema,
-  }, () => listReposTool.handler().catch(handleToolError));
+  }, typed(() => listReposTool.handler()));
 
   server.registerTool(resolveRepoTool.name, {
     description: resolveRepoTool.description,
     inputSchema: resolveRepoTool.inputSchema,
-  }, (args) => resolveRepoTool.handler(args).catch(handleToolError));
+  }, typed((args) => resolveRepoTool.handler(args)));
 
   server.registerTool(searchSymbolsTool.name, {
     description: searchSymbolsTool.description,
     inputSchema: searchSymbolsTool.inputSchema,
-  }, (args) => searchSymbolsTool.handler(args).catch(handleToolError));
+  }, typed((args) => searchSymbolsTool.handler(args)));
 
   server.registerTool(getSymbolSourceTool.name, {
     description: getSymbolSourceTool.description,
     inputSchema: getSymbolSourceTool.inputSchema,
-  }, (args) => getSymbolSourceTool.handler(args).catch(handleToolError));
+  }, typed((args) => getSymbolSourceTool.handler(args)));
 
   server.registerTool(getFileOutlineTool.name, {
     description: getFileOutlineTool.description,
     inputSchema: getFileOutlineTool.inputSchema,
-  }, (args) => getFileOutlineTool.handler(args).catch(handleToolError));
+  }, typed((args) => getFileOutlineTool.handler(args)));
 
   server.registerTool(getRepoOutlineTool.name, {
     description: getRepoOutlineTool.description,
     inputSchema: getRepoOutlineTool.inputSchema,
-  }, (args) => getRepoOutlineTool.handler(args).catch(handleToolError));
+  }, typed((args) => getRepoOutlineTool.handler(args)));
 
   server.registerTool(getFileTreeTool.name, {
     description: getFileTreeTool.description,
     inputSchema: getFileTreeTool.inputSchema,
-  }, (args) => getFileTreeTool.handler(args).catch(handleToolError));
+  }, typed((args) => getFileTreeTool.handler(args)));
 
   server.registerTool(getContextBundleTool.name, {
     description: getContextBundleTool.description,
     inputSchema: getContextBundleTool.inputSchema,
-  }, (args) => getContextBundleTool.handler(args).catch(handleToolError));
+  }, typed((args) => getContextBundleTool.handler(args)));
 
   server.registerTool(getBlastRadiusTool.name, {
     description: getBlastRadiusTool.description,
     inputSchema: getBlastRadiusTool.inputSchema,
-  }, (args) => getBlastRadiusTool.handler(args).catch(handleToolError));
+  }, typed((args) => getBlastRadiusTool.handler(args)));
 
   server.registerTool(findImportersTool.name, {
     description: findImportersTool.description,
     inputSchema: findImportersTool.inputSchema,
-  }, (args) => findImportersTool.handler(args).catch(handleToolError));
+  }, typed((args) => findImportersTool.handler(args)));
 
   server.registerTool(findDeadCodeTool.name, {
     description: findDeadCodeTool.description,
     inputSchema: findDeadCodeTool.inputSchema,
-  }, (args) => findDeadCodeTool.handler(args).catch(handleToolError));
+  }, typed((args) => findDeadCodeTool.handler(args)));
 
   server.registerTool(searchTextTool.name, {
     description: searchTextTool.description,
     inputSchema: searchTextTool.inputSchema,
-  }, (args) => searchTextTool.handler(args).catch(handleToolError));
+  }, typed((args) => searchTextTool.handler(args)));
 
   server.registerTool(getLayerViolationsTool.name, {
     description: getLayerViolationsTool.description,
     inputSchema: getLayerViolationsTool.inputSchema,
-  }, (args) => getLayerViolationsTool.handler(args).catch(handleToolError));
+  }, typed((args) => getLayerViolationsTool.handler(args)));
 
   server.registerTool(indexRepoTool.name, {
     description: indexRepoTool.description,
     inputSchema: indexRepoTool.inputSchema,
-  }, (args) => indexRepoTool.handler(args).catch(handleToolError));
+  }, typed((args) => indexRepoTool.handler(args)));
 
   server.registerTool(searchSemanticTool.name, {
     description: searchSemanticTool.description,
     inputSchema: searchSemanticTool.inputSchema,
-  }, (args) => searchSemanticTool.handler(args).catch(handleToolError));
+  }, typed((args) => searchSemanticTool.handler(args)));
 
   server.registerTool(getSavingsStatsTool.name, {
     description: getSavingsStatsTool.description,
     inputSchema: getSavingsStatsTool.inputSchema,
-  }, (args) => getSavingsStatsTool.handler(args).catch(handleToolError));
+  }, typed((args) => getSavingsStatsTool.handler(args)));
 
   return server;
 }

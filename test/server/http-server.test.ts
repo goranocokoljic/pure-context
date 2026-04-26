@@ -27,6 +27,7 @@ async function startTestServer(
     corsOrigins,
     auth,
     serverFactory: makeServerFactory(),
+    serveUi: false, // disable SPA fallback so 404 assertions work regardless of build state
   });
 
   const port = (server.address() as { port: number }).port;

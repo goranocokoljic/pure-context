@@ -101,7 +101,10 @@
       "mcp__purecontext-mcp__get_layer_violations",
       "mcp__purecontext-mcp__resolve_repo",
       "mcp__purecontext-mcp__search_semantic",
-      "Bash(git rm:*)"
+      "Bash(git rm:*)",
+      "Bash(npm ls:*)",
+      "Bash(npm pack:*)",
+      "Bash(echo \"Exit code: $?\")"
     ]
   }
 }

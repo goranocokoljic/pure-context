@@ -268,6 +268,10 @@ describe('6. get-savings-stats — reset', () => {
 describe('7. persistence — savings survive in-memory reset (simulates restart)', () => {
   it('total reloads from disk after _resetForTesting', async () => {
     const symbolId = await findSymbolId('formatDiagnostic');
+    // Reset after findSymbolId — the search_symbols call inside it records savings
+    // that would otherwise pollute flushedTotal (same pattern as test 5).
+    resetTracker();
+    saveSavings({ total_tokens_saved: 0, anon_id: 'test-isolation', last_updated: new Date().toISOString() });
 
     // Make exactly 5 calls to trigger a flush (FLUSH_INTERVAL = 5)
     let flushedTotal = 0;
@@ -286,6 +290,10 @@ describe('7. persistence — savings survive in-memory reset (simulates restart)
 
   it('unflushed savings (< 5 calls) are lost on restart but flushed savings persist', async () => {
     const symbolId = await findSymbolId('formatDiagnostic');
+    // Reset after findSymbolId — the search_symbols call inside it records savings
+    // that would otherwise pollute flushedTotal (same pattern as test 5).
+    resetTracker();
+    saveSavings({ total_tokens_saved: 0, anon_id: 'test-isolation', last_updated: new Date().toISOString() });
 
     // Flush a baseline (5 calls)
     let flushedTotal = 0;

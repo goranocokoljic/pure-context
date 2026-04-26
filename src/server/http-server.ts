@@ -78,6 +78,12 @@ export interface HttpServerOptions {
   adminApi?: AdminApiConfig;
   /** Called once per MCP request to produce a fresh McpServer instance (stateless mode). */
   serverFactory: () => McpServer;
+  /**
+   * Whether to serve the built UI from dist/ui/ for non-API paths.
+   * Defaults to true. Set to false in tests to avoid SPA fallback interfering
+   * with 404 assertions.
+   */
+  serveUi?: boolean;
 }
 
 // ─── CORS ──────────────────────────────────────────────────────────────────────
@@ -496,8 +502,10 @@ function getUiDir(): string {
 /**
  * Serve a static file from dist/ui/. Returns true if handled.
  * For SPA: unknown paths serve index.html.
+ * Returns false immediately when serveUi is false.
  */
-function serveStatic(_req: IncomingMessage, res: ServerResponse, url: string): boolean {
+function serveStatic(_req: IncomingMessage, res: ServerResponse, url: string, serveUi: boolean): boolean {
+  if (!serveUi) return false;
   const uiDir = getUiDir();
   if (!existsSync(uiDir)) return false; // UI not built — skip
 
@@ -798,7 +806,7 @@ export function startHttpServer(options: HttpServerOptions): Promise<NodeHttpSer
 
     // ── Static UI assets ─────────────────────────────────────────────────────
     {
-      const served = serveStatic(req, res, url);
+      const served = serveStatic(req, res, url, options.serveUi ?? true);
       if (served) return;
     }
 

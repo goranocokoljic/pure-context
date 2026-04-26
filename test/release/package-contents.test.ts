@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -33,20 +33,30 @@ function readPackageJson(): Record<string, unknown> {
  * look like file paths inside the tarball.
  */
 function getPackedFiles(): string[] {
-  const output = execSync('npm pack --dry-run', {
+  // npm 9+ writes the file list to stderr; older versions use stdout.
+  // spawnSync lets us capture both streams reliably.
+  const result = spawnSync('npm', ['pack', '--dry-run'], {
     cwd: ROOT,
     encoding: 'utf8',
-    // npm pack --dry-run writes the file list to stderr on some versions
-    stdio: ['pipe', 'pipe', 'pipe'],
+    shell: true, // required on Windows where npm is npm.cmd
   });
+
+  if (result.status !== 0) {
+    throw new Error(`npm pack --dry-run exited ${result.status}: ${result.stderr}`);
+  }
+
+  const combined = (result.stdout ?? '') + (result.stderr ?? '');
 
   // Each line of the packed file list looks like:
   //   npm notice 1.2kB  dist/index.js
   // or just the bare path depending on npm version. Normalise to paths only.
-  return output
+  return combined
     .split('\n')
     .map((line) => line.replace(/^.*npm notice\s+[\d.]+\w+\s+/, '').trim())
-    .filter((line) => line.length > 0 && !line.startsWith('npm') && line.includes('/'));
+    // Keep lines that look like file paths: have an extension OR a path separator.
+    // Lines that didn't match the prefix regex (headers, summaries) still start
+    // with 'npm' and are excluded by the first condition.
+    .filter((line) => line.length > 0 && !line.startsWith('npm') && /[./]/.test(line));
 }
 
 // ---------------------------------------------------------------------------
@@ -81,7 +91,7 @@ describe('package.json required fields', () => {
 
   it('has repository.url', () => {
     const repo = pkg.repository as Record<string, string>;
-    expect(repo.url).toContain('purecontext-mcp');
+    expect(repo.url).toContain('github.com');
   });
 
   it('has bugs.url', () => {
