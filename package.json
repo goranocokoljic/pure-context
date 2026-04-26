@@ -54,7 +54,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
-    "prebuild": "prebuildify --napi --strip --targets node@18 node@20 node@22",
+    "build:prebuilds": "prebuildify --napi --strip --targets node@18 node@20 node@22",
     "prepublishOnly": "npm run build && npm test",
     "postinstall": "node scripts/check-sqlite.js"
   },

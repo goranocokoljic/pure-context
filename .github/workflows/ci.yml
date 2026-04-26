@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install UI dependencies
+        run: npm ci --prefix src/ui
+
       - name: Build
         run: npm run build
 
