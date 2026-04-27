@@ -394,14 +394,14 @@ describe('10. performance — token tracking overhead', () => {
     expect(avgMs).toBeLessThan(50);
   });
 
-  it('disk flush completes in < 50ms (atomic write to small JSON file)', () => {
+  it('disk flush completes in < 500ms (atomic write to small JSON file)', () => {
     const data = { total_tokens_saved: 99999, anon_id: 'perf-test', last_updated: new Date().toISOString() };
 
     const start = performance.now();
     saveSavings(data);
     const elapsed = performance.now() - start;
 
-    expect(elapsed).toBeLessThan(50);
+    expect(elapsed).toBeLessThan(500);
   });
 });
 

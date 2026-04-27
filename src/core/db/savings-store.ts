@@ -15,9 +15,11 @@ export interface SavingsData {
 // ─── Path override (for testing) ─────────────────────────────────────────────
 
 let _pathOverride: string | null = null;
+let _dirInitialized = false;
 
 export function _setSavingsPathForTesting(path: string | null): void {
   _pathOverride = path;
+  _dirInitialized = false; // reset so the new dir is created on next save
 }
 
 function getSavingsPath(): string {
@@ -28,6 +30,12 @@ function getSavingsPath(): string {
 function getSavingsDir(): string {
   if (_pathOverride !== null) return join(_pathOverride, '..');
   return join(homedir(), '.purecontext');
+}
+
+function ensureDir(): void {
+  if (_dirInitialized) return;
+  mkdirSync(getSavingsDir(), { recursive: true });
+  _dirInitialized = true;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -57,12 +65,11 @@ export function loadSavings(): SavingsData {
 }
 
 export function saveSavings(data: SavingsData): void {
-  const dir = getSavingsDir();
   const path = getSavingsPath();
   const tmpPath = `${path}.tmp`;
 
   try {
-    mkdirSync(dir, { recursive: true });
+    ensureDir();
     writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
     renameSync(tmpPath, path);
   } catch (err) {

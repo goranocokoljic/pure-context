@@ -43,16 +43,24 @@ export function validatePath(filePath: string, projectRoot: string): string {
  * No-ops when the path does not exist (not yet created files are not a threat).
  */
 export function checkSymlinkEscape(resolvedPath: string, projectRoot: string): void {
-  const resolvedRoot = resolve(projectRoot);
+  // Resolve symlinks in the root itself (e.g. macOS /tmp → /private/tmp)
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(projectRoot);
+  } catch {
+    realRoot = resolve(projectRoot);
+  }
+
   let realPath: string;
   try {
     realPath = realpathSync(resolvedPath);
   } catch {
     return; // File doesn't exist — nothing to check
   }
+
   if (
-    realPath !== resolvedRoot &&
-    !realPath.startsWith(resolvedRoot + sep)
+    realPath !== realRoot &&
+    !realPath.startsWith(realRoot + sep)
   ) {
     throw new SecurityError(
       'symlink_escape',
