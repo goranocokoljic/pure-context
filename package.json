@@ -1,6 +1,6 @@
 {
   "name": "purecontext-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Token-efficient source code navigation MCP server for AI agents",
   "type": "module",
   "license": "MIT",
