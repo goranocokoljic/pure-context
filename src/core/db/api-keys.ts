@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,7 @@ export interface ApiKeyRecord {
   tenantId: string;
   permissions: Permission[];
   rateLimitTier: string;
+  label: string | null;
   createdAt: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
   tenant_id       TEXT NOT NULL,
   permissions     TEXT NOT NULL,
   rate_limit_tier TEXT NOT NULL,
+  label           TEXT,
   created_at      TEXT NOT NULL,
   last_used_at    TEXT,
   revoked_at      TEXT,
@@ -73,6 +75,8 @@ export function _setAuthDbPathForTesting(path: string | null): void {
 
 export function getAuthDbPath(): string {
   if (_authDbPathOverride !== null) return _authDbPathOverride;
+  const dataDir = process.env['PCTX_DATA_DIR'];
+  if (dataDir) return join(dataDir, 'auth.db');
   return join(homedir(), '.purecontext', 'auth.db');
 }
 
@@ -123,6 +127,30 @@ export function runAuthMigrations(db: Database.Database): void {
       'ALTER TABLE tenants ADD COLUMN storage_used_bytes INTEGER NOT NULL DEFAULT 0',
     );
   }
+
+  // plan column on tenants
+  if (!colNames.has('plan')) {
+    db.exec("ALTER TABLE tenants ADD COLUMN plan TEXT NOT NULL DEFAULT 'team'");
+  }
+
+  // workspace_members table
+  db.exec(`CREATE TABLE IF NOT EXISTS workspace_members (
+  workspace_id TEXT NOT NULL,
+  user_id      TEXT NOT NULL,
+  role         TEXT NOT NULL,
+  added_at     TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, user_id),
+  FOREIGN KEY (workspace_id) REFERENCES tenants(id) ON DELETE CASCADE
+)`);
+
+  // api_keys migrations
+  const keyCols = db
+    .prepare("PRAGMA table_info(api_keys)")
+    .all() as Array<{ name: string }>;
+  const keyColNames = new Set(keyCols.map((c) => c.name));
+  if (!keyColNames.has('label')) {
+    db.exec('ALTER TABLE api_keys ADD COLUMN label TEXT');
+  }
 }
 
 // ─── Key hash ─────────────────────────────────────────────────────────────────
@@ -142,15 +170,16 @@ export class ApiKeyStore {
       this.db
         .prepare(
           `INSERT INTO api_keys
-             (key_hash, tenant_id, permissions, rate_limit_tier, created_at, last_used_at, revoked_at)
+             (key_hash, tenant_id, permissions, rate_limit_tier, label, created_at, last_used_at, revoked_at)
            VALUES
-             (@keyHash, @tenantId, @permissions, @rateLimitTier, @createdAt, @lastUsedAt, @revokedAt)`,
+             (@keyHash, @tenantId, @permissions, @rateLimitTier, @label, @createdAt, @lastUsedAt, @revokedAt)`,
         )
         .run({
           keyHash: record.keyHash,
           tenantId: record.tenantId,
           permissions: JSON.stringify(record.permissions),
           rateLimitTier: record.rateLimitTier,
+          label: record.label ?? null,
           createdAt: record.createdAt,
           lastUsedAt: record.lastUsedAt ?? null,
           revokedAt: record.revokedAt ?? null,
@@ -190,6 +219,12 @@ export class ApiKeyStore {
     this.db
       .prepare('UPDATE api_keys SET last_used_at = ? WHERE key_hash = ?')
       .run(new Date().toISOString(), keyHash);
+  }
+
+  updateLabel(keyHash: string, label: string): void {
+    this.db
+      .prepare('UPDATE api_keys SET label = ? WHERE key_hash = ?')
+      .run(label, keyHash);
   }
 
   listByTenant(tenantId: string): ApiKeyRecord[] {
@@ -235,6 +270,7 @@ interface DbApiKeyRow {
   tenant_id: string;
   permissions: string;
   rate_limit_tier: string;
+  label: string | null;
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
@@ -252,6 +288,7 @@ function rowToRecord(row: DbApiKeyRow): ApiKeyRecord {
     tenantId: row.tenant_id,
     permissions: JSON.parse(row.permissions) as Permission[],
     rateLimitTier: row.rate_limit_tier,
+    label: row.label,
     createdAt: row.created_at,
     lastUsedAt: row.last_used_at,
     revokedAt: row.revoked_at,
@@ -260,4 +297,92 @@ function rowToRecord(row: DbApiKeyRow): ApiKeyRecord {
 
 function tenantRowToRecord(row: DbTenantRow): TenantRecord {
   return { id: row.id, name: row.name, createdAt: row.created_at };
+}
+
+// ─── Convenience helpers (Phase 18) ──────────────────────────────────────────
+
+/**
+ * Create and store a new API key for the given tenant.
+ * Returns the plaintext key (`pctx_` + 32 random hex chars) — shown once only.
+ * Only the SHA-256 hash is stored in the database.
+ *
+ * Automatically creates the tenant record if it doesn't exist.
+ */
+export function createApiKey(
+  db: Database.Database,
+  tenantId: string,
+  label: string | null,
+  permissions: Permission[],
+  opts: { rateLimitTier?: string } = {},
+): string {
+  const rateLimitTier = opts.rateLimitTier ?? 'default';
+
+  // pctx_ + 32 random hex chars (16 bytes → 32 hex)
+  const rawKey = `pctx_${randomBytes(16).toString('hex')}`;
+  const keyHash = hashApiKey(rawKey);
+
+  if (getTenant(db, tenantId) === null) {
+    insertTenant(db, { id: tenantId, name: tenantId, createdAt: new Date().toISOString() });
+  }
+
+  new ApiKeyStore(db).insert({
+    keyHash,
+    tenantId,
+    permissions,
+    rateLimitTier,
+    label,
+    createdAt: new Date().toISOString(),
+    lastUsedAt: null,
+    revokedAt: null,
+  });
+
+  return rawKey;
+}
+
+/**
+ * Validate a raw API key. Returns `{ tenantId, permissions }` when valid, or null.
+ * Updates `last_used_at` on success.
+ */
+export function validateApiKey(
+  db: Database.Database,
+  rawKey: string,
+): { tenantId: string; permissions: Permission[] } | null {
+  const store = new ApiKeyStore(db);
+  const record = store.findByHash(hashApiKey(rawKey));
+  if (record === null || record.revokedAt !== null) return null;
+  store.updateLastUsed(hashApiKey(rawKey));
+  return { tenantId: record.tenantId, permissions: record.permissions };
+}
+
+/**
+ * Revoke an API key by its plaintext value or hash prefix.
+ */
+export function revokeApiKey(db: Database.Database, keyOrHashPrefix: string): void {
+  const store = new ApiKeyStore(db);
+  if (keyOrHashPrefix.startsWith('pctx_')) {
+    store.revoke(hashApiKey(keyOrHashPrefix));
+  } else {
+    store.revokeByHashPrefix(keyOrHashPrefix);
+  }
+}
+
+/**
+ * List all non-revoked API keys for a tenant, newest first.
+ * Never returns the raw key — only metadata.
+ */
+export function listApiKeys(db: Database.Database, tenantId: string): ApiKeyRecord[] {
+  return new ApiKeyStore(db)
+    .listByTenant(tenantId)
+    .filter((k) => k.revokedAt === null);
+}
+
+/**
+ * Look up the workspace (tenant) ID for a non-revoked API key hash.
+ * Returns null when the key is not found or has been revoked.
+ */
+export function getWorkspaceForKey(db: Database.Database, keyHash: string): string | null {
+  const row = db.prepare<[string], { tenant_id: string }>(
+    'SELECT tenant_id FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL'
+  ).get(keyHash);
+  return row?.tenant_id ?? null;
 }

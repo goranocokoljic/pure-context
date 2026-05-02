@@ -19,10 +19,12 @@ import {
   type AuthResult,
 } from './auth/api-key.js';
 import type { AdminApi } from './admin-api.js';
+import type { HttpSseTransport } from './transport.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_BODY_BYTES = 1_048_576; // 1 MB — guard against malformed / oversized requests
+const SSE_KEEPALIVE_MS = 30_000;  // 30 s — prevents proxy/load-balancer timeouts on idle SSE streams
 
 // ─── Options ──────────────────────────────────────────────────────────────────
 
@@ -78,6 +80,13 @@ export interface HttpServerOptions {
   adminApi?: AdminApiConfig;
   /** Called once per MCP request to produce a fresh McpServer instance (stateless mode). */
   serverFactory: () => McpServer;
+  /**
+   * Stateful SSE transport for team/server mode (Task 130).
+   * When provided, enables the /mcp/sse endpoint where agents connect with
+   * persistent sessions (GET → SSE stream, POST → tool calls).
+   * Must already be initialised (init() called) before the first request.
+   */
+  sseTransport?: HttpSseTransport;
   /**
    * Whether to serve the built UI from dist/ui/ for non-API paths.
    * Defaults to true. Set to false in tests to avoid SPA fallback interfering
@@ -593,6 +602,118 @@ export function startHttpServer(options: HttpServerOptions): Promise<NodeHttpSer
       return;
     }
 
+    // ── MCP SSE endpoint (stateful sessions, for agent connections) ─────────
+    if ((url === '/mcp/sse' || url.startsWith('/mcp/sse?')) && options.sseTransport) {
+      // ── Authentication ─────────────────────────────────────────────────
+      let authResult: AuthResult | null = null;
+
+      if (options.apiKeyAuth?.enabled) {
+        const apiKey = extractApiKeyFromHeaders(req.headers as Record<string, string | string[] | undefined>);
+
+        if (apiKey === null) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized: API key required (Authorization: Bearer or X-API-Key)' }));
+          return;
+        }
+        if (!validateFormat(apiKey)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized: invalid API key format' }));
+          return;
+        }
+        authResult = await options.apiKeyAuth.validator.validate(apiKey);
+        if (!authResult.valid) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized: API key not found or revoked' }));
+          return;
+        }
+      } else if (!checkAuth(req, options.auth)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+
+      // ── POST-specific: body reading, permissions, rate limiting ────────
+      let sseParsedBody: unknown;
+
+      if (method === 'POST') {
+        const contentLength = parseInt((req.headers['content-length'] as string | undefined) ?? '0', 10);
+        if (!isNaN(contentLength) && contentLength > MAX_BODY_BYTES) {
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Request body too large' }));
+          return;
+        }
+
+        try {
+          const raw = await readBody(req, MAX_BODY_BYTES);
+          sseParsedBody = JSON.parse(raw.toString('utf8'));
+        } catch (err) {
+          if (!res.headersSent) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `Bad request: ${err}` }));
+          }
+          return;
+        }
+
+        const toolName = extractToolName(sseParsedBody);
+
+        if (authResult !== null && toolName !== undefined) {
+          const required = getRequiredPermission(toolName);
+          if (!hasPermission(authResult, required)) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              error: `Forbidden: '${required}' permission required for ${toolName}`,
+            }));
+            return;
+          }
+        }
+
+        if (limiter !== null) {
+          const rateLimitKey = authResult?.tenantId ? `tenant:${authResult.tenantId}` : clientIp;
+          const cost = getToolCost(toolName, rl!.perToolLimits);
+          const rlResult = limiter.tryConsume(rateLimitKey, cost);
+          if (!rlResult.allowed) {
+            const retryAfterSec = Math.ceil(rlResult.retryAfterMs / 1000);
+            res.writeHead(429, {
+              'Content-Type': 'application/json',
+              'Retry-After': String(retryAfterSec),
+              'X-RateLimit-Limit': String(rl!.maxTokens),
+              'X-RateLimit-Remaining': String(rlResult.remainingTokens),
+            });
+            res.end(JSON.stringify({ error: 'Too Many Requests', retryAfterMs: rlResult.retryAfterMs }));
+            return;
+          }
+        }
+      }
+
+      // ── Keepalive pings for GET (SSE) connections ──────────────────────
+      // Writes a comment line every 30 s to prevent proxy/LB connection timeouts.
+      if (method === 'GET') {
+        const keepaliveTimer = setInterval(() => {
+          if (!res.writableEnded) {
+            res.write(': ping\n\n');
+          } else {
+            clearInterval(keepaliveTimer);
+          }
+        }, SSE_KEEPALIVE_MS);
+        res.on('close', () => clearInterval(keepaliveTimer));
+      }
+
+      try {
+        await options.sseTransport.handleRequest(req, res, sseParsedBody);
+      } catch (err) {
+        logger.warn(`MCP SSE request error: ${err}`);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32603, message: 'Internal server error' },
+            id: null,
+          }));
+        }
+      }
+      return;
+    }
+
     // ── MCP endpoint (Streamable HTTP, stateless per-request) ───────────────
     if (url === '/mcp') {
       if (method !== 'POST') {
@@ -800,6 +921,21 @@ export function startHttpServer(options: HttpServerOptions): Promise<NodeHttpSer
 
     // ── REST API for web UI ──────────────────────────────────────────────────
     if (url.startsWith('/api/')) {
+      // Apply the same API key auth as the MCP endpoint when apiKeyAuth is enabled
+      if (options.apiKeyAuth?.enabled) {
+        const apiKey = extractApiKeyFromHeaders(req.headers as Record<string, string | string[] | undefined>);
+        if (apiKey === null || !validateFormat(apiKey)) {
+          res.writeHead(401, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unauthorized: API key required (Authorization: Bearer pctx_...)' }));
+          return;
+        }
+        const auth = await options.apiKeyAuth.validator.validate(apiKey);
+        if (!auth.valid) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Forbidden: invalid or revoked API key' }));
+          return;
+        }
+      }
       await handleRestApi(req, res, url, method);
       return;
     }

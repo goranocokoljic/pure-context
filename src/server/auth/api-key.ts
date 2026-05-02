@@ -32,8 +32,8 @@ export interface GenerateOptions {
 
 // ─── Key format constants ─────────────────────────────────────────────────────
 
-export const LIVE_PREFIX = 'cl_live_';
-export const TEST_PREFIX = 'cl_test_';
+export const LIVE_PREFIX = 'pctx_';
+export const TEST_PREFIX = 'pctx_test_';
 
 /** Tenant ID segment: 8 lowercase hex chars. */
 const TENANT_ID_LEN = 8;
@@ -51,8 +51,8 @@ const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
  * Issues, validates, and revokes API keys.
  *
  * API key format:
- *   `cl_live_<TTTTTTTT>_<RRRRRRRRRRRRRRRRRRRRRRRR>_<CCCC>`
- *   `cl_test_<TTTTTTTT>_<RRRRRRRRRRRRRRRRRRRRRRRR>_<CCCC>`
+ *   `pctx_<TTTTTTTT>_<RRRRRRRRRRRRRRRRRRRRRRRR>_<CCCC>`
+ *   `pctx_test_<TTTTTTTT>_<RRRRRRRRRRRRRRRRRRRRRRRR>_<CCCC>`
  *
  * Where:
  *   T = 8-char lowercase hex tenant ID
@@ -121,6 +121,7 @@ export class ApiKeyValidator {
       tenantId: tidHex,
       permissions,
       rateLimitTier,
+      label: null,
       createdAt: new Date().toISOString(),
       lastUsedAt: null,
       revokedAt: null,
@@ -203,10 +204,11 @@ export class ApiKeyValidator {
  * checksum does not verify. Does NOT touch the database.
  */
 export function validateFormat(key: string): boolean {
-  const prefix = key.startsWith(LIVE_PREFIX)
-    ? LIVE_PREFIX
-    : key.startsWith(TEST_PREFIX)
-      ? TEST_PREFIX
+  // Check TEST_PREFIX before LIVE_PREFIX: 'pctx_test_' starts with 'pctx_'
+  const prefix = key.startsWith(TEST_PREFIX)
+    ? TEST_PREFIX
+    : key.startsWith(LIVE_PREFIX)
+      ? LIVE_PREFIX
       : null;
 
   if (prefix === null) return false;

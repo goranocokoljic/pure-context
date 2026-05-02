@@ -1,42 +1,36 @@
-import { ApiKeyValidator } from '../server/auth/api-key.js';
-import {
-  openAuthDatabase,
-  getTenant,
-  listTenants,
-  type Permission,
-} from '../core/db/api-keys.js';
+import type { Permission } from '../core/db/api-keys.js';
 
 // ─── Public commands ──────────────────────────────────────────────────────────
 
 /**
- * `purecontext-mcp keys create --tenant <id> [--permissions read,write] [--test]`
+ * `purecontext-mcp keys create --label "Alice's machine" [options]`
  *
  * Generate and print a new API key.  The raw key is only shown once.
  */
 export function cmdKeysCreate(opts: {
-  tenantId: string;
-  tenantName?: string;
+  label: string | null;
+  tenantId?: string;
   permissions: Permission[];
   isTest?: boolean;
   rateLimitTier?: string;
 }): void {
-  const validator = new ApiKeyValidator();
+  const { createApiKey, openAuthDatabase } = require_db_helpers();
+  const db = openAuthDatabase();
   try {
-    const key = validator.generate(opts.tenantId, opts.permissions, {
-      isTest: opts.isTest ?? false,
+    const tenantId = opts.tenantId ?? 'default';
+    const key = createApiKey(db, tenantId, opts.label ?? null, opts.permissions, {
       rateLimitTier: opts.rateLimitTier ?? 'default',
-      tenantName: opts.tenantName ?? opts.tenantId,
     });
 
     console.log('\nAPI key created successfully.\n');
     console.log(`  Key:         ${key}`);
-    console.log(`  Tenant ID:   ${opts.tenantId.slice(0, 8).padEnd(8, '0')}`);
+    if (opts.label) console.log(`  Label:       ${opts.label}`);
+    console.log(`  Tenant ID:   ${tenantId}`);
     console.log(`  Permissions: ${opts.permissions.join(', ')}`);
     console.log(`  Tier:        ${opts.rateLimitTier ?? 'default'}`);
-    console.log(`  Test key:    ${opts.isTest ? 'yes' : 'no'}`);
     console.log('\nStore this key securely — it cannot be retrieved again.\n');
   } finally {
-    validator.close();
+    db.close();
   }
 }
 
@@ -45,12 +39,11 @@ export function cmdKeysCreate(opts: {
  *
  * List API keys (hashes only — raw keys are never stored).
  */
-export async function cmdKeysList(opts: { tenantId?: string } = {}): Promise<void> {
+export function cmdKeysList(opts: { tenantId?: string } = {}): void {
+  const { openAuthDatabase, ApiKeyStore, listTenants } = require_db_helpers();
   const db = openAuthDatabase();
   try {
     if (opts.tenantId) {
-      // List for a specific tenant
-      const { ApiKeyStore } = await importApiKeyStore();
       const store = new ApiKeyStore(db);
       const keys = store.listByTenant(opts.tenantId);
 
@@ -62,13 +55,13 @@ export async function cmdKeysList(opts: { tenantId?: string } = {}): Promise<voi
       console.log(`\nAPI keys for tenant '${opts.tenantId}':\n`);
       for (const k of keys) {
         const status = k.revokedAt ? `REVOKED (${k.revokedAt})` : 'active';
-        console.log(`  ${k.keyHash.slice(0, 12)}...  [${k.permissions.join(', ')}]  ${k.rateLimitTier}  ${status}`);
+        const labelStr = k.label ? `  "${k.label}"` : '';
+        console.log(`  ${k.keyHash.slice(0, 12)}...${labelStr}  [${k.permissions.join(', ')}]  ${k.rateLimitTier}  ${status}`);
         console.log(`    Created:   ${k.createdAt}`);
         if (k.lastUsedAt) console.log(`    Last used: ${k.lastUsedAt}`);
       }
       console.log();
     } else {
-      // List all tenants with key counts
       const tenants = listTenants(db);
 
       if (tenants.length === 0) {
@@ -76,7 +69,6 @@ export async function cmdKeysList(opts: { tenantId?: string } = {}): Promise<voi
         return;
       }
 
-      const { ApiKeyStore } = await importApiKeyStore();
       const store = new ApiKeyStore(db);
 
       console.log('\nTenants and API keys:\n');
@@ -94,17 +86,18 @@ export async function cmdKeysList(opts: { tenantId?: string } = {}): Promise<voi
 }
 
 /**
- * `purecontext-mcp keys revoke <key-prefix>`
+ * `purecontext-mcp keys revoke <key-or-prefix>`
  *
  * Revoke an API key by its full raw value or by hash prefix.
  */
 export function cmdKeysRevoke(keyOrPrefix: string): void {
-  const validator = new ApiKeyValidator();
+  const { revokeApiKey, openAuthDatabase } = require_db_helpers();
+  const db = openAuthDatabase();
   try {
-    validator.revoke(keyOrPrefix);
+    revokeApiKey(db, keyOrPrefix);
     console.log(`Revoked key matching '${keyOrPrefix.slice(0, 20)}...'`);
   } finally {
-    validator.close();
+    db.close();
   }
 }
 
@@ -116,31 +109,39 @@ export function printKeysHelp(): void {
 purecontext-mcp keys — manage API keys for multi-tenant HTTP access
 
 Usage:
-  purecontext-mcp keys create --tenant <id> [options]
+  purecontext-mcp keys create --label <description> [options]
   purecontext-mcp keys list [--tenant <id>]
   purecontext-mcp keys revoke <key-or-hash-prefix>
 
 Create options:
-  --tenant <id>          Tenant identifier (8 hex chars or a short slug)
-  --name <name>          Human-readable tenant name (default: tenant id)
+  --label <description>  Human-readable label (e.g. "Alice's machine")
+  --tenant <id>          Tenant to associate the key with (default: "default")
   --permissions <list>   Comma-separated: read,write,admin (default: read)
   --tier <tier>          Rate-limit tier name (default: default)
-  --test                 Generate a cl_test_ key instead of cl_live_
 
 Examples:
-  purecontext-mcp keys create --tenant acme --permissions read,write
+  purecontext-mcp keys create --label "Alice's machine" --permissions read,write
+  purecontext-mcp keys create --label "CI runner" --permissions read --tenant acme
   purecontext-mcp keys list
   purecontext-mcp keys list --tenant acme
-  purecontext-mcp keys revoke cl_live_61636d650_...
+  purecontext-mcp keys revoke pctx_abc123...
 `.trimStart());
 }
 
 // ─── Internal ─────────────────────────────────────────────────────────────────
 
-// Lazy import to avoid circular deps (ApiKeyStore is in core/db)
-async function importApiKeyStore() {
-  const { ApiKeyStore } = await import('../core/db/api-keys.js');
-  return { ApiKeyStore };
+// Inline require for synchronous access — avoids dynamic import in a synchronous CLI flow.
+// ESM note: these are synchronous top-level imports; the function just bundles them for convenience.
+import {
+  openAuthDatabase,
+  ApiKeyStore,
+  listTenants,
+  createApiKey,
+  revokeApiKey,
+} from '../core/db/api-keys.js';
+
+function require_db_helpers() {
+  return { openAuthDatabase, ApiKeyStore, listTenants, createApiKey, revokeApiKey };
 }
 
 // ─── CLI argument parser ──────────────────────────────────────────────────────
@@ -158,38 +159,28 @@ export function runKeysCommand(args: string[]): void {
   }
 
   if (sub === 'create') {
-    const tenantIdx = args.indexOf('--tenant');
-    if (tenantIdx < 0 || !args[tenantIdx + 1]) {
-      process.stderr.write('Error: --tenant <id> is required\n');
-      process.exit(1);
-    }
-    const tenantId = args[tenantIdx + 1];
+    const labelIdx = args.indexOf('--label');
+    const label = labelIdx >= 0 && args[labelIdx + 1] ? args[labelIdx + 1]! : null;
 
-    const nameIdx = args.indexOf('--name');
-    const tenantName = nameIdx >= 0 ? args[nameIdx + 1] : tenantId;
+    const tenantIdx = args.indexOf('--tenant');
+    const tenantId = tenantIdx >= 0 && args[tenantIdx + 1] ? args[tenantIdx + 1] : undefined;
 
     const permIdx = args.indexOf('--permissions');
-    const permRaw = permIdx >= 0 ? args[permIdx + 1] : 'read';
+    const permRaw = permIdx >= 0 && args[permIdx + 1] ? args[permIdx + 1]! : 'read';
     const permissions = parsePermissions(permRaw);
 
     const tierIdx = args.indexOf('--tier');
-    const rateLimitTier = tierIdx >= 0 ? args[tierIdx + 1] : 'default';
+    const rateLimitTier = tierIdx >= 0 && args[tierIdx + 1] ? args[tierIdx + 1] : 'default';
 
-    const isTest = args.includes('--test');
-
-    cmdKeysCreate({ tenantId, tenantName, permissions, isTest, rateLimitTier });
+    cmdKeysCreate({ label, tenantId, permissions, rateLimitTier });
     process.exit(0);
   }
 
   if (sub === 'list') {
     const tenantIdx = args.indexOf('--tenant');
     const tenantId = tenantIdx >= 0 ? args[tenantIdx + 1] : undefined;
-    // cmdKeysList is async due to dynamic import — run it
-    cmdKeysList({ tenantId }).then(() => process.exit(0)).catch((err) => {
-      process.stderr.write(`Error: ${err}\n`);
-      process.exit(1);
-    });
-    return; // don't exit synchronously — let the Promise resolve
+    cmdKeysList({ tenantId });
+    process.exit(0);
   }
 
   if (sub === 'revoke') {

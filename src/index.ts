@@ -71,6 +71,7 @@ import './adapters/django-orm.js';
 import { startServer } from './server/mcp-server.js';
 import { cmdInit, cmdCheck, cmdShow, cmdHealth } from './config/cli.js';
 import { runKeysCommand } from './config/keys-cli.js';
+import { runWorkspacesCommand } from './config/workspaces-cli.js';
 import { VERSION } from './version.js';
 import { PureContextError, formatErrorBox } from './core/errors.js';
 
@@ -89,17 +90,28 @@ ${NAME} v${VERSION} — token-efficient source code navigation for AI agents
 
 Usage:
   purecontext-mcp                         Start the MCP server (stdio)
+  purecontext-mcp --server                Start as a shared HTTP server (team mode)
+  purecontext-mcp --server --port 3001    Override HTTP port
+  purecontext-mcp --server --host 0.0.0.0 Bind to all interfaces
+  purecontext-mcp --server --no-auth      Disable auth (local testing only)
   purecontext-mcp --transport http        Start HTTP/SSE server on port 3000
   purecontext-mcp --transport both        Start stdio AND HTTP simultaneously
-  purecontext-mcp --port 3001             Override HTTP port
   purecontext-mcp config                  Show effective configuration
   purecontext-mcp config --init           Generate default config file
   purecontext-mcp config --check          Validate config and prerequisites
   purecontext-mcp keys create             Create an API key for HTTP access
   purecontext-mcp keys list               List tenants and API keys
   purecontext-mcp keys revoke <prefix>    Revoke an API key
+  purecontext-mcp workspaces list         List workspaces
+  purecontext-mcp workspaces create --name   Create a workspace
   purecontext-mcp --version               Print version
   purecontext-mcp --help                  Print this help
+
+Environment variables:
+  PCTX_ADMIN_KEY    Admin key for /admin/* endpoints
+  PCTX_DATA_DIR     Override data directory (default: ~/.purecontext)
+  PCTX_PORT         Override HTTP port
+  PCTX_HOST         Override HTTP host
 
 Claude Code integration:
   claude mcp add purecontext-mcp -- npx purecontext-mcp
@@ -164,6 +176,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  // ── workspaces sub-command ────────────────────────────────────────────────
+  if (args[0] === 'workspaces') {
+    runWorkspacesCommand(args.slice(1));
+    return;
+  }
+
   // ── config sub-command ────────────────────────────────────────────────────
   if (args[0] === 'config') {
     const flag = args[1];
@@ -186,9 +204,15 @@ async function main(): Promise<void> {
   }
 
   // ── Parse server flags ────────────────────────────────────────────────────
-  const knownServerFlags = new Set(['--transport', '--port']);
+  const serverMode = args.includes('--server');
+  const noAuth = args.includes('--no-auth');
+
+  const knownServerFlags = new Set(['--transport', '--port', '--host']);
+  const knownBoolFlags = new Set(['--server', '--no-auth']);
   const remainingArgs = args.filter((a, i) => {
-    // Drop known flags and their values
+    // Drop known bool flags
+    if (knownBoolFlags.has(a)) return false;
+    // Drop known value flags and their values
     if (knownServerFlags.has(a)) return false;
     if (i > 0 && knownServerFlags.has(args[i - 1])) return false;
     return true;
@@ -201,13 +225,28 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // ── Start MCP server (default) ────────────────────────────────────────────
+  // ── Resolve flags ─────────────────────────────────────────────────────────
   const transportIdx = args.indexOf('--transport');
   const transportFlag = transportIdx >= 0 ? args[transportIdx + 1] : undefined;
 
   const portIdx = args.indexOf('--port');
   const portRaw = portIdx >= 0 ? parseInt(args[portIdx + 1], 10) : undefined;
   const portFlag = portRaw !== undefined && !isNaN(portRaw) ? portRaw : undefined;
+
+  const hostIdx = args.indexOf('--host');
+  const hostFlag = hostIdx >= 0 ? args[hostIdx + 1] : undefined;
+
+  // --server implies HTTP transport; defaults host to 0.0.0.0 for team use
+  const effectiveTransport = serverMode
+    ? 'http'
+    : (transportFlag as import('./server/transport.js').TransportMode | undefined);
+
+  const effectiveHost = serverMode
+    ? (hostFlag ?? '0.0.0.0')
+    : hostFlag;
+
+  // --server enables auth by default; --no-auth disables it (dev only)
+  const effectiveRequireAuth = serverMode ? !noAuth : undefined;
 
   try {
     await bootstrap();
@@ -216,7 +255,7 @@ async function main(): Promise<void> {
     // Print a startup hint only when running in an interactive terminal.
     // stdin.isTTY is undefined when piped — writing to stdout when piped
     // would corrupt the MCP stdio protocol stream. Always use stderr here.
-    if (process.stdin.isTTY) {
+    if (!serverMode && process.stdin.isTTY) {
       process.stderr.write(
         `${NAME} v${VERSION} — ready for MCP connections (stdio)\n` +
           `Run with --help for usage, --health to verify installation.\n`,
@@ -224,8 +263,11 @@ async function main(): Promise<void> {
     }
 
     await startServer({
-      transport: transportFlag as import('./server/transport.js').TransportMode | undefined,
+      transport: effectiveTransport,
       port: portFlag,
+      host: effectiveHost,
+      requireAuth: effectiveRequireAuth,
+      serverMode,
     });
   } catch (err) {
     printFatalError(err);

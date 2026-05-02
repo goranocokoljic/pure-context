@@ -1,0 +1,19 @@
+version: '3.8'
+
+# Example docker-compose for local/team deployment.
+# Change PCTX_ADMIN_KEY before deploying to any shared environment.
+services:
+  purecontext:
+    image: purecontext/purecontext-mcp:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/data
+    environment:
+      PCTX_ADMIN_KEY: "change-me-before-deploying"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

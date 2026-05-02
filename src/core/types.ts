@@ -122,6 +122,12 @@ export interface IndexOptions {
    * Default: min(cpuCount, 8). Set to 1 to disable (sequential mode).
    */
   concurrency?: number;
+  /** Tenant/workspace ID to associate with this index operation. Defaults to 'local'. */
+  tenantId?: string;
+  /** Workspace plan — used to enforce free-tier limits. */
+  workspacePlan?: 'free' | 'team' | 'enterprise';
+  /** Current repo count for this workspace — used to enforce free-tier repo limit. */
+  workspaceRepoCount?: number;
 }
 
 export interface IndexResult {

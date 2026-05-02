@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from 'fs';
 import { randomBytes } from 'crypto';
+import { join } from 'path';
 import { logger } from '../core/logger.js';
 import { ConfigValidationError } from '../core/errors.js';
 import {
@@ -45,7 +46,7 @@ export function loadConfig(configPath?: string): PureContextConfig {
 
   if (!existsSync(path)) {
     logger.debug(`No config file found at ${path} — using defaults`);
-    return { ...DEFAULT_CONFIG, ai: { ...DEFAULT_CONFIG.ai }, rateLimit: { ...DEFAULT_CONFIG.rateLimit, perToolLimits: { ...DEFAULT_CONFIG.rateLimit.perToolLimits } }, telemetry: { ...DEFAULT_CONFIG.telemetry } };
+    return mergeConfig({});
   }
 
   let raw: unknown;
@@ -54,7 +55,7 @@ export function loadConfig(configPath?: string): PureContextConfig {
     raw = JSON.parse(text);
   } catch (err) {
     logger.warn(`Failed to parse config at ${path}: ${err} — using defaults`);
-    return { ...DEFAULT_CONFIG, ai: { ...DEFAULT_CONFIG.ai }, rateLimit: { ...DEFAULT_CONFIG.rateLimit, perToolLimits: { ...DEFAULT_CONFIG.rateLimit.perToolLimits } }, telemetry: { ...DEFAULT_CONFIG.telemetry } };
+    return mergeConfig({});
   }
 
   const { valid, errors } = validateConfig(raw);
@@ -89,6 +90,11 @@ export function resolveEnvVar(value: string): string {
 }
 
 function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
+  // Environment variable overrides (priority: env var > config file > default)
+  const pctxDataDir = process.env['PCTX_DATA_DIR'];
+  const pctxPort = process.env['PCTX_PORT'] ? parseInt(process.env['PCTX_PORT'], 10) : undefined;
+  const pctxHost = process.env['PCTX_HOST'];
+
   const rawApiKey = partial.ai?.apiKey ?? DEFAULT_CONFIG.ai.apiKey;
   const resolvedApiKey = resolveEnvVar(rawApiKey);
 
@@ -104,7 +110,9 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
   }
 
   const cfg: PureContextConfig = {
-    indexDir: partial.indexDir ?? DEFAULT_CONFIG.indexDir,
+    indexDir: pctxDataDir
+      ? join(pctxDataDir, 'indexes')
+      : (partial.indexDir ?? DEFAULT_CONFIG.indexDir),
     fileLimit: partial.fileLimit ?? DEFAULT_CONFIG.fileLimit,
     watchDebounceMs: partial.watchDebounceMs ?? DEFAULT_CONFIG.watchDebounceMs,
     concurrency: partial.concurrency ?? DEFAULT_CONFIG.concurrency,
@@ -142,8 +150,8 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
     allowSymlinks: partial.allowSymlinks ?? DEFAULT_CONFIG.allowSymlinks,
     transport: partial.transport ?? DEFAULT_CONFIG.transport,
     http: {
-      port: partial.http?.port ?? DEFAULT_CONFIG.http.port,
-      host: partial.http?.host ?? DEFAULT_CONFIG.http.host,
+      port: pctxPort ?? partial.http?.port ?? DEFAULT_CONFIG.http.port,
+      host: pctxHost ?? partial.http?.host ?? DEFAULT_CONFIG.http.host,
       corsOrigins: partial.http?.corsOrigins ?? DEFAULT_CONFIG.http.corsOrigins,
       auth: {
         enabled: authEnabled,
@@ -159,6 +167,10 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
         : { ...DEFAULT_CONFIG.rateLimit.perToolLimits },
     },
     layers: partial.layers !== undefined ? partial.layers : DEFAULT_CONFIG.layers,
+    server: {
+      requireAuth: partial.server?.requireAuth ?? DEFAULT_CONFIG.server.requireAuth,
+      adminKey: process.env['PCTX_ADMIN_KEY'] ?? partial.server?.adminKey ?? DEFAULT_CONFIG.server.adminKey,
+    },
     telemetry: {
       enabled: partial.telemetry?.enabled ?? DEFAULT_CONFIG.telemetry.enabled,
       endpoint: partial.telemetry?.endpoint ?? DEFAULT_CONFIG.telemetry.endpoint,

@@ -6,6 +6,7 @@ import { VERSION } from '../version.js';
 import { getConfig } from '../config/config-loader.js';
 import { startHttpServer } from './http-server.js';
 import type { TransportMode } from './transport.js';
+import { HttpSseTransport } from './transport.js';
 import { PureContextError } from '../core/errors.js';
 import { track } from '../core/telemetry.js';
 
@@ -175,6 +176,18 @@ export interface StartServerOptions {
   transport?: TransportMode;
   /** Override the HTTP port from config. */
   port?: number;
+  /** Override the HTTP host from config. */
+  host?: string;
+  /**
+   * Override server.requireAuth from config.
+   * When true, API key auth is enforced on all /mcp and /api/* requests.
+   */
+  requireAuth?: boolean;
+  /**
+   * When true, print a human-readable server-mode startup banner to stderr
+   * instead of the terse stdio ready line. Used with the --server flag.
+   */
+  serverMode?: boolean;
 }
 
 export async function startServer(options: StartServerOptions = {}): Promise<void> {
@@ -184,7 +197,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
   const cfg = getConfig();
   const mode: TransportMode = options.transport ?? cfg.transport;
   const port = options.port ?? cfg.http.port;
-  const { host, corsOrigins } = cfg.http;
+  const host = options.host ?? cfg.http.host;
+  const { corsOrigins } = cfg.http;
+  const requireAuth = options.requireAuth ?? cfg.server.requireAuth;
 
   let stdioServer: McpServer | undefined;
 
@@ -198,7 +213,12 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
 
   // ── HTTP transport ────────────────────────────────────────────────────────
   let httpServer: import('node:http').Server | undefined;
+  let httpSseTransport: HttpSseTransport | undefined;
   if (mode === 'http' || mode === 'both') {
+    // Create the stateful SSE transport (one per server, manages multiple agent sessions).
+    httpSseTransport = new HttpSseTransport(createMcpServer);
+    await httpSseTransport.init();
+
     httpServer = await startHttpServer({
       port,
       host,
@@ -206,14 +226,41 @@ export async function startServer(options: StartServerOptions = {}): Promise<voi
       auth: cfg.http.auth,
       rateLimit: cfg.rateLimit,
       serverFactory: createMcpServer,
+      sseTransport: httpSseTransport,
     });
-    // startHttpServer logs the listen address internally.
+
+    if (options.serverMode) {
+      const addr = httpServer.address() as { address: string; port: number } | null;
+      const boundHost = addr?.address ?? host;
+      const boundPort = addr?.port ?? port;
+      const adminKeySet = Boolean(process.env['PCTX_ADMIN_KEY'] ?? cfg.server.adminKey);
+
+      // Count workspaces for the startup banner
+      let workspaceCount = 0;
+      try {
+        const { openAuthDatabase } = await import('../core/db/api-keys.js');
+        const { TenantStore } = await import('../core/db/tenants.js');
+        const authDb = openAuthDatabase();
+        workspaceCount = new TenantStore(authDb).list().length;
+        authDb.close();
+      } catch { /* ignore — auth DB may not exist yet on first run */ }
+
+      process.stderr.write(`\nPureContext MCP Server v${VERSION}\n`);
+      process.stderr.write(`Listening on http://${boundHost}:${boundPort}\n`);
+      process.stderr.write(
+        `Auth: ${requireAuth ? 'enabled' : 'disabled (--no-auth)'}` +
+        (requireAuth && !adminKeySet ? ' — set PCTX_ADMIN_KEY to manage API keys' : '') +
+        '\n',
+      );
+      process.stderr.write(`Workspaces: ${workspaceCount || 1} (${workspaceCount <= 1 ? 'default' : 'total'})\n\n`);
+    }
   }
 
   // ── Graceful shutdown ─────────────────────────────────────────────────────
   const shutdown = async () => {
     logger.info('Shutting down...');
     httpServer?.close();
+    if (httpSseTransport) await httpSseTransport.close().catch(() => {});
     if (stdioServer) await stdioServer.close();
     process.exit(0);
   };

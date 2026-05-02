@@ -138,3 +138,23 @@ export class QuotaExceededError extends PureContextError {
     );
   }
 }
+
+export class WorkspaceLimitError extends PureContextError {
+  override userMessage: string;
+  override suggestion: string;
+
+  constructor(
+    public readonly limitType: 'repos' | 'files',
+    public readonly limit: number,
+    public readonly current: number,
+  ) {
+    const msg =
+      limitType === 'repos'
+        ? `Free plan is limited to ${limit} repos (you have ${current}). Upgrade to Team at purecontext.dev/pricing.`
+        : `Free plan repos are limited to ${limit} files (project has more). Upgrade to Team at purecontext.dev/pricing.`;
+    super(msg);
+    this.userMessage = msg;
+    this.suggestion =
+      'Upgrade to Team plan at purecontext.dev/pricing for unlimited repos and files.';
+  }
+}

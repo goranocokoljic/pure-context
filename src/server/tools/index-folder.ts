@@ -19,15 +19,19 @@ export const inputSchema = {
     .min(0)
     .optional()
     .describe('Maximum number of files to index (0 = unlimited; default from config, typically 10000)'),
+  workspaceId: z.string().optional().describe(
+    'Workspace ID to associate this repo with (default: "local" for single-user mode)'
+  ),
 };
 
 export async function handler(
-  args: { path: string; fileLimit?: number },
+  args: { path: string; fileLimit?: number; workspaceId?: string },
 ): Promise<CallToolResult> {
   const cfg = getConfig();
   const result = await indexFolder(args.path, {
     fileLimit: args.fileLimit ?? cfg.fileLimit,
     concurrency: cfg.concurrency,
+    tenantId: args.workspaceId ?? 'local',
   });
   return {
     content: [

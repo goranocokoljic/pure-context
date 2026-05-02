@@ -3,7 +3,7 @@ import { resolve } from 'path';
 import { cpus } from 'os';
 import type Database from 'better-sqlite3';
 import type { IndexOptions, IndexResult, ImportRecord, SymbolRecord } from './types.js';
-import { IndexError } from './errors.js';
+import { IndexError, WorkspaceLimitError } from './errors.js';
 import { logger } from './logger.js';
 import {
   computeRepoId,
@@ -48,6 +48,17 @@ export async function indexFolder(
   const repoId = computeRepoId(absRoot);
   const start = Date.now();
 
+  // ── 0. Workspace plan limits ──────────────────────────────────────────────
+  const FREE_REPO_LIMIT = 999;   // Temporarily unlimited — enforce when paid plans launch
+  const FREE_FILE_LIMIT = 10_000_000; // Temporarily unlimited — enforce when paid plans launch
+
+  if (options.workspacePlan === 'free') {
+    // Repo count limit
+    if (options.workspaceRepoCount !== undefined && options.workspaceRepoCount >= FREE_REPO_LIMIT) {
+      throw new WorkspaceLimitError('repos', FREE_REPO_LIMIT, options.workspaceRepoCount);
+    }
+  }
+
   logger.info(`Indexing ${absRoot} (repo ${repoId})`);
 
   // ── 1. Open database and ensure repo row exists ───────────────────────────
@@ -61,6 +72,7 @@ export async function indexFolder(
     indexedAt: Date.now(),
     schemaVersion: SCHEMA_VERSION,
     clonePath: options.clonePath ?? null,
+    tenantId: options.tenantId ?? 'local',
   });
 
   // ── 2. Ensure parser is ready ──────────────────────────────────────────────
@@ -87,6 +99,12 @@ export async function indexFolder(
     const ext = dot >= 0 ? df.path.slice(dot) : '';
     return supportedExts.has(ext) || adapterExts.has(ext);
   });
+
+  // ── 3c-ws. Workspace file limit ───────────────────────────────────────────
+  if (options.workspacePlan === 'free' && totalBeforeLimit > FREE_FILE_LIMIT) {
+    db.close();
+    throw new WorkspaceLimitError('files', FREE_FILE_LIMIT, totalBeforeLimit);
+  }
 
   // ── 3c. Check if fileLimit was hit ────────────────────────────────────────
   const warnings: string[] = [];
@@ -305,6 +323,7 @@ export async function indexFolder(
     indexedAt: Date.now(),
     schemaVersion: SCHEMA_VERSION,
     clonePath: options.clonePath ?? null,
+    tenantId: options.tenantId ?? 'local',
   });
 
   db.close();

@@ -1,5 +1,5 @@
 import { readdirSync, existsSync } from 'fs';
-import { join } from 'path';
+import { z } from 'zod';
 import { getIndexDir, openDatabase, getRepo } from '../../core/db/schema.js';
 import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -11,9 +11,13 @@ export const description =
   'metadata (repo ID, root path, symbol count, file count, last indexed time) ' +
   'for every project that has been indexed.';
 
-export const inputSchema = {};
+export const inputSchema = {
+  workspaceId: z.string().optional().describe(
+    'Filter repos by workspace ID. When omitted, returns all repos (single-user mode).'
+  ),
+};
 
-export function handler(): CallToolResult {
+export function handler(args: { workspaceId?: string } = {}): CallToolResult {
   const t0 = Date.now();
   const dir = getIndexDir();
 
@@ -40,7 +44,11 @@ export function handler(): CallToolResult {
       const db = openDatabase(repoId);
       const meta = getRepo(db, repoId);
       db.close();
-      if (meta) repos.push(meta);
+      if (meta) {
+        // Filter by workspace if specified
+        if (args.workspaceId && meta.tenantId !== args.workspaceId) continue;
+        repos.push({ ...meta, workspaceId: meta.tenantId ?? 'local' });
+      }
     } catch {
       // Corrupt or unreadable DB — skip silently
     }

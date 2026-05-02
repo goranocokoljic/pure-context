@@ -386,7 +386,7 @@ describe('POST /admin/tenants/:id/keys — create API key', () => {
       { permissions: ['read'], is_test: true },
     );
     const key = (json() as Record<string, unknown>)['key'] as string;
-    expect(key.startsWith('cl_test_')).toBe(true);
+    expect(key.startsWith('pctx_test_')).toBe(true);
   });
 });
 

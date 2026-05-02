@@ -107,6 +107,65 @@ Config file location: `~/.purecontext/config.json`
 
 ---
 
+## Team Setup (Shared Server)
+
+PureContext can run as an always-on shared server so your whole team queries the same index without each developer re-indexing independently.
+
+### 1. Start the server
+
+```bash
+# Docker (recommended)
+docker run -d \
+  -p 3000:3000 \
+  -v ./data:/data \
+  -e PCTX_ADMIN_KEY=your-admin-secret \
+  purecontext/purecontext-mcp:latest
+
+# Or with npx
+PCTX_ADMIN_KEY=your-admin-secret npx purecontext-mcp --server --host 0.0.0.0 --port 3000
+```
+
+### 2. Create a workspace and API keys
+
+```bash
+# Create workspace
+curl -s -X POST http://localhost:3000/admin/workspaces \
+  -H "Authorization: Bearer your-admin-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "my-team"}' | jq .
+
+# Create a key for each developer
+curl -s -X POST http://localhost:3000/admin/keys \
+  -H "Authorization: Bearer your-admin-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"label": "alice-laptop", "permissions": ["read", "write"]}' | jq .key
+```
+
+### 3. Index the shared repo (once, on the server)
+
+```bash
+curl -s -X POST http://localhost:3000/mcp/sse \
+  -H "Authorization: Bearer pctx_alice_key_here" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"1.0.0"}},"id":1}'
+```
+
+Or simply ask Claude Code to index via the remote connection (step 4).
+
+### 4. Connect each developer's Claude Code
+
+```bash
+claude mcp add purecontext-remote \
+  --transport http \
+  --url https://purecontext.mycompany.com/mcp/sse \
+  --header "Authorization: Bearer pctx_yourkey"
+```
+
+Each developer gets their own API key. The server handles concurrent agent sessions independently. See [docs/TEAM_SETUP.md](docs/TEAM_SETUP.md) for the full walkthrough including proxy configuration, TLS, and troubleshooting.
+
+---
+
 ## Architecture Overview
 
 PureContext MCP follows a strict three-layer architecture:

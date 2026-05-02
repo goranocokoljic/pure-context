@@ -534,7 +534,7 @@ describe('Phase 12 Integration — Rate Limiting & Multi-Tenant', () => {
       tenantName: tenant.name,
       rateLimitTier: 'standard',
     });
-    expect(rawKey).toMatch(/^cl_live_/);
+    expect(rawKey).toMatch(/^pctx_/);
 
     // Step 3: Log some requests (simulates MCP tool call tracking)
     const now = new Date().toISOString();

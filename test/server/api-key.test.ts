@@ -26,13 +26,13 @@ function makeValidator(): { validator: ApiKeyValidator; db: Database.Database } 
 // ─── Key generation ───────────────────────────────────────────────────────────
 
 describe('ApiKeyValidator.generate', () => {
-  it('returns a key with cl_live_ prefix by default', () => {
+  it('returns a key with pctx_ prefix by default', () => {
     const { validator } = makeValidator();
     const key = validator.generate('abcd1234', ['read']);
     expect(key.startsWith(LIVE_PREFIX)).toBe(true);
   });
 
-  it('returns a key with cl_test_ prefix when isTest is true', () => {
+  it('returns a key with pctx_test_ prefix when isTest is true', () => {
     const { validator } = makeValidator();
     const key = validator.generate('abcd1234', ['read'], { isTest: true });
     expect(key.startsWith(TEST_PREFIX)).toBe(true);
@@ -48,7 +48,7 @@ describe('ApiKeyValidator.generate', () => {
     const { validator } = makeValidator();
     // 'acme' contains non-hex chars — must be hashed to produce valid hex
     const key = validator.generate('acme', ['read']);
-    // key structure: cl_live_<8hex>_<24b62>_<4hex>
+    // key structure: pctx_<8hex>_<24b62>_<4hex>
     // Split off prefix, then the first segment is the tenant hex
     const rest = key.slice(LIVE_PREFIX.length); // "<tid>_<random>_<checksum>"
     const firstUnderscore = rest.indexOf('_');
@@ -97,7 +97,7 @@ describe('validateFormat', () => {
   });
 
   it('rejects a key with the wrong prefix', () => {
-    expect(validateFormat('cl_prod_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_ab12')).toBe(false);
+    expect(validateFormat('cl_live_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_ab12')).toBe(false);
   });
 
   it('rejects an empty string', () => {
@@ -106,11 +106,11 @@ describe('validateFormat', () => {
 
   it('rejects a key with tenant segment that is too short', () => {
     // Manufacture a key with a 7-char tenant segment
-    expect(validateFormat('cl_live_abc123_ABCDEFGHIJKLMNOPQRSTUVWxy_ab12')).toBe(false);
+    expect(validateFormat('pctx_abc123_ABCDEFGHIJKLMNOPQRSTUVWxy_ab12')).toBe(false);
   });
 
   it('rejects a key with random segment that is too short', () => {
-    expect(validateFormat('cl_live_abcd1234_ABCDEFGHIJKLMNOPQRSTUV_ab12')).toBe(false);
+    expect(validateFormat('pctx_abcd1234_ABCDEFGHIJKLMNOPQRSTUV_ab12')).toBe(false);
   });
 
   it('rejects a key with an invalid checksum', () => {
@@ -212,7 +212,7 @@ describe('ApiKeyValidator.revoke', () => {
 
   it('revoking a non-existent key is a no-op', () => {
     const { validator } = makeValidator();
-    expect(() => validator.revoke('cl_live_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_ab12')).not.toThrow();
+    expect(() => validator.revoke('pctx_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_ab12')).not.toThrow();
   });
 });
 
@@ -220,27 +220,27 @@ describe('ApiKeyValidator.revoke', () => {
 
 describe('extractApiKeyFromHeaders', () => {
   it('extracts from Authorization: Bearer cl_live_... header', () => {
-    const key = 'cl_live_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_1234';
+    const key = 'pctx_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_1234';
     const headers = { authorization: `Bearer ${key}` };
     expect(extractApiKeyFromHeaders(headers)).toBe(key);
   });
 
   it('extracts from X-API-Key header', () => {
-    const key = 'cl_live_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_1234';
+    const key = 'pctx_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_1234';
     const headers = { 'x-api-key': key };
     expect(extractApiKeyFromHeaders(headers)).toBe(key);
   });
 
   it('prefers Authorization over X-API-Key', () => {
-    const authKey = 'cl_live_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_1234';
-    const xKey = 'cl_test_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_5678';
+    const authKey = 'pctx_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_1234';
+    const xKey = 'pctx_test_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_5678';
     const headers = { authorization: `Bearer ${authKey}`, 'x-api-key': xKey };
     expect(extractApiKeyFromHeaders(headers)).toBe(authKey);
   });
 
   it('ignores Authorization: Bearer when value is not an API key format', () => {
     // Falls through to X-API-Key
-    const xKey = 'cl_live_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_1234';
+    const xKey = 'pctx_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_1234';
     const headers = { authorization: 'Bearer some-other-token', 'x-api-key': xKey };
     expect(extractApiKeyFromHeaders(headers)).toBe(xKey);
   });
@@ -251,7 +251,7 @@ describe('extractApiKeyFromHeaders', () => {
   });
 
   it('handles array header values', () => {
-    const key = 'cl_live_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_1234';
+    const key = 'pctx_abcd1234_ABCDEFGHIJKLMNOPQRSTUVWxy_1234';
     expect(extractApiKeyFromHeaders({ 'x-api-key': [key, 'extra'] })).toBe(key);
   });
 });

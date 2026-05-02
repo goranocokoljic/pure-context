@@ -118,7 +118,9 @@ export function computeRepoId(absolutePath: string): string {
 }
 
 export function getIndexDir(): string {
-  return join(homedir(), '.pureconfig', 'indexes');
+  const dataDir = process.env['PCTX_DATA_DIR'];
+  if (dataDir) return join(dataDir, 'indexes');
+  return join(homedir(), '.purecontext', 'indexes');
 }
 
 export function openDatabase(repoId: string, indexDir?: string): InstanceType<DatabaseConstructor> {

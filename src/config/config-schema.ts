@@ -181,6 +181,22 @@ export interface PureContextConfig {
    * null means no layer config — the tool will report an error if called without inline config.
    */
   layers: LayersConfig | null;
+  /**
+   * Server mode settings (used when `--server` flag or transport is 'http'/'both').
+   */
+  server: {
+    /**
+     * Require API key authentication on all /mcp and /api/* requests.
+     * Default: false (local stdio mode). Automatically true in --server mode.
+     */
+    requireAuth: boolean;
+    /**
+     * Admin key for /admin/* endpoints.
+     * Prefer setting via PCTX_ADMIN_KEY environment variable — never commit to config.json.
+     * When blank, falls back to PCTX_ADMIN_KEY env var.
+     */
+    adminKey: string;
+  };
   /** Anonymous opt-in telemetry settings. Default: disabled. */
   telemetry: {
     /** Send anonymous usage stats (languages used, file counts, timing). Default: false. */
@@ -296,6 +312,10 @@ export const DEFAULT_CONFIG: PureContextConfig = {
       { from: 'core',     to: 'adapters', allowed: false },
       { from: 'handlers', to: 'adapters', allowed: false },
     ],
+  },
+  server: {
+    requireAuth: false,
+    adminKey: '',
   },
   telemetry: {
     enabled: false,
@@ -584,6 +604,21 @@ export function validateConfig(raw: unknown): ValidationResult {
             }
           }
         }
+      }
+    }
+  }
+
+  if ('server' in cfg) {
+    const s = cfg['server'];
+    if (typeof s !== 'object' || s === null || Array.isArray(s)) {
+      errors.push('server must be an object');
+    } else {
+      const srv = s as Record<string, unknown>;
+      if ('requireAuth' in srv && typeof srv['requireAuth'] !== 'boolean') {
+        errors.push('server.requireAuth must be a boolean');
+      }
+      if ('adminKey' in srv && typeof srv['adminKey'] !== 'string') {
+        errors.push('server.adminKey must be a string');
       }
     }
   }

@@ -25,6 +25,19 @@ export interface Tenant {
   storageQuotaBytes: number | null;
   /** Current storage used by the tenant, in bytes. */
   storageUsedBytes: number;
+  /** Subscription plan — controls per-plan limits. Defaults to 'team'. */
+  plan: 'free' | 'team' | 'enterprise';
+  /** Number of members in this workspace (populated by list()). */
+  memberCount?: number;
+}
+
+export type WorkspaceRole = 'owner' | 'admin' | 'member' | 'readonly';
+
+export interface WorkspaceMember {
+  workspaceId: string;
+  userId: string;
+  role: WorkspaceRole;
+  addedAt: string;
 }
 
 // ─── DDL extension (migration adds these columns to an existing tenants table) ─
@@ -49,9 +62,17 @@ export class TenantStore {
    * Create a new tenant with a randomly generated 8-char hex ID.
    * Returns the created Tenant.
    */
-  create(name: string, options: { storageQuotaBytes?: number; settings?: Record<string, unknown> } = {}): Tenant {
+  create(
+    name: string,
+    options: {
+      storageQuotaBytes?: number;
+      settings?: Record<string, unknown>;
+      plan?: 'free' | 'team' | 'enterprise';
+    } = {},
+  ): Tenant {
     const id = randomBytes(4).toString('hex'); // 8 hex chars
     const createdAt = new Date().toISOString();
+    const plan = options.plan ?? 'team';
     const tenant: Tenant = {
       id,
       name,
@@ -59,13 +80,14 @@ export class TenantStore {
       settings: options.settings ?? null,
       storageQuotaBytes: options.storageQuotaBytes ?? null,
       storageUsedBytes: 0,
+      plan,
     };
 
     try {
       this.db
         .prepare(
-          `INSERT INTO tenants (id, name, created_at, settings, storage_quota_bytes, storage_used_bytes)
-           VALUES (@id, @name, @createdAt, @settings, @storageQuotaBytes, @storageUsedBytes)`,
+          `INSERT INTO tenants (id, name, created_at, settings, storage_quota_bytes, storage_used_bytes, plan)
+           VALUES (@id, @name, @createdAt, @settings, @storageQuotaBytes, @storageUsedBytes, @plan)`,
         )
         .run({
           id: tenant.id,
@@ -74,6 +96,7 @@ export class TenantStore {
           settings: tenant.settings !== null ? JSON.stringify(tenant.settings) : null,
           storageQuotaBytes: tenant.storageQuotaBytes ?? null,
           storageUsedBytes: tenant.storageUsedBytes,
+          plan: tenant.plan,
         });
     } catch (err) {
       throw new StorageError(`Failed to create tenant "${name}"`, 'create', err);
@@ -93,7 +116,7 @@ export class TenantStore {
   /** Update mutable tenant fields. Ignores unknown keys. */
   update(
     id: string,
-    updates: Partial<Pick<Tenant, 'name' | 'settings' | 'storageQuotaBytes'>>,
+    updates: Partial<Pick<Tenant, 'name' | 'settings' | 'storageQuotaBytes' | 'plan'>>,
   ): void {
     const current = this.get(id);
     if (current === null) {
@@ -115,6 +138,10 @@ export class TenantStore {
       fields.push('storage_quota_bytes = @storageQuotaBytes');
       params['storageQuotaBytes'] = updates.storageQuotaBytes;
     }
+    if (updates.plan !== undefined) {
+      fields.push('plan = @plan');
+      params['plan'] = updates.plan;
+    }
 
     if (fields.length === 0) return;
 
@@ -132,12 +159,50 @@ export class TenantStore {
     this.db.prepare('DELETE FROM tenants WHERE id = ?').run(id);
   }
 
-  /** List all tenants, newest first. */
+  /** List all tenants, newest first. Includes memberCount from workspace_members. */
   list(): Tenant[] {
-    return this.db
+    const rows = this.db
       .prepare<[], DbTenantRow>('SELECT * FROM tenants ORDER BY created_at DESC')
-      .all()
-      .map(rowToTenant);
+      .all();
+
+    return rows.map((row) => {
+      const tenant = rowToTenant(row);
+      const countRow = this.db
+        .prepare<[string], { cnt: number }>(
+          'SELECT COUNT(*) AS cnt FROM workspace_members WHERE workspace_id = ?',
+        )
+        .get(row.id);
+      tenant.memberCount = countRow?.cnt ?? 0;
+      return tenant;
+    });
+  }
+
+  /** Upsert a workspace member record. */
+  addMember(workspaceId: string, userId: string, role: WorkspaceRole): void {
+    this.db
+      .prepare(
+        `INSERT INTO workspace_members (workspace_id, user_id, role, added_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(workspace_id, user_id) DO UPDATE SET role = excluded.role`,
+      )
+      .run(workspaceId, userId, role, new Date().toISOString());
+  }
+
+  /** Remove a workspace member. No-op if the member does not exist. */
+  removeMember(workspaceId: string, userId: string): void {
+    this.db
+      .prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?')
+      .run(workspaceId, userId);
+  }
+
+  /** List all members of a workspace. */
+  listMembers(workspaceId: string): WorkspaceMember[] {
+    return this.db
+      .prepare<[string], DbMemberRow>(
+        'SELECT * FROM workspace_members WHERE workspace_id = ? ORDER BY added_at ASC',
+      )
+      .all(workspaceId)
+      .map(rowToMember);
   }
 
   /**
@@ -189,8 +254,8 @@ export function ensureDefaultTenant(db: Database.Database): void {
   if (!exists) {
     try {
       db.prepare(
-        `INSERT INTO tenants (id, name, created_at, settings, storage_quota_bytes, storage_used_bytes)
-         VALUES (?, ?, ?, NULL, NULL, 0)`,
+        `INSERT INTO tenants (id, name, created_at, settings, storage_quota_bytes, storage_used_bytes, plan)
+         VALUES (?, ?, ?, NULL, NULL, 0, 'team')`,
       ).run(DEFAULT_TENANT_ID, 'Local', new Date().toISOString());
     } catch {
       // Another process may have inserted concurrently — ignore duplicate
@@ -207,6 +272,14 @@ interface DbTenantRow {
   settings: string | null;
   storage_quota_bytes: number | null;
   storage_used_bytes: number | null; // null on old rows before migration
+  plan: string | null;               // null on old rows before migration → default 'team'
+}
+
+interface DbMemberRow {
+  workspace_id: string;
+  user_id: string;
+  role: string;
+  added_at: string;
 }
 
 function rowToTenant(row: DbTenantRow): Tenant {
@@ -217,5 +290,30 @@ function rowToTenant(row: DbTenantRow): Tenant {
     settings: row.settings !== null ? (JSON.parse(row.settings) as Record<string, unknown>) : null,
     storageQuotaBytes: row.storage_quota_bytes ?? null,
     storageUsedBytes: row.storage_used_bytes ?? 0,
+    plan: (row.plan as 'free' | 'team' | 'enterprise' | null) ?? 'team',
   };
+}
+
+function rowToMember(row: DbMemberRow): WorkspaceMember {
+  return {
+    workspaceId: row.workspace_id,
+    userId: row.user_id,
+    role: row.role as WorkspaceRole,
+    addedAt: row.added_at,
+  };
+}
+
+// ─── Convenience factory ──────────────────────────────────────────────────────
+
+/**
+ * Create a workspace (tenant) with the given name and plan.
+ * Convenience wrapper around TenantStore.create().
+ */
+export function createWorkspace(
+  db: Database.Database,
+  name: string,
+  plan?: 'free' | 'team' | 'enterprise',
+): Tenant {
+  const store = new TenantStore(db);
+  return store.create(name, { plan: plan ?? 'team' });
 }
