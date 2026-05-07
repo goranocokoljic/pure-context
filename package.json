@@ -1,6 +1,6 @@
 {
   "name": "purecontext-mcp",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Token-efficient source code navigation MCP server for AI agents",
   "type": "module",
   "license": "MIT",
@@ -30,7 +30,13 @@
     "grammars/",
     "prebuilds/",
     "src/ui/dist/",
-    "scripts/check-sqlite.js"
+    "scripts/check-sqlite.js",
+    "README.md",
+    "AGENT_INSTRUCTIONS.md",
+    "AGENT_INSTRUCTIONS_SHORT.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "docs/"
   ],
   "main": "./dist/index.js",
   "exports": {
