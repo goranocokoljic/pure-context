@@ -41,42 +41,31 @@ The guide explains what PureContext does, why each feature exists, and how to us
 
 | | |
 |-|-|
-| [Why PureContext](guide/why-purecontext.md) | The full case — beyond token savings |
-| [Navigating a New Codebase](guide/navigating-new-code.md) | Day one on an unfamiliar project |
-| [Finding Code](guide/finding-code.md) | Three search modes with examples |
-| [Making Changes Safely](guide/safe-changes.md) | Blast radius and dependency analysis |
-| [Understanding Code History](guide/code-history.md) | Symbol-level git history and churn |
-| [The Web UI](guide/web-ui.md) | Visual graph, heatmap, symbol timeline |
-| [AI Summaries](guide/ai-summaries.md) | Better search on undocumented codebases |
-| [Code Health & Architecture Analysis](guide/code-health.md) | Quality metrics, anti-patterns, arch docs |
-| [Using PureContext with a Team](guide/team-setup.md) | Shared server, enterprise setup |
+| [Why PureContext](WHY-PURECONTEXT.md) | The full case — beyond token savings |
+| [Navigating a New Codebase](NAVIGATING-NEW-CODE.md) | Day one on an unfamiliar project |
+| [Finding Code](FINDING-CODE.md) | Three search modes with examples |
+| [Making Changes Safely](SAFE-CHANGES.md) | Blast radius and dependency analysis |
+| [Understanding Code History](CODE-HISTORY.md) | Symbol-level git history and churn |
+| [The Web UI](WEB-UI.md) | Visual graph, heatmap, symbol timeline |
+| [AI Summaries](AI-SUMMARIES.md) | Better search on undocumented codebases |
+| [Code Health & Architecture Analysis](CODE-HEALTH.md) | Quality metrics, anti-patterns, arch docs |
+| [Using PureContext with a Team](TEAM-SETUP.md) | Shared server, enterprise setup |
 
 **Real-world workflows:**
 
 | | |
 |-|-|
-| [Onboarding to a New Codebase](guide/workflow-onboarding.md) | First day on a 6,000-file microservices platform |
-| [Refactoring Legacy Code](guide/workflow-refactoring.md) | Replacing auth in a 6-year-old Django monolith |
-| [Reviewing a Pull Request](guide/workflow-pr-review.md) | 40-file PR, 45 minutes, two real bugs found |
+| [Onboarding to a New Codebase](WORKFLOW-ONBOARDING.md) | First day on a 6,000-file microservices platform |
+| [Refactoring Legacy Code](WORKFLOW-REFACTORING.md) | Replacing auth in a 6-year-old Django monolith |
+| [Reviewing a Pull Request](WORKFLOW-PR-REVIEW.md) | 40-file PR, 45 minutes, two real bugs found |
 
-→ [Full guide index](guide/README.md)
+→ [Full guide index](USER-GUIDE.md)
 
 ### Reference Manual
 
 Parameter-level documentation for every tool, configuration option, language, framework adapter, and deployment option.
 
-| | |
-|-|-|
-| [MCP Tools Reference](docs/06-tools-reference.md) | Every tool: inputs, outputs, examples |
-| [Configuration](docs/04-configuration.md) | Full config.json schema |
-| [Language Support](docs/07-language-support.md) | All 34 languages |
-| [Framework Adapters](docs/08-framework-adapters.md) | Vue, React, Django, Spring, and 20+ more |
-| [CLI Reference](docs/05-cli-reference.md) | Every command and flag |
-| [Team Setup](docs/15-team-setup.md) | Admin API, workspaces, keys |
-| [Docker Deployment](docs/16-docker.md) | Containers, volumes, reverse proxy |
-| [Troubleshooting](docs/26-troubleshooting.md) | Common errors and fixes |
-
-→ [Full reference index](docs/README.md)
+You should start from docs/README.md.
 
 ---
 
@@ -177,7 +166,7 @@ If your team runs a shared PureContext server, connect with an HTTP transport in
 }
 ```
 
-→ [Full installation guide](docs/02-installation.md)
+→ [Full installation guide](FULL-INSTALLATAION-GUIDE.md)
 
 ---
 
