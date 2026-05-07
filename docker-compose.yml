@@ -4,7 +4,8 @@ version: '3.8'
 # Change PCTX_ADMIN_KEY before deploying to any shared environment.
 services:
   purecontext:
-    image: purecontext/purecontext-mcp:latest
+    # Published to GHCR on every release tag; Docker Hub mirror is purecontext/purecontext-mcp:latest
+    image: ghcr.io/goranocokoljic/purecontext-mcp:latest
     ports:
       - "3000:3000"
     volumes:

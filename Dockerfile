@@ -10,7 +10,7 @@ RUN npm ci --omit=dev
 COPY dist/ ./dist/
 COPY grammars/ ./grammars/
 
-# Web UI (built separately; optional — skip if not present)
+# Web UI static assets (built by CI before docker build)
 COPY src/ui/dist/ ./src/ui/dist/
 
 EXPOSE 3000
