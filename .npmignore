@@ -10,7 +10,7 @@ playwright.config.ts
 vitest.config.ts
 
 # Docs and reference
-docs/
+dev-docs
 reference/
 
 # Build and CI config
