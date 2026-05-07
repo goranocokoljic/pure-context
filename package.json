@@ -36,7 +36,8 @@
     "AGENT_INSTRUCTIONS_SHORT.md",
     "CHANGELOG.md",
     "LICENSE",
-    "docs/"
+    "docs/",
+    "guide/"
   ],
   "main": "./dist/index.js",
   "exports": {
