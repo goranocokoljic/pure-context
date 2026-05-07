@@ -4,7 +4,7 @@ import { homedir } from 'os';
 import { createInterface } from 'readline';
 import { getConfigPath, validateConfig, DEFAULT_CONFIG } from './config-schema.js';
 import { loadConfig } from './config-loader.js';
-import { GRAMMARS_DIR } from '../core/parse-dispatcher.js';
+import { GRAMMARS_DIR } from '../core/grammar-paths.js';
 import { openInMemoryDatabase } from '../core/db/schema.js';
 import { VERSION } from '../version.js';
 

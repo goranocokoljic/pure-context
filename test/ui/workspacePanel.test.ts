@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // ─── localStorage stub ────────────────────────────────────────────────────────
 
@@ -78,6 +78,10 @@ describe('workspaceStore (localStorage persistence)', () => {
 describe('multi-repo search — API client routing', () => {
   beforeEach(() => {
     vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('routes to /api/search when repoIds has >1 entry', async () => {
