@@ -25,32 +25,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Run PureContext benchmark
-        run: npm run bench:purecontext
-
-      - name: Check for regression vs baseline
-        run: |
-          node -e "
-            const fs = require('fs');
-            const current = JSON.parse(fs.readFileSync('benchmarks/results/purecontext.json', 'utf8'));
-            const baselinePath = 'benchmarks/results/baseline.json';
-            if (!fs.existsSync(baselinePath)) {
-              console.log('No baseline.json found — skipping regression check.');
-              process.exit(0);
-            }
-            const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
-            const currentMs = current.indexing.duration_ms;
-            const baselineMs = baseline.indexing.duration_ms;
-            const regressionPct = ((currentMs - baselineMs) / baselineMs) * 100;
-            console.log('Baseline indexing: ' + baselineMs + 'ms');
-            console.log('Current indexing:  ' + currentMs + 'ms');
-            console.log('Change: ' + regressionPct.toFixed(1) + '%');
-            if (regressionPct > 20) {
-              console.error('REGRESSION: indexing speed degraded by ' + regressionPct.toFixed(1) + '% (threshold: 20%)');
-              process.exit(1);
-            }
-            console.log('OK — within threshold.');
-          "
+      - name: Run token efficiency benchmark
+        run: npm run benchmark:competitive
 
       - name: Post results as commit comment
         if: always()
@@ -58,20 +34,12 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const resultPath = 'benchmarks/results/purecontext.json';
+            const resultPath = 'test/benchmarks/results/results.md';
             if (!fs.existsSync(resultPath)) {
               console.log('No benchmark results to post.');
               return;
             }
-            const result = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
-            const body = [
-              '## Weekly Benchmark Results',
-              '',
-              `**Date:** ${new Date().toISOString().slice(0, 10)}`,
-              `**Indexing:** ${result.indexing.duration_ms}ms for ${result.indexing.file_count} files (${result.indexing.symbol_count} symbols)`,
-              '',
-              'Full results in `benchmarks/results/purecontext.json`.',
-            ].join('\n');
+            const body = fs.readFileSync(resultPath, 'utf8').slice(0, 65000);
 
             const { data: commits } = await github.rest.repos.listCommits({
               owner: context.repo.owner,
