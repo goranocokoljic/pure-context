@@ -123,7 +123,7 @@ describe('index_repo — URL validation', () => {
   it('accepts https:// URLs', async () => {
     (spawn as ReturnType<typeof vi.fn>).mockImplementation(makeSuccessSpawn());
     const { handler } = await import('../../src/server/tools/index-repo.js');
-    const result = await handler({ url: 'https://github.com/example/repo.git', fileLimit: 100 });
+    const result = await handler({ url: 'https://github.com/example/repo.git', fileLimit: 100, useGitHubApi: false });
     // Should not be a URL validation error
     const body = JSON.parse((result.content[0] as { text: string }).text);
     expect(body.error ?? '').not.toMatch(/Invalid URL scheme/);
@@ -132,7 +132,7 @@ describe('index_repo — URL validation', () => {
   it('accepts git@ URLs', async () => {
     (spawn as ReturnType<typeof vi.fn>).mockImplementation(makeSuccessSpawn());
     const { handler } = await import('../../src/server/tools/index-repo.js');
-    const result = await handler({ url: 'git@github.com:example/repo.git', fileLimit: 100 });
+    const result = await handler({ url: 'git@github.com:example/repo.git', fileLimit: 100, useGitHubApi: false });
     const body = JSON.parse((result.content[0] as { text: string }).text);
     expect(body.error ?? '').not.toMatch(/Invalid URL scheme/);
   });
@@ -142,7 +142,7 @@ describe('index_repo — git clone errors', () => {
   it('returns error when git clone exits with non-zero code', async () => {
     (spawn as ReturnType<typeof vi.fn>).mockImplementation(makeFailSpawn(128));
     const { handler } = await import('../../src/server/tools/index-repo.js');
-    const result = await handler({ url: 'https://github.com/example/repo.git' });
+    const result = await handler({ url: 'https://github.com/example/repo.git', useGitHubApi: false });
     expect(result.isError).toBe(true);
     const body = JSON.parse((result.content[0] as { text: string }).text);
     expect(body.error).toMatch(/git clone exited with code 128/);
@@ -151,7 +151,7 @@ describe('index_repo — git clone errors', () => {
   it('returns error when git is not on PATH', async () => {
     (spawn as ReturnType<typeof vi.fn>).mockImplementation(makeNotFoundSpawn());
     const { handler } = await import('../../src/server/tools/index-repo.js');
-    const result = await handler({ url: 'https://github.com/example/repo.git' });
+    const result = await handler({ url: 'https://github.com/example/repo.git', useGitHubApi: false });
     expect(result.isError).toBe(true);
     const body = JSON.parse((result.content[0] as { text: string }).text);
     expect(body.error).toMatch(/git is not available/i);
@@ -165,6 +165,7 @@ describe('index_repo — successful indexing', () => {
     const result = await handler({
       url: 'https://github.com/example/repo.git',
       fileLimit: 100,
+      useGitHubApi: false,
     });
     expect(result.isError).toBeFalsy();
     const body = JSON.parse((result.content[0] as { text: string }).text);
@@ -177,7 +178,7 @@ describe('index_repo — successful indexing', () => {
   it('includes cloneDir in response', async () => {
     (spawn as ReturnType<typeof vi.fn>).mockImplementation(makeSuccessSpawn());
     const { handler } = await import('../../src/server/tools/index-repo.js');
-    const result = await handler({ url: 'https://github.com/example/repo.git', fileLimit: 100 });
+    const result = await handler({ url: 'https://github.com/example/repo.git', fileLimit: 100, useGitHubApi: false });
     const body = JSON.parse((result.content[0] as { text: string }).text);
     expect(body.cloneDir).toContain('clones');
   });
@@ -186,7 +187,7 @@ describe('index_repo — successful indexing', () => {
     const spawnMock = makeSuccessSpawn();
     (spawn as ReturnType<typeof vi.fn>).mockImplementation(spawnMock);
     const { handler } = await import('../../src/server/tools/index-repo.js');
-    await handler({ url: 'https://github.com/example/repo.git', branch: 'develop', fileLimit: 100 });
+    await handler({ url: 'https://github.com/example/repo.git', branch: 'develop', fileLimit: 100, useGitHubApi: false });
     const spawnArgs = (spawn as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string[]];
     expect(spawnArgs[1]).toContain('--branch');
     expect(spawnArgs[1]).toContain('develop');
@@ -200,6 +201,7 @@ describe('index_repo — successful indexing', () => {
       url: 'https://github.com/example/repo.git',
       token: 'mysecrettoken',
       fileLimit: 100,
+      useGitHubApi: false,
     });
     const spawnArgs = (spawn as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string[]];
     // Token should be in the URL arg, not as a separate flag
@@ -214,12 +216,12 @@ describe('index_repo — successful indexing', () => {
     const { handler } = await import('../../src/server/tools/index-repo.js');
 
     // First call — clone happens
-    await handler({ url: 'https://github.com/example/repo.git', fileLimit: 100 });
+    await handler({ url: 'https://github.com/example/repo.git', fileLimit: 100, useGitHubApi: false });
     expect((spawn as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
 
     // Second call — same URL, clone dir already exists
     vi.clearAllMocks();
-    await handler({ url: 'https://github.com/example/repo.git', fileLimit: 100 });
+    await handler({ url: 'https://github.com/example/repo.git', fileLimit: 100, useGitHubApi: false });
     // spawn should NOT have been called again
     expect((spawn as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });

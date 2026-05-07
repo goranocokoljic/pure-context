@@ -1,0 +1,101 @@
+{
+  "name": "purecontext-vscode",
+  "displayName": "PureContext",
+  "description": "Inline code intelligence powered by PureContext MCP — symbol outline, blast radius on hover, and quick symbol search.",
+  "version": "1.0.0",
+  "publisher": "purecontext",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/purecontext/purecontext-mcp"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "mcp",
+    "code navigation",
+    "symbol search",
+    "blast radius",
+    "purecontext"
+  ],
+  "icon": "icons/logo.png",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "purecontext.searchSymbols",
+        "title": "PureContext: Search Symbols"
+      },
+      {
+        "command": "purecontext.showSymbolPanel",
+        "title": "PureContext: Show Symbol Details"
+      },
+      {
+        "command": "purecontext.refreshOutline",
+        "title": "PureContext: Refresh Outline",
+        "icon": "$(refresh)"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "purecontext.outline",
+          "name": "PureContext Outline",
+          "when": "config.purecontext.enableOutline"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "purecontext.refreshOutline",
+          "when": "view == purecontext.outline",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "PureContext",
+      "properties": {
+        "purecontext.serverUrl": {
+          "type": "string",
+          "default": "http://localhost:3000",
+          "description": "URL of the running PureContext server."
+        },
+        "purecontext.repoId": {
+          "type": "string",
+          "default": "",
+          "description": "PureContext repo ID. Leave blank to auto-detect from workspace folder."
+        },
+        "purecontext.enableHover": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show PureContext symbol info (signature, summary, blast radius) on hover."
+        },
+        "purecontext.enableOutline": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show PureContext symbol outline in the Explorer sidebar."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.39",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.1",
+    "typescript": "^5.9.3"
+  }
+}

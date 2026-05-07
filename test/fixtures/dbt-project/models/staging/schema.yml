@@ -1,0 +1,35 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Raw source data from the warehouse
+    tables:
+      - name: customers
+        description: Raw customer records
+        columns:
+          - name: id
+            description: Primary key for customers
+          - name: email
+            description: Customer email address
+
+models:
+  - name: stg_customers
+    description: Staged customer records from raw source
+    tags:
+      - staging
+      - customers
+    meta:
+      owner: data-team
+    columns:
+      - name: customer_id
+        description: Unique identifier for each customer
+        tags:
+          - primary_key
+      - name: first_name
+        description: Customer's first name
+      - name: last_name
+        description: Customer's last name
+      - name: email
+        description: Customer email address
+        tags:
+          - pii

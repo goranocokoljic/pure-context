@@ -2,206 +2,205 @@
 
 [![CI](https://github.com/Goran-Ocokoljic/purecontext-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Goran-Ocokoljic/purecontext-mcp/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/purecontext-mcp.svg)](https://www.npmjs.com/package/purecontext-mcp)
-[![Stable](https://img.shields.io/badge/stability-stable-brightgreen.svg)](docs/API_STABILITY.md)
+[![Stable](https://img.shields.io/badge/stability-stable-brightgreen.svg)](docs/27-api-stability.md)
 
-Token-efficient source code navigation for AI agents. Indexes TypeScript/JavaScript projects using tree-sitter AST parsing, stores structured symbol metadata in SQLite, and exposes a Model Context Protocol (MCP) server so AI agents can retrieve precisely the code they need — signatures, dependencies, and source — without reading entire files.
+**Stop burning context tokens reading whole files.** PureContext MCP indexes your codebase and lets AI agents retrieve exactly the code they need — a single function, a class, a route definition — without loading hundreds of irrelevant lines first.
 
-## What's New in 1.0
+```
+Without PureContext:  800-line auth file → ~2,000 tokens to find one function
+With PureContext:     45-line function   →   ~150 tokens
+                      Savings: 93%
+```
 
-Version 1.0.0 is the first stable release. The tool API is now under semver — breaking changes require a major version bump. See [CHANGELOG.md](CHANGELOG.md) for the full history and [docs/API_STABILITY.md](docs/API_STABILITY.md) for the public API contract.
-
-Highlights since the initial prototype:
-- **16 languages** — TypeScript, JavaScript, Python, Go, Rust, Java, C/C++, C#, Swift, Kotlin, Dart, Elixir, Haskell, Scala, R, PHP, Lua, Ruby
-- **20+ framework adapters** — Vue, Nuxt, React, Next.js, Angular, Express, Fastify, Django, FastAPI, Flask, Spring, and more
-- **FTS5 + semantic search** — keyword search with camelCase splitting and HNSW vector index
-- **Dependency graph tools** — blast radius, context bundle, dead code detection
-- **Worker thread pool** — parallel parsing for 10k–50k file enterprise repos
-- **Zero-build install** — prebuilt `better-sqlite3` binaries for Node 18/20/22 × Windows/macOS/Linux
+But token savings are the mechanism, not the point. The point is that AI gets better answers from precise context than from bulk context. Less hallucination. More accurate suggestions. The ability to work effectively on large codebases that don't fit in any context window.
 
 ---
 
-## Quick Start
-
-### Install and connect to Claude Code
+## Quick start
 
 ```bash
-# Add to Claude Code (uses npx to run without global install)
+# Connect to Claude Code (no global install needed)
 claude mcp add purecontext-mcp -- npx purecontext-mcp
-
-# Or install globally first
-npm install -g purecontext-mcp
-claude mcp add purecontext-mcp -- purecontext-mcp
 ```
 
-### Index a project
-
-Once connected, tell Claude to index your project:
+Then in a Claude Code conversation:
 
 ```
-Index my project at /path/to/my-project using the index_folder tool
+Index my project at /path/to/my-project
 ```
 
-Then use any of the tools below to navigate it.
-
-### Configuration (optional)
-
-```bash
-# Generate a config file with all defaults and comments
-npx purecontext-mcp config --init
-
-# Validate config and check prerequisites
-npx purecontext-mcp config --check
-
-# Show effective configuration
-npx purecontext-mcp config
-```
+That's it. Claude will index your codebase and you can start navigating it by name, by meaning, or by dependency — without reading files.
 
 ---
 
-## Tool Reference
+## Documentation
 
-All tools return JSON. Responses include a `_tokenEstimate` field (where applicable) so agents can gauge context size before loading full source.
+### User Guide — start here
 
-### Indexing
+The guide explains what PureContext does, why each feature exists, and how to use it effectively in real-world situations. It covers both solo developers and team deployments.
 
-| Tool | Description |
-|------|-------------|
-| `index_folder` | Index a project directory. Discovers source files, parses symbols and imports, builds a dependency graph. Returns `repoId` and statistics. |
-| `resolve_repo` | Resolve a local path to its `repoId`. Reports whether the project has been indexed and its metadata. |
-| `list_repos` | List all indexed repositories with their metadata. |
+| | |
+|-|-|
+| [Why PureContext](guide/why-purecontext.md) | The full case — beyond token savings |
+| [Navigating a New Codebase](guide/navigating-new-code.md) | Day one on an unfamiliar project |
+| [Finding Code](guide/finding-code.md) | Three search modes with examples |
+| [Making Changes Safely](guide/safe-changes.md) | Blast radius and dependency analysis |
+| [Understanding Code History](guide/code-history.md) | Symbol-level git history and churn |
+| [The Web UI](guide/web-ui.md) | Visual graph, heatmap, symbol timeline |
+| [AI Summaries](guide/ai-summaries.md) | Better search on undocumented codebases |
+| [Code Health & Architecture Analysis](guide/code-health.md) | Quality metrics, anti-patterns, arch docs |
+| [Using PureContext with a Team](guide/team-setup.md) | Shared server, enterprise setup |
 
-### Symbol Search and Retrieval
+**Real-world workflows:**
 
-| Tool | Description |
-|------|-------------|
-| `search_symbols` | Search symbols by name fragment. Filters by `kind`, `filePath`, and `limit`. Returns signatures and summaries — no source code. |
-| `get_symbol_source` | Retrieve the raw source of one symbol using its byte offsets. Use after `search_symbols` to drill into a specific definition. |
-| `get_file_outline` | All symbols defined in a file with signatures and summaries. Token-efficient alternative to reading the file. |
-| `get_repo_outline` | All files with their top-level symbols. Useful for understanding project structure. |
-| `get_file_tree` | Directory tree of an indexed project with file counts per directory. |
+| | |
+|-|-|
+| [Onboarding to a New Codebase](guide/workflow-onboarding.md) | First day on a 6,000-file microservices platform |
+| [Refactoring Legacy Code](guide/workflow-refactoring.md) | Replacing auth in a 6-year-old Django monolith |
+| [Reviewing a Pull Request](guide/workflow-pr-review.md) | 40-file PR, 45 minutes, two real bugs found |
 
-### Dependency Graph
+→ [Full guide index](guide/README.md)
 
-| Tool | Description |
-|------|-------------|
-| `get_context_bundle` | Forward-walk from a symbol: returns everything needed to understand it (transitive imports). Includes token estimate. |
-| `get_blast_radius` | Reverse-walk from a symbol: returns all files that (transitively) import it. Use before modifying or deleting a symbol. |
-| `find_importers` | Direct importers of a file, with their symbols. |
-| `find_dead_code` | Exported symbols in files that nothing else imports. Helps identify unused code. |
+### Reference Manual
 
----
+Parameter-level documentation for every tool, configuration option, language, framework adapter, and deployment option.
 
-## Configuration Reference
+| | |
+|-|-|
+| [MCP Tools Reference](docs/06-tools-reference.md) | Every tool: inputs, outputs, examples |
+| [Configuration](docs/04-configuration.md) | Full config.json schema |
+| [Language Support](docs/07-language-support.md) | All 34 languages |
+| [Framework Adapters](docs/08-framework-adapters.md) | Vue, React, Django, Spring, and 20+ more |
+| [CLI Reference](docs/05-cli-reference.md) | Every command and flag |
+| [Team Setup](docs/15-team-setup.md) | Admin API, workspaces, keys |
+| [Docker Deployment](docs/16-docker.md) | Containers, volumes, reverse proxy |
+| [Troubleshooting](docs/26-troubleshooting.md) | Common errors and fixes |
 
-Config file location: `~/.purecontext/config.json`
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `indexDir` | `string` | `~/.purecontext/indexes/` | Where SQLite index files are stored |
-| `fileLimit` | `number` | `1000` | Max files indexed per project |
-| `watchDebounceMs` | `number` | `2000` | File watcher debounce window (ms) |
-| `excludePatterns` | `string[]` | `[]` | Additional glob patterns to exclude |
-| `adapters` | `'auto'`\|`'none'`\|`string[]` | `'auto'` | Framework adapter activation |
-| `ai.provider` | `'none'`\|`'anthropic'`\|`'openai'` | `'none'` | AI summarization provider (Phase 2) |
-| `ai.allowRemoteAI` | `boolean` | `false` | Allow outbound AI API calls |
+→ [Full reference index](docs/README.md)
 
 ---
 
-## Team Setup (Shared Server)
+## What it indexes
 
-PureContext can run as an always-on shared server so your whole team queries the same index without each developer re-indexing independently.
+**34 languages** including TypeScript, JavaScript, Python, Go, Rust, Java, C#, PHP, Ruby, Kotlin, Swift, Dart, C, C++, Elixir, Haskell, Scala, R, Bash, Terraform, Protobuf, GraphQL, SQL, and more.
 
-### 1. Start the server
-
-```bash
-# Docker (recommended)
-docker run -d \
-  -p 3000:3000 \
-  -v ./data:/data \
-  -e PCTX_ADMIN_KEY=your-admin-secret \
-  purecontext/purecontext-mcp:latest
-
-# Or with npx
-PCTX_ADMIN_KEY=your-admin-secret npx purecontext-mcp --server --host 0.0.0.0 --port 3000
-```
-
-### 2. Create a workspace and API keys
-
-```bash
-# Create workspace
-curl -s -X POST http://localhost:3000/admin/workspaces \
-  -H "Authorization: Bearer your-admin-secret" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "my-team"}' | jq .
-
-# Create a key for each developer
-curl -s -X POST http://localhost:3000/admin/keys \
-  -H "Authorization: Bearer your-admin-secret" \
-  -H "Content-Type: application/json" \
-  -d '{"label": "alice-laptop", "permissions": ["read", "write"]}' | jq .key
-```
-
-### 3. Index the shared repo (once, on the server)
-
-```bash
-curl -s -X POST http://localhost:3000/mcp/sse \
-  -H "Authorization: Bearer pctx_alice_key_here" \
-  -H "Accept: application/json, text/event-stream" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cli","version":"1.0.0"}},"id":1}'
-```
-
-Or simply ask Claude Code to index via the remote connection (step 4).
-
-### 4. Connect each developer's Claude Code
-
-```bash
-claude mcp add purecontext-remote \
-  --transport http \
-  --url https://purecontext.mycompany.com/mcp/sse \
-  --header "Authorization: Bearer pctx_yourkey"
-```
-
-Each developer gets their own API key. The server handles concurrent agent sessions independently. See [docs/TEAM_SETUP.md](docs/TEAM_SETUP.md) for the full walkthrough including proxy configuration, TLS, and troubleshooting.
+**Framework-aware extraction** for Vue, React, Nuxt, Next.js, Angular, NestJS, Express, Fastify, Django, FastAPI, Flask, Gin, Rails, Laravel, Spring Boot, and more. Routes, components, hooks, models, and middleware are extracted as first-class symbols.
 
 ---
 
-## Architecture Overview
+## Installation
 
-PureContext MCP follows a strict three-layer architecture:
+**Requirements:** Node.js 18, 20, or 22. Prebuilt binaries included for Windows, macOS, and Linux — no native compilation needed.
 
-```
-Adapters  (src/adapters/)    Framework-specific extraction (Vue, Nuxt, React — Phase 2)
-    ↓
-Handlers  (src/handlers/)    Language-specific AST parsing (TypeScript, JavaScript)
-    ↓
-Core      (src/core/)        File discovery, SQLite storage, MCP transport
+### Claude Code
+
+```bash
+claude mcp add purecontext-mcp -- npx purecontext-mcp
 ```
 
-Dependencies flow strictly downward. Core knows nothing about specific languages or frameworks.
+### Claude Desktop
 
-### Key components
+Edit `~/.claude/claude_desktop_config.json`:
 
-- **Index Manager** (`src/core/index-manager.ts`) — orchestrates the full pipeline: discover → parse → extract → store → graph
-- **Parse Dispatcher** (`src/core/parse-dispatcher.ts`) — routes files to language handlers via web-tree-sitter (WASM)
-- **Graph Traversal** (`src/graph/graph-traversal.ts`) — BFS forward/reverse walks over the dependency graph
-- **File Watcher** (`src/core/watcher/file-watcher.ts`) — chokidar-based incremental re-indexing on file changes
-- **MCP Server** (`src/server/mcp-server.ts`) — registers all tools, handles stdio transport
+```json
+{
+  "mcpServers": {
+    "purecontext": {
+      "command": "npx",
+      "args": ["purecontext-mcp"]
+    }
+  }
+}
+```
 
-For detailed design decisions and requirements, see `docs/PureContext_MCP_PRD_v1.0.docx`.
+### Cursor
+
+Create `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` for global):
+
+```json
+{
+  "mcpServers": {
+    "purecontext": {
+      "command": "npx",
+      "args": ["purecontext-mcp"]
+    }
+  }
+}
+```
+
+### Windsurf
+
+Open Windsurf Settings → MCP section, or edit the MCP config file directly:
+
+```json
+{
+  "mcpServers": {
+    "purecontext": {
+      "command": "npx",
+      "args": ["purecontext-mcp"]
+    }
+  }
+}
+```
+
+### VS Code
+
+Create `.vscode/mcp.json` in your project:
+
+```json
+{
+  "servers": {
+    "purecontext": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["purecontext-mcp"]
+    }
+  }
+}
+```
+
+### Shared team server (HTTP)
+
+If your team runs a shared PureContext server, connect with an HTTP transport instead:
+
+```json
+{
+  "mcpServers": {
+    "purecontext": {
+      "transport": "http",
+      "url": "https://purecontext.yourcompany.com/mcp/sse",
+      "headers": {
+        "Authorization": "Bearer pctx_yourpersonalkey"
+      }
+    }
+  }
+}
+```
+
+→ [Full installation guide](docs/02-installation.md)
 
 ---
 
-## Development
+## Teaching your AI agent to use PureContext well
+
+Installing PureContext gives your agent the tools. Adding the agent instructions tells it *how* to use them — which tool to pick for each task, in what order, and what to avoid.
+
+Two instruction files are provided at the repository root:
+
+**`AGENT_INSTRUCTIONS_SHORT.md`** — ~2 KB. The mandatory workflow, tool selection table, core rules, and common patterns. Use this for agents with limited system prompt space.
+
+**`AGENT_INSTRUCTIONS.md`** — ~15 KB. Adds detailed parameter notes, every usage pattern, decision trees, and anti-patterns. Use this for complex multi-step workflows.
+
+**Claude Code** — add to your project's `CLAUDE.md`:
 
 ```bash
-npm run build      # Compile TypeScript
-npm run dev        # Watch mode
-npm run test       # Run test suite (vitest)
-npm run lint       # ESLint
+cat AGENT_INSTRUCTIONS_SHORT.md >> CLAUDE.md
 ```
 
-### Requirements
+**Cursor** — paste into `.cursorrules` or via Cursor Settings → Rules.
 
-- Node.js >= 18.0.0
-- The `grammars/` directory must contain the bundled `.wasm` grammar files (included in the package)
+**Windsurf** — paste into your workspace memory or rules configuration.
+
+**Any other agent** — paste into whatever system prompt or memory configuration it supports.
+
+Without these instructions, an agent may default to reading entire files rather than using `search_symbols`, or may not know to call `list_repos` first to get the repository ID required by every tool.

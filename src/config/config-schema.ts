@@ -28,8 +28,11 @@ export interface PureContextConfig {
      *   'none'               — disables AI (default)
      *   'anthropic'          — Anthropic Messages API (uses ANTHROPIC_API_KEY or ai.apiKey)
      *   'openai-compatible'  — any OpenAI-compatible /v1/chat/completions endpoint
+     *   'gemini'             — Google Gemini REST API (uses GOOGLE_API_KEY or ai.apiKey)
+     *                          Default model: gemini-2.0-flash. Priced similarly to Claude Haiku.
+     *                          Auto-detected when GOOGLE_API_KEY is set and no other provider configured.
      */
-    provider: 'anthropic' | 'openai-compatible' | 'none';
+    provider: 'anthropic' | 'openai-compatible' | 'gemini' | 'none';
     /** Allow the server to make outbound AI API calls (default false). */
     allowRemoteAI: boolean;
     /**
@@ -197,6 +200,14 @@ export interface PureContextConfig {
      */
     adminKey: string;
   };
+  /**
+   * Context provider settings. Providers enrich indexed symbols with ecosystem-specific
+   * metadata (dbt descriptions, Terraform variable docs, OpenAPI tags, etc.) after indexing.
+   * Default: `{}` — all registered providers are auto-detected.
+   * Set `providers.dbt.enabled = false` to disable a specific provider.
+   * Provider-specific options (e.g. `schemaDir`) are passed through to the provider.
+   */
+  providers: Record<string, { enabled?: boolean; [key: string]: unknown }>;
   /** Anonymous opt-in telemetry settings. Default: disabled. */
   telemetry: {
     /** Send anonymous usage stats (languages used, file counts, timing). Default: false. */
@@ -206,6 +217,32 @@ export interface PureContextConfig {
      * Default: 'https://telemetry.purecontext.dev/v1/event'.
      */
     endpoint: string;
+  };
+  /**
+   * Webhook auto-reindex settings.
+   * When enabled, the HTTP server exposes /webhooks/github, /webhooks/gitlab,
+   * and /webhooks/generic endpoints that trigger incremental reindexing on push.
+   */
+  webhooks: {
+    /** Enable webhook endpoints. Default: false. */
+    enabled: boolean;
+    /**
+     * Shared HMAC secret for signature verification.
+     * GitHub: verified as X-Hub-Signature-256 (HMAC-SHA256).
+     * GitLab: verified as X-Gitlab-Token (plain token match).
+     * Accepts '${ENV_VAR}' notation (resolved at load time).
+     */
+    secret: string;
+    /**
+     * Optional allowlist of repo full names (owner/repo) that may trigger reindexing.
+     * When empty, any matched repo may be reindexed.
+     */
+    allowedRepos: string[];
+    /**
+     * When true, automatically index repos received via webhook that are not yet indexed.
+     * Default: false. The repoPath in the generic payload is used as the index root.
+     */
+    autoIndex: boolean;
   };
 }
 
@@ -313,6 +350,7 @@ export const DEFAULT_CONFIG: PureContextConfig = {
       { from: 'handlers', to: 'adapters', allowed: false },
     ],
   },
+  providers: {},
   server: {
     requireAuth: false,
     adminKey: '',
@@ -320,6 +358,12 @@ export const DEFAULT_CONFIG: PureContextConfig = {
   telemetry: {
     enabled: false,
     endpoint: 'https://telemetry.purecontext.dev/v1/event',
+  },
+  webhooks: {
+    enabled: false,
+    secret: '',
+    allowedRepos: [],
+    autoIndex: false,
   },
 };
 
@@ -388,8 +432,8 @@ export function validateConfig(raw: unknown): ValidationResult {
       errors.push('ai must be an object');
     } else {
       const a = ai as Record<string, unknown>;
-      if ('provider' in a && !['anthropic', 'openai-compatible', 'none'].includes(a['provider'] as string)) {
-        errors.push("ai.provider must be 'anthropic', 'openai-compatible', or 'none'");
+      if ('provider' in a && !['anthropic', 'openai-compatible', 'gemini', 'none'].includes(a['provider'] as string)) {
+        errors.push("ai.provider must be 'anthropic', 'openai-compatible', 'gemini', or 'none'");
       }
       if ('allowRemoteAI' in a && typeof a['allowRemoteAI'] !== 'boolean') {
         errors.push('ai.allowRemoteAI must be a boolean');
@@ -623,6 +667,24 @@ export function validateConfig(raw: unknown): ValidationResult {
     }
   }
 
+  if ('providers' in cfg) {
+    const p = cfg['providers'];
+    if (typeof p !== 'object' || p === null || Array.isArray(p)) {
+      errors.push('providers must be an object');
+    } else {
+      for (const [name, provCfg] of Object.entries(p as Record<string, unknown>)) {
+        if (typeof provCfg !== 'object' || provCfg === null || Array.isArray(provCfg)) {
+          errors.push(`providers.${name} must be an object`);
+        } else {
+          const pc = provCfg as Record<string, unknown>;
+          if ('enabled' in pc && typeof pc['enabled'] !== 'boolean') {
+            errors.push(`providers.${name}.enabled must be a boolean`);
+          }
+        }
+      }
+    }
+  }
+
   if ('telemetry' in cfg) {
     const t = cfg['telemetry'];
     if (typeof t !== 'object' || t === null || Array.isArray(t)) {
@@ -634,6 +696,30 @@ export function validateConfig(raw: unknown): ValidationResult {
       }
       if ('endpoint' in tel && typeof tel['endpoint'] !== 'string') {
         errors.push('telemetry.endpoint must be a string');
+      }
+    }
+  }
+
+  if ('webhooks' in cfg) {
+    const w = cfg['webhooks'];
+    if (typeof w !== 'object' || w === null || Array.isArray(w)) {
+      errors.push('webhooks must be an object');
+    } else {
+      const wh = w as Record<string, unknown>;
+      if ('enabled' in wh && typeof wh['enabled'] !== 'boolean') {
+        errors.push('webhooks.enabled must be a boolean');
+      }
+      if ('secret' in wh && typeof wh['secret'] !== 'string') {
+        errors.push('webhooks.secret must be a string');
+      }
+      if ('allowedRepos' in wh) {
+        const ar = wh['allowedRepos'];
+        if (!Array.isArray(ar) || ar.some((x) => typeof x !== 'string')) {
+          errors.push('webhooks.allowedRepos must be an array of strings');
+        }
+      }
+      if ('autoIndex' in wh && typeof wh['autoIndex'] !== 'boolean') {
+        errors.push('webhooks.autoIndex must be a boolean');
       }
     }
   }

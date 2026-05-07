@@ -1,5 +1,6 @@
-import type { FileTreeNode } from '../api/types.js';
+import type { FileTreeNode, CoverageStatus, HeatmapMode, FileHeatScore } from '../api/types.js';
 import { useRepoStore } from '../stores/repoStore.js';
+import { heatColor, modeScore } from '../stores/heatmapStore.js';
 
 // ─── File icon ────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,65 @@ function FileIcon({ name }: { name: string }) {
   );
 }
 
+// ─── Coverage dot ─────────────────────────────────────────────────────────────
+
+function CoverageDot({ status, title }: { status: CoverageStatus; title: string }) {
+  const color =
+    status === 'tested'   ? 'bg-green-500' :
+    status === 'untested' ? 'bg-red-500'   :
+                            'bg-gray-500';
+  return (
+    <span
+      className={`shrink-0 w-1.5 h-1.5 rounded-full ${color}`}
+      title={title}
+      aria-label={`Coverage: ${status}`}
+    />
+  );
+}
+
+// ─── Heat tooltip text ────────────────────────────────────────────────────────
+
+function heatTooltip(score: FileHeatScore): string {
+  const parts: string[] = [];
+  if (score.avgComplexity > 0) {
+    parts.push(`Avg complexity: ${score.avgComplexity}`);
+  }
+  if (score.commitCount > 0) {
+    parts.push(`Churn: ${score.commitCount} commits/90d`);
+  }
+  if (score.criticalSymbols > 0) {
+    parts.push(`${score.criticalSymbols} critical symbol${score.criticalSymbols !== 1 ? 's' : ''}`);
+  }
+  return parts.length > 0 ? parts.join(' | ') : 'No metrics available';
+}
+
+// ─── Max heat score across a subtree ─────────────────────────────────────────
+
+function maxScoreInSubtree(
+  tree: Record<string, FileTreeNode>,
+  basePath: string,
+  heatScores: ReadonlyMap<string, FileHeatScore>,
+  mode: HeatmapMode,
+): number | null {
+  let max: number | null = null;
+  for (const [name, node] of Object.entries(tree)) {
+    const childPath = `${basePath}/${name}`;
+    if (node.type === 'file') {
+      const entry = heatScores.get(childPath);
+      if (entry !== undefined) {
+        const s = modeScore(entry, mode);
+        max = max === null ? s : Math.max(max, s);
+      }
+    } else {
+      const childMax = maxScoreInSubtree(node.children, childPath, heatScores, mode);
+      if (childMax !== null) {
+        max = max === null ? childMax : Math.max(max, childMax);
+      }
+    }
+  }
+  return max;
+}
+
 // ─── Sort: dirs before files, then alphabetical ───────────────────────────────
 
 function sortedEntries(tree: Record<string, FileTreeNode>): [string, FileTreeNode][] {
@@ -53,9 +113,25 @@ interface TreeNodeProps {
   repoId: string;
   depth: number;
   onFileClick: (path: string) => void;
+  /** Optional map from filePath → aggregate coverage status for that file. */
+  coverageMap?: ReadonlyMap<string, CoverageStatus>;
+  /** Optional map from filePath → heatmap score entry. */
+  heatScores?: ReadonlyMap<string, FileHeatScore>;
+  /** Active heatmap mode (required when heatScores is provided). */
+  heatMode?: HeatmapMode;
 }
 
-function TreeNode({ name, node, path, repoId, depth, onFileClick }: TreeNodeProps) {
+function TreeNode({
+  name,
+  node,
+  path,
+  repoId,
+  depth,
+  onFileClick,
+  coverageMap,
+  heatScores,
+  heatMode,
+}: TreeNodeProps) {
   // Avoid returning `new Set()` from a selector — it creates a new reference
   // each render and causes infinite re-renders via Zustand's shallow comparison.
   const expandedDirs = useRepoStore((s) => s.expandedDirs[repoId]);
@@ -67,11 +143,23 @@ function TreeNode({ name, node, path, repoId, depth, onFileClick }: TreeNodeProp
   const isSelected = node.type === 'file' && selectedFilePath === path;
 
   if (node.type === 'dir') {
+    // Compute max heat score across all files in this directory subtree
+    const dirMaxScore =
+      heatScores && heatMode
+        ? maxScoreInSubtree(node.children, path, heatScores, heatMode)
+        : null;
+
+    const heatBorderStyle =
+      dirMaxScore !== null
+        ? { borderLeftColor: heatColor(dirMaxScore), borderLeftWidth: '2px', borderLeftStyle: 'solid' as const }
+        : undefined;
+
     return (
       <div>
         <button
           onClick={() => toggleDir(repoId, path)}
-          style={{ paddingLeft: `${indent}px` }}
+          style={{ paddingLeft: `${indent}px`, ...heatBorderStyle }}
+          title={dirMaxScore !== null ? `Max risk score: ${Math.round(dirMaxScore)}` : undefined}
           className="flex items-center gap-1.5 w-full text-left py-[3px] pr-2 text-sm text-gray-400 hover:text-gray-100 hover:bg-gray-800/60 rounded transition-colors"
           aria-expanded={isExpanded}
         >
@@ -106,6 +194,9 @@ function TreeNode({ name, node, path, repoId, depth, onFileClick }: TreeNodeProp
                 repoId={repoId}
                 depth={depth + 1}
                 onFileClick={onFileClick}
+                coverageMap={coverageMap}
+                heatScores={heatScores}
+                heatMode={heatMode}
               />
             ))}
           </div>
@@ -116,10 +207,20 @@ function TreeNode({ name, node, path, repoId, depth, onFileClick }: TreeNodeProp
 
   // ─── File leaf ───────────────────────────────────────────────────────────
 
+  const coverageStatus = coverageMap?.get(path);
+  const heatEntry = heatScores?.get(path);
+  const fileScore = heatEntry && heatMode ? modeScore(heatEntry, heatMode) : null;
+
+  const heatBorderStyle =
+    fileScore !== null
+      ? { borderLeftColor: heatColor(fileScore), borderLeftWidth: '2px', borderLeftStyle: 'solid' as const }
+      : undefined;
+
   return (
     <button
       onClick={() => onFileClick(path)}
-      style={{ paddingLeft: `${indent}px` }}
+      style={{ paddingLeft: `${indent}px`, ...heatBorderStyle }}
+      title={heatEntry ? heatTooltip(heatEntry) : undefined}
       className={`flex items-center gap-1.5 w-full text-left py-[3px] pr-2 text-sm rounded transition-colors ${
         isSelected
           ? 'bg-blue-900/50 text-blue-200'
@@ -131,6 +232,12 @@ function TreeNode({ name, node, path, repoId, depth, onFileClick }: TreeNodeProp
       <span className="w-3 shrink-0" aria-hidden="true" />
       <FileIcon name={name} />
       <span className="truncate text-xs">{name}</span>
+      {coverageStatus && (
+        <CoverageDot
+          status={coverageStatus}
+          title={`Coverage: ${coverageStatus}`}
+        />
+      )}
     </button>
   );
 }
@@ -141,9 +248,22 @@ export interface FileTreeProps {
   tree: Record<string, FileTreeNode>;
   repoId: string;
   onFileClick: (path: string) => void;
+  /** Optional per-file coverage status, keyed by repo-relative file path. */
+  coverageMap?: ReadonlyMap<string, CoverageStatus>;
+  /** Optional heatmap scores, keyed by repo-relative file path. */
+  heatScores?: ReadonlyMap<string, FileHeatScore>;
+  /** Active heatmap mode (required when heatScores is provided). */
+  heatMode?: HeatmapMode;
 }
 
-export function FileTree({ tree, repoId, onFileClick }: FileTreeProps) {
+export function FileTree({
+  tree,
+  repoId,
+  onFileClick,
+  coverageMap,
+  heatScores,
+  heatMode,
+}: FileTreeProps) {
   if (Object.keys(tree).length === 0) {
     return (
       <div className="flex items-center justify-center h-32 text-gray-600 text-sm">
@@ -163,6 +283,9 @@ export function FileTree({ tree, repoId, onFileClick }: FileTreeProps) {
           repoId={repoId}
           depth={0}
           onFileClick={onFileClick}
+          coverageMap={coverageMap}
+          heatScores={heatScores}
+          heatMode={heatMode}
         />
       ))}
     </div>

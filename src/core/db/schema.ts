@@ -37,7 +37,7 @@ function getDatabase(): DatabaseConstructor {
   return _Database;
 }
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 7;
 
 const DDL = `
 PRAGMA journal_mode = WAL;
@@ -51,33 +51,59 @@ CREATE TABLE IF NOT EXISTS repos (
   languages       TEXT    NOT NULL DEFAULT '[]',
   indexed_at      INTEGER NOT NULL,
   schema_version  INTEGER NOT NULL,
-  tenant_id       TEXT    NOT NULL DEFAULT 'local'
+  tenant_id       TEXT    NOT NULL DEFAULT 'local',
+  git_tree_sha    TEXT,
+  source          TEXT    NOT NULL DEFAULT 'local'
 );
 
 CREATE TABLE IF NOT EXISTS files (
-  repo_id       TEXT    NOT NULL,
-  path          TEXT    NOT NULL,
-  content_hash  TEXT    NOT NULL,
-  raw_content   BLOB,
-  indexed_at    INTEGER NOT NULL,
-  tenant_id     TEXT    NOT NULL DEFAULT 'local',
+  repo_id             TEXT    NOT NULL,
+  path                TEXT    NOT NULL,
+  content_hash        TEXT    NOT NULL,
+  raw_content         BLOB,
+  indexed_at          INTEGER NOT NULL,
+  tenant_id           TEXT    NOT NULL DEFAULT 'local',
+  remote_sha          TEXT,
+  last_commit_sha     TEXT,
+  last_commit_author  TEXT,
+  last_commit_date    INTEGER,
+  last_commit_message TEXT,
+  commit_count        INTEGER,
   PRIMARY KEY (repo_id, path),
   FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS git_metadata (
+  repo_id      TEXT    NOT NULL,
+  file_path    TEXT    NOT NULL,
+  commit_sha   TEXT    NOT NULL,
+  author_name  TEXT    NOT NULL,
+  author_email TEXT    NOT NULL,
+  commit_date  INTEGER NOT NULL,
+  message      TEXT    NOT NULL,
+  PRIMARY KEY (repo_id, file_path, commit_sha),
+  FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS symbols (
-  id             TEXT    NOT NULL,
-  repo_id        TEXT    NOT NULL,
-  name           TEXT    NOT NULL,
-  kind           TEXT    NOT NULL,
-  file_path      TEXT    NOT NULL,
-  start_byte     INTEGER NOT NULL,
-  end_byte       INTEGER NOT NULL,
-  signature      TEXT    NOT NULL DEFAULT '',
-  summary        TEXT    NOT NULL DEFAULT '',
-  framework_meta TEXT,
-  indexed_at     INTEGER NOT NULL,
-  tenant_id      TEXT    NOT NULL DEFAULT 'local',
+  id                   TEXT    NOT NULL,
+  repo_id              TEXT    NOT NULL,
+  name                 TEXT    NOT NULL,
+  kind                 TEXT    NOT NULL,
+  file_path            TEXT    NOT NULL,
+  start_byte           INTEGER NOT NULL,
+  end_byte             INTEGER NOT NULL,
+  signature            TEXT    NOT NULL DEFAULT '',
+  summary              TEXT    NOT NULL DEFAULT '',
+  framework_meta       TEXT,
+  indexed_at           INTEGER NOT NULL,
+  tenant_id            TEXT    NOT NULL DEFAULT 'local',
+  line_count           INTEGER,
+  cyclomatic_complexity INTEGER,
+  cognitive_complexity  INTEGER,
+  param_count          INTEGER,
+  return_count         INTEGER,
+  nesting_depth        INTEGER,
   PRIMARY KEY (id, repo_id),
   FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
@@ -95,6 +121,16 @@ CREATE TABLE IF NOT EXISTS dep_edges (
   FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS provider_metadata (
+  repo_id       TEXT    NOT NULL,
+  provider_name TEXT    NOT NULL,
+  entity_key    TEXT    NOT NULL,
+  metadata      TEXT    NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  PRIMARY KEY (repo_id, provider_name, entity_key),
+  FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_symbols_repo_name     ON symbols(repo_id, name);
 CREATE INDEX IF NOT EXISTS idx_symbols_repo_file     ON symbols(repo_id, file_path);
 CREATE INDEX IF NOT EXISTS idx_symbols_repo_kind     ON symbols(repo_id, kind);
@@ -102,6 +138,9 @@ CREATE INDEX IF NOT EXISTS idx_dep_edges_source      ON dep_edges(repo_id, sourc
 CREATE INDEX IF NOT EXISTS idx_dep_edges_target      ON dep_edges(repo_id, target_file);
 CREATE INDEX IF NOT EXISTS idx_dep_edges_target_sym  ON dep_edges(repo_id, target_symbol_id)
   WHERE target_symbol_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_git_metadata_repo_file ON git_metadata(repo_id, file_path);
+CREATE INDEX IF NOT EXISTS idx_git_metadata_date      ON git_metadata(repo_id, commit_date);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_symbols USING fts5(
   symbol_id UNINDEXED,
@@ -143,6 +182,13 @@ export function initializeDatabase(db: InstanceType<DatabaseConstructor>): void 
   db.exec(DDL);
   db.exec(EMBEDDINGS_DDL);
   runMigrations(db);
+  // Ensure source column exists — added after v7, using try-catch for existing DBs
+  // (SQLite does not support ALTER TABLE ... ADD COLUMN IF NOT EXISTS)
+  try {
+    db.exec("ALTER TABLE repos ADD COLUMN source TEXT NOT NULL DEFAULT 'local'");
+  } catch {
+    // Column already exists — ignore
+  }
 }
 
 // ─── Migrations ───────────────────────────────────────────────────────────────
@@ -208,6 +254,108 @@ function runMigrations(db: InstanceType<DatabaseConstructor>): void {
       db.exec('CREATE INDEX IF NOT EXISTS idx_embeddings_tenant ON embeddings(tenant_id, repo_id)');
     } catch {
       // Indexes already exist — ignore
+    }
+  }
+
+  // Migration v3 → v4: add git_tree_sha to repos, remote_sha to files.
+  if (dbVersion < 4) {
+    const repoCols = db.prepare("PRAGMA table_info(repos)").all() as Array<{ name: string }>;
+    if (!repoCols.some((c) => c.name === 'git_tree_sha')) {
+      db.exec('ALTER TABLE repos ADD COLUMN git_tree_sha TEXT');
+    }
+
+    const fileCols = db.prepare("PRAGMA table_info(files)").all() as Array<{ name: string }>;
+    if (!fileCols.some((c) => c.name === 'remote_sha')) {
+      db.exec('ALTER TABLE files ADD COLUMN remote_sha TEXT');
+    }
+  }
+
+  // Migration v4 → v5: add provider_metadata table.
+  if (dbVersion < 5) {
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='provider_metadata'"
+    ).all() as Array<{ name: string }>;
+    if (tables.length === 0) {
+      db.exec(`
+        CREATE TABLE provider_metadata (
+          repo_id       TEXT    NOT NULL,
+          provider_name TEXT    NOT NULL,
+          entity_key    TEXT    NOT NULL,
+          metadata      TEXT    NOT NULL,
+          updated_at    INTEGER NOT NULL,
+          PRIMARY KEY (repo_id, provider_name, entity_key),
+          FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+        )
+      `);
+    }
+  }
+
+  // Migration v5 → v6: add git metadata columns to files table + git_metadata table.
+  if (dbVersion < 6) {
+    const fileCols = db.prepare("PRAGMA table_info(files)").all() as Array<{ name: string }>;
+    const existingFileCols = new Set(fileCols.map((c) => c.name));
+
+    if (!existingFileCols.has('last_commit_sha')) {
+      db.exec('ALTER TABLE files ADD COLUMN last_commit_sha TEXT');
+    }
+    if (!existingFileCols.has('last_commit_author')) {
+      db.exec('ALTER TABLE files ADD COLUMN last_commit_author TEXT');
+    }
+    if (!existingFileCols.has('last_commit_date')) {
+      db.exec('ALTER TABLE files ADD COLUMN last_commit_date INTEGER');
+    }
+    if (!existingFileCols.has('last_commit_message')) {
+      db.exec('ALTER TABLE files ADD COLUMN last_commit_message TEXT');
+    }
+    if (!existingFileCols.has('commit_count')) {
+      db.exec('ALTER TABLE files ADD COLUMN commit_count INTEGER');
+    }
+
+    // Create git_metadata table if it doesn't already exist.
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS git_metadata (
+        repo_id      TEXT    NOT NULL,
+        file_path    TEXT    NOT NULL,
+        commit_sha   TEXT    NOT NULL,
+        author_name  TEXT    NOT NULL,
+        author_email TEXT    NOT NULL,
+        commit_date  INTEGER NOT NULL,
+        message      TEXT    NOT NULL,
+        PRIMARY KEY (repo_id, file_path, commit_sha),
+        FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+      )
+    `);
+
+    try {
+      db.exec('CREATE INDEX IF NOT EXISTS idx_git_metadata_repo_file ON git_metadata(repo_id, file_path)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_git_metadata_date ON git_metadata(repo_id, commit_date)');
+    } catch {
+      // Indexes already exist — ignore
+    }
+  }
+
+  // Migration v6 → v7: add code quality metric columns to symbols table.
+  if (dbVersion < 7) {
+    const symCols = db.prepare("PRAGMA table_info(symbols)").all() as Array<{ name: string }>;
+    const existingSymCols = new Set(symCols.map((c) => c.name));
+
+    if (!existingSymCols.has('line_count')) {
+      db.exec('ALTER TABLE symbols ADD COLUMN line_count INTEGER');
+    }
+    if (!existingSymCols.has('cyclomatic_complexity')) {
+      db.exec('ALTER TABLE symbols ADD COLUMN cyclomatic_complexity INTEGER');
+    }
+    if (!existingSymCols.has('cognitive_complexity')) {
+      db.exec('ALTER TABLE symbols ADD COLUMN cognitive_complexity INTEGER');
+    }
+    if (!existingSymCols.has('param_count')) {
+      db.exec('ALTER TABLE symbols ADD COLUMN param_count INTEGER');
+    }
+    if (!existingSymCols.has('return_count')) {
+      db.exec('ALTER TABLE symbols ADD COLUMN return_count INTEGER');
+    }
+    if (!existingSymCols.has('nesting_depth')) {
+      db.exec('ALTER TABLE symbols ADD COLUMN nesting_depth INTEGER');
     }
   }
 }
@@ -277,4 +425,31 @@ function rowToRepo(row: DbRepoRow): RepoMetadata {
     clonePath: row.clone_path ?? null,
     tenantId: row.tenant_id ?? 'local',
   };
+}
+
+// ─── GitHub API helpers ───────────────────────────────────────────────────────
+
+/**
+ * Store the Git tree SHA for a repo (used by GitHub API incremental indexing).
+ * The tree SHA changes whenever any file in the repo changes.
+ */
+export function setGitTreeSha(
+  db: InstanceType<DatabaseConstructor>,
+  repoId: string,
+  treeSha: string,
+): void {
+  db.prepare('UPDATE repos SET git_tree_sha = ? WHERE id = ?').run(treeSha, repoId);
+}
+
+/**
+ * Get the stored Git tree SHA for a repo, or null if not set.
+ */
+export function getGitTreeSha(
+  db: InstanceType<DatabaseConstructor>,
+  repoId: string,
+): string | null {
+  const row = db
+    .prepare<[string], { git_tree_sha: string | null }>('SELECT git_tree_sha FROM repos WHERE id = ?')
+    .get(repoId);
+  return row?.git_tree_sha ?? null;
 }

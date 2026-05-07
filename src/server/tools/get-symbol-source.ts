@@ -1,9 +1,15 @@
 import { z } from 'zod';
+import { join } from 'node:path';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { getSymbolById } from '../../core/db/symbol-store.js';
-import { getFileContent, getFileSizeBytes } from '../../core/db/file-store.js';
+import { getFileContent, getFileHash, getFileSizeBytes } from '../../core/db/file-store.js';
 import { validatePath } from '../../core/security.js';
 import { buildMeta } from './_meta.js';
+import {
+  MAX_CONTEXT_LINES,
+  expandWithContextLines,
+  verifyContentHash,
+} from '../../core/symbol-source-helper.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'get_symbol_source';
@@ -11,12 +17,32 @@ export const name = 'get_symbol_source';
 export const description =
   'Retrieve the raw source code of a specific symbol using its byte offsets. ' +
   'Returns only the symbol definition, not the entire file. ' +
+  'Optionally expand with surrounding context lines or verify the cached hash. ' +
   'Use search_symbols or get_file_outline to find symbol IDs first.';
 
 export const inputSchema = {
   repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
   symbolId: z.string().describe('Symbol ID from search_symbols or get_file_outline'),
+  contextLines: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe(
+      `Lines of surrounding code to include before and after the symbol boundary. ` +
+      `Default 0 (symbol only). Clamped to ${MAX_CONTEXT_LINES}.`,
+    ),
+  verify: z
+    .boolean()
+    .optional()
+    .describe(
+      'Re-hash the source file from disk and compare with the stored hash. ' +
+      'Sets hashDrift: true when the file has changed since indexing. ' +
+      'Performance cost: one disk read per call.',
+    ),
 };
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getLanguageFromPath(filePath: string): string {
   const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
@@ -34,20 +60,36 @@ function getLanguageFromPath(filePath: string): string {
   return map[ext] ?? 'text';
 }
 
-export function handler(args: { repoId: string; symbolId: string }): CallToolResult {
-  const t0 = Date.now();
-  const db = openDatabase(args.repoId);
+// ─── Handler ──────────────────────────────────────────────────────────────────
 
-  const symbol = getSymbolById(db, args.repoId, args.symbolId);
+interface GetSymbolSourceArgs {
+  repoId: string;
+  symbolId: string;
+  contextLines?: number;
+  verify?: boolean;
+}
+
+export function handler(args: GetSymbolSourceArgs): CallToolResult {
+  const t0 = Date.now();
+  const { repoId, symbolId, verify = false } = args;
+
+  // Clamp contextLines to [0, MAX_CONTEXT_LINES].
+  const requestedLines = args.contextLines ?? 0;
+  const clamped = requestedLines > MAX_CONTEXT_LINES;
+  const contextLines = Math.min(requestedLines, MAX_CONTEXT_LINES);
+
+  const db = openDatabase(repoId);
+
+  const symbol = getSymbolById(db, repoId, symbolId);
   if (!symbol) {
     db.close();
     return {
-      content: [{ type: 'text', text: JSON.stringify({ error: `Symbol "${args.symbolId}" not found` }) }],
+      content: [{ type: 'text', text: JSON.stringify({ error: `Symbol "${symbolId}" not found` }) }],
       isError: true,
     };
   }
 
-  const repo = getRepo(db, args.repoId);
+  const repo = getRepo(db, repoId);
   if (repo) {
     try {
       validatePath(symbol.filePath, repo.rootPath);
@@ -60,8 +102,26 @@ export function handler(args: { repoId: string; symbolId: string }): CallToolRes
     }
   }
 
-  const raw = getFileContent(db, args.repoId, symbol.filePath);
-  const rawBytes = getFileSizeBytes(db, args.repoId, symbol.filePath);
+  const raw = getFileContent(db, repoId, symbol.filePath);
+  const rawBytes = getFileSizeBytes(db, repoId, symbol.filePath);
+
+  // Hash drift detection — one disk read, only when requested.
+  let hashDrift: boolean | undefined;
+  let diskHash: string | undefined;
+  let cachedHash: string | undefined;
+
+  if (verify && repo) {
+    const stored = getFileHash(db, repoId, symbol.filePath);
+    const absPath = join(repo.rootPath, symbol.filePath);
+    const result = verifyContentHash(absPath, stored);
+
+    hashDrift = result.drift;
+    if (result.drift) {
+      diskHash = result.diskHash ?? undefined;
+      cachedHash = stored ?? undefined;
+    }
+  }
+
   db.close();
 
   if (!raw) {
@@ -78,30 +138,48 @@ export function handler(args: { repoId: string; symbolId: string }): CallToolRes
     };
   }
 
-  const responseBytes = symbol.endByte - symbol.startByte;
-  const source = raw.slice(symbol.startByte, symbol.endByte).toString('utf8');
+  const source = expandWithContextLines(raw, symbol.startByte, symbol.endByte, contextLines);
+  const responseBytes = Buffer.byteLength(source, 'utf8');
+
+  const symbolOutput: Record<string, unknown> = {
+    id: symbol.id,
+    name: symbol.name,
+    kind: symbol.kind,
+    filePath: symbol.filePath,
+    signature: symbol.signature,
+    summary: symbol.summary,
+    source,
+    language: getLanguageFromPath(symbol.filePath),
+  };
+
+  if (contextLines > 0) {
+    symbolOutput['contextLines'] = contextLines;
+  }
+
+  if (verify) {
+    symbolOutput['hashDrift'] = hashDrift;
+    if (hashDrift && diskHash !== undefined) {
+      symbolOutput['diskHash'] = diskHash;
+      symbolOutput['cachedHash'] = cachedHash;
+    }
+  }
+
+  const response: Record<string, unknown> = {
+    symbol: symbolOutput,
+    _meta: buildMeta({ timingMs: Date.now() - t0, rawBytes, responseBytes }),
+  };
+
+  if (clamped) {
+    response['_warnings'] = [
+      `contextLines clamped from ${requestedLines} to ${MAX_CONTEXT_LINES}`,
+    ];
+  }
 
   return {
     content: [
       {
         type: 'text',
-        text: JSON.stringify(
-          {
-            symbol: {
-              id: symbol.id,
-              name: symbol.name,
-              kind: symbol.kind,
-              filePath: symbol.filePath,
-              signature: symbol.signature,
-              summary: symbol.summary,
-              source,
-              language: getLanguageFromPath(symbol.filePath),
-            },
-            _meta: buildMeta({ timingMs: Date.now() - t0, rawBytes, responseBytes }),
-          },
-          null,
-          2,
-        ),
+        text: JSON.stringify(response, null, 2),
       },
     ],
   };

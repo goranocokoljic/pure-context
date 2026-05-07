@@ -3,18 +3,27 @@ import { minimatch } from 'minimatch';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { getAllFilesWithContent } from '../../core/db/file-store.js';
 import { validatePath } from '../../core/security.js';
+import { resolveRepoScope } from '../../core/db/repo-scope.js';
 import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'search_text';
 
 export const description =
-  'Search for a literal string or regex pattern across all cached file content in an indexed repo. ' +
+  'Search for a literal string or regex pattern across all cached file content in one or more indexed repos. ' +
   'Returns matching lines with surrounding context. ' +
+  'Omit repoId/repoIds to search ALL indexed repos in one call. ' +
   'Complements search_symbols (which searches symbol names) by finding arbitrary strings in source.';
 
 export const inputSchema = {
-  repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
+  repoId: z
+    .string()
+    .optional()
+    .describe('Single repo ID — mutually exclusive with repoIds. Omit both to search all repos.'),
+  repoIds: z
+    .array(z.string())
+    .optional()
+    .describe('Multiple repo IDs to search — mutually exclusive with repoId. Omit both for all repos.'),
   query: z.string().describe('Literal string or regex pattern to search for'),
   isRegex: z.boolean().default(false).describe('Treat query as a regular expression (default false)'),
   filePattern: z
@@ -39,6 +48,8 @@ export const inputSchema = {
 
 interface MatchRecord {
   file: string;
+  repoId: string;
+  repoName: string;
   line: number;
   column: number;
   match: string;
@@ -48,7 +59,8 @@ interface MatchRecord {
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export function handler(args: {
-  repoId: string;
+  repoId?: string;
+  repoIds?: string[];
   query: string;
   isRegex?: boolean;
   filePattern?: string;
@@ -56,94 +68,113 @@ export function handler(args: {
   maxResults?: number;
 }): CallToolResult {
   const t0 = Date.now();
-  const { repoId, query, isRegex = false, filePattern, contextLines = 2, maxResults = 50 } = args;
+  const { query, isRegex = false, filePattern, contextLines = 2, maxResults = 50 } = args;
 
-  const db = openDatabase(repoId);
-
-  const repo = getRepo(db, repoId);
-  if (!repo) {
-    db.close();
+  // ── Resolve target repos ───────────────────────────────────────────────────
+  const repos = resolveRepoScope({ repoId: args.repoId, repoIds: args.repoIds });
+  if (repos.length === 0) {
     return {
-      content: [{ type: 'text', text: JSON.stringify({ error: `Repo "${repoId}" not found` }) }],
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          error: args.repoId
+            ? `Repo "${args.repoId}" not found`
+            : 'No indexed repos found. Run index_folder first.',
+        }),
+      }],
       isError: true,
     };
   }
+
+  const reposSearched = repos.map((r) => r.id);
 
   let pattern: RegExp;
   try {
     pattern = isRegex ? new RegExp(query, 'g') : new RegExp(escapeRegex(query), 'g');
   } catch (err) {
-    db.close();
     return {
       content: [{ type: 'text', text: JSON.stringify({ error: `Invalid regex: ${err}` }) }],
       isError: true,
     };
   }
 
-  const files = getAllFilesWithContent(db, repoId);
-  db.close();
-
   const matches: MatchRecord[] = [];
   let filesSearched = 0;
   let truncated = false;
   let rawBytes = 0;
 
-  for (const file of files) {
-    if (!file.rawContent) continue;
+  // ── Search each repo ───────────────────────────────────────────────────────
+  outer: for (const repo of repos) {
+    const db = openDatabase(repo.id);
 
-    if (filePattern && !minimatch(file.path, filePattern, { matchBase: false, dot: true })) {
+    const repoMeta = getRepo(db, repo.id);
+    if (!repoMeta) {
+      db.close();
       continue;
     }
 
-    try {
-      validatePath(file.path, repo.rootPath);
-    } catch {
-      continue;
-    }
+    const files = getAllFilesWithContent(db, repo.id);
+    db.close();
 
-    filesSearched++;
-    rawBytes += file.rawContent.length;
+    for (const file of files) {
+      if (!file.rawContent) continue;
 
-    const text = file.rawContent.toString('utf8');
-    const lines = text.split('\n');
-
-    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-      const line = lines[lineIdx];
-      pattern.lastIndex = 0;
-
-      let m: RegExpExecArray | null;
-      while ((m = pattern.exec(line)) !== null) {
-        if (matches.length >= maxResults) {
-          truncated = true;
-          break;
-        }
-
-        const contextBefore = lines
-          .slice(Math.max(0, lineIdx - contextLines), lineIdx)
-          .join('\n');
-        const contextAfter = lines
-          .slice(lineIdx + 1, lineIdx + 1 + contextLines)
-          .join('\n');
-
-        const contextParts = [contextBefore, line, contextAfter].filter((p) => p !== '');
-
-        matches.push({
-          file: file.path,
-          line: lineIdx + 1,
-          column: m.index + 1,
-          match: m[0],
-          context: contextParts.join('\n'),
-        });
-
-        if (m[0].length === 0) {
-          pattern.lastIndex++;
-        }
+      if (filePattern && !minimatch(file.path, filePattern, { matchBase: false, dot: true })) {
+        continue;
       }
 
-      if (truncated) break;
-    }
+      try {
+        validatePath(file.path, repoMeta.rootPath);
+      } catch {
+        continue;
+      }
 
-    if (truncated) break;
+      filesSearched++;
+      rawBytes += file.rawContent.length;
+
+      const text = file.rawContent.toString('utf8');
+      const lines = text.split('\n');
+
+      for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+        const line = lines[lineIdx];
+        pattern.lastIndex = 0;
+
+        let m: RegExpExecArray | null;
+        while ((m = pattern.exec(line)) !== null) {
+          if (matches.length >= maxResults) {
+            truncated = true;
+            break;
+          }
+
+          const contextBefore = lines
+            .slice(Math.max(0, lineIdx - contextLines), lineIdx)
+            .join('\n');
+          const contextAfter = lines
+            .slice(lineIdx + 1, lineIdx + 1 + contextLines)
+            .join('\n');
+
+          const contextParts = [contextBefore, line, contextAfter].filter((p) => p !== '');
+
+          matches.push({
+            file: file.path,
+            repoId: repo.id,
+            repoName: repo.name,
+            line: lineIdx + 1,
+            column: m.index + 1,
+            match: m[0],
+            context: contextParts.join('\n'),
+          });
+
+          if (m[0].length === 0) {
+            pattern.lastIndex++;
+          }
+        }
+
+        if (truncated) break;
+      }
+
+      if (truncated) break outer;
+    }
   }
 
   const responseBytes = matches.reduce(
@@ -152,22 +183,23 @@ export function handler(args: {
   );
 
   return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(
-          {
-            matches,
-            total_matches: matches.length,
-            files_searched: filesSearched,
-            truncated,
-            _meta: buildMeta({ timingMs: Date.now() - t0, rawBytes, responseBytes }),
+    content: [{
+      type: 'text',
+      text: JSON.stringify(
+        {
+          matches,
+          total_matches: matches.length,
+          files_searched: filesSearched,
+          truncated,
+          _meta: {
+            ...buildMeta({ timingMs: Date.now() - t0, rawBytes, responseBytes }),
+            reposSearched,
           },
-          null,
-          2,
-        ),
-      },
-    ],
+        },
+        null,
+        2,
+      ),
+    }],
   };
 }
 

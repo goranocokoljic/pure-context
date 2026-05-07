@@ -167,6 +167,9 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
         : { ...DEFAULT_CONFIG.rateLimit.perToolLimits },
     },
     layers: partial.layers !== undefined ? partial.layers : DEFAULT_CONFIG.layers,
+    providers: partial.providers !== undefined
+      ? { ...DEFAULT_CONFIG.providers, ...partial.providers }
+      : { ...DEFAULT_CONFIG.providers },
     server: {
       requireAuth: partial.server?.requireAuth ?? DEFAULT_CONFIG.server.requireAuth,
       adminKey: process.env['PCTX_ADMIN_KEY'] ?? partial.server?.adminKey ?? DEFAULT_CONFIG.server.adminKey,
@@ -174,6 +177,14 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
     telemetry: {
       enabled: partial.telemetry?.enabled ?? DEFAULT_CONFIG.telemetry.enabled,
       endpoint: partial.telemetry?.endpoint ?? DEFAULT_CONFIG.telemetry.endpoint,
+    },
+    webhooks: {
+      enabled: partial.webhooks?.enabled ?? DEFAULT_CONFIG.webhooks.enabled,
+      secret: resolveEnvVar(partial.webhooks?.secret ?? DEFAULT_CONFIG.webhooks.secret),
+      allowedRepos: partial.webhooks?.allowedRepos ?? DEFAULT_CONFIG.webhooks.allowedRepos,
+      autoIndex:
+        (process.env['AUTO_INDEX_ON_WEBHOOK'] === 'true') ||
+        (partial.webhooks?.autoIndex ?? DEFAULT_CONFIG.webhooks.autoIndex),
     },
   };
 

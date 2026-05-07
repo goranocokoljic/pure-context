@@ -23,10 +23,23 @@ import type { SymbolRecord } from '../types.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+export interface DebugScore {
+  total: number;
+  nameExact: number;
+  namePrefix: number;
+  nameFuzzy: number;
+  wordOverlap: number;
+  signatureMatch: number;
+  summaryMatch: number;
+  kindBoost: number;
+  recencyBoost: number;
+}
+
 export interface ScoredSymbol {
   symbol: SymbolRecord;
   score: number;
   matchReason: 'exact_name' | 'prefix_name' | 'name_contains' | 'word_overlap' | 'content_match';
+  debugScore?: DebugScore;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -36,8 +49,10 @@ export interface ScoredSymbol {
  *
  * Input symbols are assumed to already be filtered by FTS5 (or LIKE) — this
  * layer only re-orders them.  Ties in score preserve the original (BM25) order.
+ *
+ * When `debug` is true, each result includes a `debugScore` breakdown.
  */
-export function rankSymbols(symbols: SymbolRecord[], query: string): ScoredSymbol[] {
+export function rankSymbols(symbols: SymbolRecord[], query: string, debug = false): ScoredSymbol[] {
   if (symbols.length === 0) return [];
 
   const queryLower = query.trim().toLowerCase();
@@ -54,7 +69,12 @@ export function rankSymbols(symbols: SymbolRecord[], query: string): ScoredSymbo
     return a.originalIndex - b.originalIndex; // preserve FTS order on tie
   });
 
-  return scored.map(({ symbol, score: s, matchReason }) => ({ symbol, score: s, matchReason }));
+  return scored.map(({ symbol, score: s, matchReason, debugScore }) => ({
+    symbol,
+    score: s,
+    matchReason,
+    ...(debug ? { debugScore } : {}),
+  }));
 }
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
@@ -63,7 +83,7 @@ function score(
   symbol: SymbolRecord,
   queryLower: string,
   queryWords: string[],
-): { score: number; matchReason: ScoredSymbol['matchReason'] } {
+): { score: number; matchReason: ScoredSymbol['matchReason']; debugScore: DebugScore } {
   const nameLower = symbol.name.toLowerCase();
   const sigLower = symbol.signature.toLowerCase();
   const sumLower = symbol.summary.toLowerCase();
@@ -73,45 +93,69 @@ function score(
 
   // ── Name-level rules (mutually exclusive for matchReason priority) ──────────
 
+  let nameExact = 0;
+  let namePrefix = 0;
+  let nameFuzzy = 0;
+
   if (nameLower === queryLower) {
+    nameExact = 100;
     total += 100;
     matchReason = 'exact_name';
   } else if (nameLower.startsWith(queryLower)) {
+    namePrefix = 60;
     total += 60;
     matchReason = 'prefix_name';
   } else if (nameLower.includes(queryLower)) {
+    nameFuzzy = 40;
     total += 40;
     matchReason = 'name_contains';
   }
 
   // ── Word-overlap rules (always additive; update matchReason if not yet set) ─
 
-  if (queryWords.length > 0) {
-    let wordScore = 0;
+  let wordOverlap = 0;
 
+  if (queryWords.length > 0) {
     if (queryWords.every((w) => nameLower.includes(w))) {
-      wordScore += 30;
+      wordOverlap += 30;
     }
     if (queryWords.some((w) => nameLower === w)) {
-      wordScore += 20;
+      wordOverlap += 20;
     }
     const wordsInName = queryWords.filter((w) => nameLower.includes(w)).length;
-    wordScore += wordsInName * 10;
+    wordOverlap += wordsInName * 10;
 
-    if (wordScore > 0) {
-      total += wordScore;
+    if (wordOverlap > 0) {
+      total += wordOverlap;
       if (matchReason === 'content_match') matchReason = 'word_overlap';
     }
   }
 
   // ── Content rules (signature + summary) ────────────────────────────────────
 
-  if (sigLower.includes(queryLower)) total += 8;
-  total += queryWords.filter((w) => sigLower.includes(w)).length * 2;
-  if (sumLower.includes(queryLower)) total += 5;
-  total += queryWords.filter((w) => sumLower.includes(w)).length * 1;
+  let signatureMatch = 0;
+  let summaryMatch = 0;
 
-  return { score: total, matchReason };
+  if (sigLower.includes(queryLower)) signatureMatch += 8;
+  signatureMatch += queryWords.filter((w) => sigLower.includes(w)).length * 2;
+  if (sumLower.includes(queryLower)) summaryMatch += 5;
+  summaryMatch += queryWords.filter((w) => sumLower.includes(w)).length * 1;
+
+  total += signatureMatch + summaryMatch;
+
+  const debugScore: DebugScore = {
+    total,
+    nameExact,
+    namePrefix,
+    nameFuzzy,
+    wordOverlap,
+    signatureMatch,
+    summaryMatch,
+    kindBoost: 0,
+    recencyBoost: 0,
+  };
+
+  return { score: total, matchReason, debugScore };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

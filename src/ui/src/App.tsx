@@ -1,6 +1,8 @@
 import { Routes, Route, NavLink, useNavigate } from 'react-router-dom';
-import { Suspense, lazy } from 'react';
+import { Suspense, lazy, useState } from 'react';
 import { useThemeStore } from './stores/themeStore.js';
+import { WorkspacePanel } from './components/WorkspacePanel.js';
+import { useWorkspaceStore } from './stores/workspaceStore.js';
 
 // ─── Lazy pages ───────────────────────────────────────────────────────────────
 
@@ -34,10 +36,24 @@ const navLinkClass = ({ isActive }: { isActive: boolean }) =>
       : 'text-gray-400 hover:text-gray-100 hover:bg-gray-800'
   }`;
 
+// ─── Grid (workspace) icon ────────────────────────────────────────────────────
+
+function GridIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+      <rect x="1" y="1" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="9" y="1" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="1" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="9" y="9" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
 // ─── Header ───────────────────────────────────────────────────────────────────
 
-function Header() {
+function Header({ onWorkspaceToggle }: { onWorkspaceToggle: () => void }) {
   const navigate = useNavigate();
+  const pinnedCount = useWorkspaceStore((s) => s.pinnedRepos.length);
 
   return (
     <header className="h-14 border-b border-gray-800 flex items-center px-6 gap-6 shrink-0 bg-gray-900">
@@ -64,7 +80,23 @@ function Header() {
         </NavLink>
       </nav>
 
-      <div className="ml-auto">
+      <div className="ml-auto flex items-center gap-2">
+        {/* Workspace panel toggle */}
+        <button
+          type="button"
+          onClick={onWorkspaceToggle}
+          aria-label="Toggle workspace panel"
+          title="Workspace"
+          data-testid="workspace-toggle"
+          className="relative p-1.5 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800 transition-colors"
+        >
+          <GridIcon />
+          {pinnedCount > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-blue-600 text-white text-[8px] font-bold rounded-full flex items-center justify-center">
+              {pinnedCount}
+            </span>
+          )}
+        </button>
         <ThemeToggle />
       </div>
     </header>
@@ -142,9 +174,11 @@ function PureContextLogo() {
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+
   return (
     <div className="h-screen flex flex-col overflow-hidden">
-      <Header />
+      <Header onWorkspaceToggle={() => setWorkspaceOpen((o) => !o)} />
       <main className="flex-1 overflow-hidden">
         <Suspense fallback={<PageSpinner />}>
           <Routes>
@@ -159,6 +193,9 @@ export default function App() {
           </Routes>
         </Suspense>
       </main>
+      {workspaceOpen && (
+        <WorkspacePanel onClose={() => setWorkspaceOpen(false)} />
+      )}
     </div>
   );
 }

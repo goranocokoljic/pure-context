@@ -1,4 +1,4 @@
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { logger } from '../core/logger.js';
@@ -28,6 +28,32 @@ import * as getLayerViolationsTool from './tools/get-layer-violations.js';
 import * as indexRepoTool from './tools/index-repo.js';
 import * as searchSemanticTool from './tools/search-semantic.js';
 import * as getSavingsStatsTool from './tools/get-savings-stats.js';
+import * as findReferencesTool from './tools/find-references.js';
+import * as getFileContentTool from './tools/get-file-content.js';
+import * as getSymbolsTool from './tools/get-symbols.js';
+import * as invalidateCacheTool from './tools/invalidate-cache.js';
+import * as searchColumnsTool from './tools/search-columns.js';
+import * as searchSimilarTool from './tools/search-similar.js';
+import * as findCrossRepoUsagesTool from './tools/find-cross-repo-usages.js';
+import * as getSymbolHistoryTool from './tools/get-symbol-history.js';
+import * as analyzeDiffTool from './tools/analyze-diff.js';
+import * as getChurnMetricsTool from './tools/get-churn-metrics.js';
+import * as getQualityMetricsTool from './tools/get-quality-metrics.js';
+import * as detectAntipatternsTool from './tools/detect-antipatterns.js';
+import * as findRefactoringOpportunitiesTool from './tools/find-refactoring-opportunities.js';
+import * as getTaskContextTool from './tools/get-task-context.js';
+import * as generateDocsTool from './tools/generate-docs.js';
+import * as exportIndexTool from './tools/export-index.js';
+import * as importIndexTool from './tools/import-index.js';
+import * as fetchPublicIndexTool from './tools/fetch-public-index.js';
+
+// ── Resource handlers ──────────────────────────────────────────────────────────
+import {
+  readReposResource,
+  readRepoOutlineResource,
+  readFileOutlineResource,
+  readSymbolSourceResource,
+} from './resources.js';
 
 // ─── Tool error handling ──────────────────────────────────────────────────────
 
@@ -62,6 +88,37 @@ function handleToolError(err: unknown): CallToolResult {
     };
   }
   throw err;
+}
+
+// ─── Resource change notifications ────────────────────────────────────────────
+
+/**
+ * Returns an `onChanged` callback (suitable for `startWatching`) that sends
+ * MCP resource-update notifications to the client whenever files are reindexed.
+ *
+ * Pass the returned callback to `startWatching({ onChanged })` so that resource
+ * subscribers are notified after every watcher-triggered reindex.
+ */
+export function createResourceNotifier(
+  server: McpServer,
+): (repoId: string, changedPaths: string[], deletedPaths: string[]) => void {
+  return (repoId, changedPaths, deletedPaths) => {
+    const allPaths = [...changedPaths, ...deletedPaths];
+
+    // Notify for the repo outline (it changed because symbols were re-extracted)
+    server.server.sendResourceUpdated({ uri: `purecontext://repos/${repoId}/outline` }).catch(() => {});
+
+    // Notify for each changed/deleted file's outline
+    for (const filePath of allPaths) {
+      const encodedPath = encodeURIComponent(filePath);
+      server.server.sendResourceUpdated({
+        uri: `purecontext://repos/${repoId}/files/${encodedPath}`,
+      }).catch(() => {});
+    }
+
+    // Notify the repo list in case symbol/file counts changed
+    server.server.sendResourceUpdated({ uri: 'purecontext://repos' }).catch(() => {});
+  };
 }
 
 // ─── Server factory ───────────────────────────────────────────────────────────
@@ -165,6 +222,142 @@ export function createMcpServer(): McpServer {
     description: getSavingsStatsTool.description,
     inputSchema: getSavingsStatsTool.inputSchema,
   }, typed((args) => getSavingsStatsTool.handler(args)));
+
+  server.registerTool(findReferencesTool.name, {
+    description: findReferencesTool.description,
+    inputSchema: findReferencesTool.inputSchema,
+  }, typed((args) => findReferencesTool.handler(args)));
+
+  server.registerTool(getFileContentTool.name, {
+    description: getFileContentTool.description,
+    inputSchema: getFileContentTool.inputSchema,
+  }, typed((args) => getFileContentTool.handler(args)));
+
+  server.registerTool(getSymbolsTool.name, {
+    description: getSymbolsTool.description,
+    inputSchema: getSymbolsTool.inputSchema,
+  }, typed((args) => getSymbolsTool.handler(args)));
+
+  server.registerTool(invalidateCacheTool.name, {
+    description: invalidateCacheTool.description,
+    inputSchema: invalidateCacheTool.inputSchema,
+  }, typed((args) => invalidateCacheTool.handler(args)));
+
+  server.registerTool(searchColumnsTool.name, {
+    description: searchColumnsTool.description,
+    inputSchema: searchColumnsTool.inputSchema,
+  }, typed((args) => searchColumnsTool.handler(args)));
+
+  server.registerTool(searchSimilarTool.name, {
+    description: searchSimilarTool.description,
+    inputSchema: searchSimilarTool.inputSchema,
+  }, typed((args) => searchSimilarTool.handler(args)));
+
+  server.registerTool(findCrossRepoUsagesTool.name, {
+    description: findCrossRepoUsagesTool.description,
+    inputSchema: findCrossRepoUsagesTool.inputSchema,
+  }, typed((args) => findCrossRepoUsagesTool.handler(args)));
+
+  server.registerTool(getSymbolHistoryTool.name, {
+    description: getSymbolHistoryTool.description,
+    inputSchema: getSymbolHistoryTool.inputSchema,
+  }, typed((args) => getSymbolHistoryTool.handler(args)));
+
+  server.registerTool(analyzeDiffTool.name, {
+    description: analyzeDiffTool.description,
+    inputSchema: analyzeDiffTool.inputSchema,
+  }, typed((args) => analyzeDiffTool.handler(args)));
+
+  server.registerTool(getChurnMetricsTool.name, {
+    description: getChurnMetricsTool.description,
+    inputSchema: getChurnMetricsTool.inputSchema,
+  }, typed((args) => getChurnMetricsTool.handler(args)));
+
+  server.registerTool(getQualityMetricsTool.name, {
+    description: getQualityMetricsTool.description,
+    inputSchema: getQualityMetricsTool.inputSchema,
+  }, typed((args) => getQualityMetricsTool.handler(args)));
+
+  server.registerTool(detectAntipatternsTool.name, {
+    description: detectAntipatternsTool.description,
+    inputSchema: detectAntipatternsTool.inputSchema,
+  }, typed((args) => detectAntipatternsTool.handler(args)));
+
+  server.registerTool(findRefactoringOpportunitiesTool.name, {
+    description: findRefactoringOpportunitiesTool.description,
+    inputSchema: findRefactoringOpportunitiesTool.inputSchema,
+  }, typed((args) => findRefactoringOpportunitiesTool.handler(args)));
+
+  server.registerTool(getTaskContextTool.name, {
+    description: getTaskContextTool.description,
+    inputSchema: getTaskContextTool.inputSchema,
+  }, typed((args) => getTaskContextTool.handler(args)));
+
+  server.registerTool(generateDocsTool.name, {
+    description: generateDocsTool.description,
+    inputSchema: generateDocsTool.inputSchema,
+  }, typed((args) => generateDocsTool.handler(args)));
+
+  server.registerTool(exportIndexTool.name, {
+    description: exportIndexTool.description,
+    inputSchema: exportIndexTool.inputSchema,
+  }, typed((args) => exportIndexTool.handler(args)));
+
+  server.registerTool(importIndexTool.name, {
+    description: importIndexTool.description,
+    inputSchema: importIndexTool.inputSchema,
+  }, typed((args) => importIndexTool.handler(args)));
+
+  server.registerTool(fetchPublicIndexTool.name, {
+    description: fetchPublicIndexTool.description,
+    inputSchema: fetchPublicIndexTool.inputSchema,
+  }, typed((args) => fetchPublicIndexTool.handler(args)));
+
+  // ── MCP Resources ─────────────────────────────────────────────────────────
+
+  // Static resource: list all indexed repos
+  server.registerResource(
+    'purecontext-repos',
+    'purecontext://repos',
+    { mimeType: 'application/json', description: 'List of all indexed repositories' },
+    (uri) => readReposResource(uri.toString()),
+  );
+
+  // Template: per-repo symbol outline
+  server.registerResource(
+    'purecontext-repo-outline',
+    new ResourceTemplate('purecontext://repos/{repoId}/outline', { list: undefined }),
+    { mimeType: 'application/json', description: 'Symbol outline for a repository' },
+    (uri, { repoId }) => {
+      if (typeof repoId !== 'string') throw new Error('repoId required');
+      return readRepoOutlineResource(uri.toString(), repoId);
+    },
+  );
+
+  // Template: per-file symbol outline
+  // Note: filePath in the URI is URL-encoded (slashes → %2F)
+  server.registerResource(
+    'purecontext-file-outline',
+    new ResourceTemplate('purecontext://repos/{repoId}/files/{filePath}', { list: undefined }),
+    { mimeType: 'application/json', description: 'Symbol outline for a file in a repository' },
+    (uri, { repoId, filePath }) => {
+      if (typeof repoId !== 'string') throw new Error('repoId required');
+      if (typeof filePath !== 'string') throw new Error('filePath required');
+      return readFileOutlineResource(uri.toString(), repoId, decodeURIComponent(filePath));
+    },
+  );
+
+  // Template: symbol source code
+  server.registerResource(
+    'purecontext-symbol-source',
+    new ResourceTemplate('purecontext://repos/{repoId}/symbols/{symbolId}', { list: undefined }),
+    { mimeType: 'text/plain', description: 'Source code of a specific symbol' },
+    (uri, { repoId, symbolId }) => {
+      if (typeof repoId !== 'string') throw new Error('repoId required');
+      if (typeof symbolId !== 'string') throw new Error('symbolId required');
+      return readSymbolSourceResource(uri.toString(), repoId, symbolId);
+    },
+  );
 
   return server;
 }

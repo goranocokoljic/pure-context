@@ -1,0 +1,21 @@
+version: 2
+
+models:
+  - name: orders
+    description: Final orders mart joining orders with customer data
+    tags:
+      - marts
+      - orders
+    columns:
+      - name: order_id
+        description: Unique identifier for each order
+        tags:
+          - primary_key
+      - name: customer_id
+        description: Foreign key to customers
+      - name: amount
+        description: Order amount in USD
+      - name: first_name
+        description: Customer first name (denormalized)
+      - name: last_name
+        description: Customer last name (denormalized)

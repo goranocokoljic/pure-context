@@ -4,12 +4,13 @@ import { useSearch } from '../hooks/useSearch.js';
 import { SearchFilters } from '../components/SearchFilters.js';
 import { SearchResults } from '../components/SearchResults.js';
 import { useRepoStore } from '../stores/repoStore.js';
+import { useWorkspaceStore } from '../stores/workspaceStore.js';
 import { api } from '../api/client.js';
 import type { SearchResult, RepoMeta } from '../api/types.js';
 
-// ─── Repo selector ────────────────────────────────────────────────────────────
+// ─── Repo selector (single) ───────────────────────────────────────────────────
 
-function RepoSelector({
+function SingleRepoSelector({
   repos,
   selectedId,
   onSelect,
@@ -19,9 +20,7 @@ function RepoSelector({
   onSelect: (id: string) => void;
 }) {
   if (repos.length === 0) {
-    return (
-      <p className="text-xs text-gray-500 italic">No indexed repositories found.</p>
-    );
+    return <p className="text-xs text-gray-500 italic">No indexed repositories found.</p>;
   }
 
   return (
@@ -41,6 +40,43 @@ function RepoSelector({
   );
 }
 
+// ─── Multi-repo selector ──────────────────────────────────────────────────────
+
+function MultiRepoSelector({
+  repos,
+  selectedIds,
+  onToggle,
+}: {
+  repos: RepoMeta[];
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Select repositories">
+      {repos.map((r) => {
+        const name = r.rootPath.split(/[/\\]/).pop() ?? r.repoId;
+        const active = selectedIds.includes(r.repoId);
+        return (
+          <button
+            key={r.repoId}
+            type="button"
+            onClick={() => onToggle(r.repoId)}
+            aria-pressed={active}
+            data-testid="repo-multi-select-btn"
+            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors border ${
+              active
+                ? 'bg-blue-600 border-blue-500 text-white'
+                : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500 hover:text-gray-200'
+            }`}
+          >
+            {name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── Search page ──────────────────────────────────────────────────────────────
 
 export default function Search() {
@@ -54,8 +90,21 @@ export default function Search() {
   const reposLoaded  = useRepoStore((s) => s.reposLoaded);
   const setReposStore = useRepoStore((s) => s.setRepos);
 
-  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(
-    searchParams.get('repoId') ?? null,
+  const pinnedRepos = useWorkspaceStore((s) => s.pinnedRepos);
+  const isMultiRepo = pinnedRepos.length > 1;
+
+  // Parse initial selection from URL params.
+  const initialRepoId = searchParams.get('repoId') ?? null;
+  const initialRepoIds = searchParams.getAll('repoIds');
+
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(initialRepoId);
+  // In multi-repo mode, selectedRepoIds drives the search.
+  const [selectedRepoIds, setSelectedRepoIds] = useState<string[]>(
+    initialRepoIds.length > 0
+      ? initialRepoIds
+      : pinnedRepos.length > 1
+        ? pinnedRepos
+        : [],
   );
 
   // Load repo list on first mount if not cached.
@@ -64,12 +113,30 @@ export default function Search() {
     api.listRepos().then((res) => setReposStore(res.repos)).catch(() => {});
   }, [reposLoaded, setReposStore]);
 
-  // Auto-select first repo once loaded.
+  // Auto-select first repo (single-repo mode) once loaded.
   useEffect(() => {
+    if (isMultiRepo) return;
     if (!selectedRepoId && storedRepos.length > 0) {
       setSelectedRepoId(storedRepos[0].repoId);
     }
-  }, [storedRepos, selectedRepoId]);
+  }, [storedRepos, selectedRepoId, isMultiRepo]);
+
+  // When workspace switches to multi-repo, default to all pinned repos selected.
+  useEffect(() => {
+    if (isMultiRepo && selectedRepoIds.length === 0) {
+      setSelectedRepoIds(pinnedRepos);
+    }
+  }, [isMultiRepo, pinnedRepos, selectedRepoIds.length]);
+
+  function toggleRepoSelection(repoId: string) {
+    setSelectedRepoIds((prev) =>
+      prev.includes(repoId) ? prev.filter((id) => id !== repoId) : [...prev, repoId],
+    );
+  }
+
+  // Effective repo IDs for search.
+  const effectiveRepoId = isMultiRepo ? null : selectedRepoId;
+  const effectiveRepoIds = isMultiRepo && selectedRepoIds.length > 1 ? selectedRepoIds : undefined;
 
   // ─── Search state ─────────────────────────────────────────────────────────
 
@@ -78,7 +145,7 @@ export default function Search() {
     filters, setFilters,
     results, loading, error,
     clearSearch,
-  } = useSearch({ repoId: selectedRepoId });
+  } = useSearch({ repoId: effectiveRepoId, repoIds: effectiveRepoIds });
 
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -127,7 +194,10 @@ export default function Search() {
     [navigate],
   );
 
-  const activeFilterCount = filters.kinds.length + (filters.filePath ? 1 : 0);
+  const activeFilterCount =
+    filters.kinds.length +
+    (filters.filePath ? 1 : 0) +
+    (filters.coverageStatus ? 1 : 0);
 
   // ─── Render ───────────────────────────────────────────────────────────────
 
@@ -165,12 +235,20 @@ export default function Search() {
               )}
             </div>
 
-            {/* Repo selector */}
-            <RepoSelector
-              repos={storedRepos}
-              selectedId={selectedRepoId}
-              onSelect={setSelectedRepoId}
-            />
+            {/* Repo selector: single or multi depending on workspace */}
+            {!isMultiRepo ? (
+              <SingleRepoSelector
+                repos={storedRepos}
+                selectedId={selectedRepoId}
+                onSelect={setSelectedRepoId}
+              />
+            ) : (
+              <MultiRepoSelector
+                repos={storedRepos}
+                selectedIds={selectedRepoIds}
+                onToggle={toggleRepoSelection}
+              />
+            )}
 
             {/* Filters toggle */}
             <button
@@ -223,6 +301,7 @@ export default function Search() {
             error={error}
             focusedIndex={focusedIndex}
             onSelect={handleSelect}
+            showRepo={isMultiRepo && (effectiveRepoIds?.length ?? 0) > 1}
           />
         </div>
       </div>

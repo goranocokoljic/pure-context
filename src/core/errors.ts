@@ -139,6 +139,52 @@ export class QuotaExceededError extends PureContextError {
   }
 }
 
+export class FileNotCachedError extends PureContextError {
+  override userMessage: string;
+  override suggestion = 'Run index_folder on the repository first so the file is indexed.';
+
+  constructor(public readonly filePath: string, detail?: string) {
+    const msg = detail ?? `File not in cache: "${filePath}"`;
+    super(msg);
+    this.userMessage = msg;
+  }
+}
+
+export class TooManySymbolsError extends PureContextError {
+  override userMessage: string;
+  override suggestion: string;
+
+  constructor(public readonly requested: number, public readonly limit: number) {
+    super(`Requested ${requested} symbols, exceeds per-call limit of ${limit}`);
+    this.userMessage = `Requested ${requested} symbol IDs, but the per-call limit is ${limit}. Split into smaller batches.`;
+    this.suggestion = `Call get_symbols with at most ${limit} IDs per request.`;
+  }
+}
+
+export class GitHubApiError extends PureContextError {
+  override userMessage: string;
+  override suggestion: string;
+
+  constructor(
+    public readonly statusCode: number,
+    message: string,
+    cause?: unknown,
+  ) {
+    super(`GitHub API error ${statusCode}: ${message}`, cause);
+    this.userMessage = `GitHub API error (HTTP ${statusCode}): ${message}`;
+    this.suggestion =
+      statusCode === 401 || statusCode === 404
+        ? 'For private repositories, provide a GitHub token via the githubToken parameter or GITHUB_TOKEN env var.'
+        : statusCode === 403 || statusCode === 429
+          ? 'Rate limit exceeded. Wait a moment and retry, or provide a GITHUB_TOKEN for higher limits (5000 req/hr).'
+          : 'Check the repository URL and try again.';
+  }
+
+  get isRateLimit(): boolean { return this.statusCode === 403 || this.statusCode === 429; }
+  get isUnauthorized(): boolean { return this.statusCode === 401; }
+  get isNotFound(): boolean { return this.statusCode === 404; }
+}
+
 export class WorkspaceLimitError extends PureContextError {
   override userMessage: string;
   override suggestion: string;

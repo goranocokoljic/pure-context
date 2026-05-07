@@ -36,6 +36,8 @@ export interface SearchOptions {
   filePattern?: string;
   /** Use query expansion to improve recall (default: true). */
   expandQuery?: boolean;
+  /** Return per-result score breakdown in debug fields (default: false). */
+  debug?: boolean;
 }
 
 export interface HybridSearchResult {
@@ -43,6 +45,8 @@ export interface HybridSearchResult {
   keywordScore: number;
   semanticScore: number;
   combinedScore: number;
+  /** Raw cosine distance from HNSW (0 = identical, 2 = opposite). Only set when SearchOptions.debug=true and semantic was used. */
+  rawCosineDistance?: number;
 }
 
 // ─── RRF constant ─────────────────────────────────────────────────────────────
@@ -74,6 +78,7 @@ export class HybridSearcher {
       kind,
       filePattern,
       expandQuery: doExpand = true,
+      debug = false,
     } = options;
 
     const hasSemanticIndex = this.vectorStore.size > 0;
@@ -99,6 +104,8 @@ export class HybridSearcher {
 
     // ── Step 2: Semantic vector search ────────────────────────────────────────
     const semanticIdsByRank: string[] = [];
+    // Track raw cosine distances for debug mode
+    const semDistanceOf = new Map<string, number>(); // symbolId → cosine distance
     if (useSemantic) {
       const queries = doExpand ? expandQuery(query) : [query];
       // Collect semantic hits across all query variations; de-dup by ID, preserve first rank
@@ -109,6 +116,7 @@ export class HybridSearcher {
           if (!seenSemantic.has(hit.id)) {
             seenSemantic.add(hit.id);
             semanticIdsByRank.push(hit.id);
+            if (debug) semDistanceOf.set(hit.id, hit.distance);
           }
         }
         if (semanticIdsByRank.length >= candidateCount) break;
@@ -173,7 +181,12 @@ export class HybridSearcher {
 
       if (combinedScore < threshold) continue;
 
-      scored.push({ symbol, keywordScore, semanticScore, combinedScore });
+      const result: HybridSearchResult = { symbol, keywordScore, semanticScore, combinedScore };
+      if (debug) {
+        const dist = semDistanceOf.get(id);
+        if (dist !== undefined) result.rawCosineDistance = dist;
+      }
+      scored.push(result);
     }
 
     // ── Step 7: Sort and return ───────────────────────────────────────────────

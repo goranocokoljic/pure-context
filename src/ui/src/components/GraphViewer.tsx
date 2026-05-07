@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
   BackgroundVariant,
+  MiniMap,
   useNodesState,
   useEdgesState,
   useReactFlow,
@@ -26,9 +27,100 @@ import { GraphControls, type LayoutKind } from './GraphControls.js';
 import { GraphFileNode } from './GraphNode.js';
 import type { GraphNode as ApiNode, GraphEdge as ApiEdge, GraphNodeData, GraphEdgeData } from '../api/types.js';
 
+// ─── Directory group node ─────────────────────────────────────────────────────
+
+function DirGroupNode({ data }: { data: GraphNodeData }) {
+  return (
+    <div
+      className="w-full h-full rounded border border-gray-700"
+      style={{ background: 'rgba(31, 41, 55, 0.5)' }}
+      data-testid="dir-group-node"
+    >
+      <div className="px-2 py-1 text-xs text-gray-500 font-mono truncate border-b border-gray-700/50">
+        {data.label}
+      </div>
+    </div>
+  );
+}
+
 // ─── Node types ───────────────────────────────────────────────────────────────
 
-const nodeTypes = { file: GraphFileNode };
+const nodeTypes = { file: GraphFileNode, dirGroup: DirGroupNode };
+
+// ─── Pure algorithm functions (exported for tests) ────────────────────────────
+
+/** Filter nodes whose file extension matches lang (empty string = all). */
+export function filterNodesByLang(nodes: ApiNode[], lang: string): ApiNode[] {
+  if (!lang) return nodes;
+  return nodes.filter((n) => {
+    const path = n.data.path as string;
+    const ext = path.includes('.') ? path.split('.').pop() ?? '' : '';
+    return ext === lang;
+  });
+}
+
+/** BFS shortest path (undirected) between two node IDs. Returns null if unreachable. */
+export function findShortestPath(
+  from: string,
+  to: string,
+  edges: ApiEdge[],
+): string[] | null {
+  if (from === to) return [from];
+
+  // Build undirected adjacency list
+  const adj = new Map<string, string[]>();
+  for (const e of edges) {
+    if (!adj.has(e.source)) adj.set(e.source, []);
+    if (!adj.has(e.target)) adj.set(e.target, []);
+    adj.get(e.source)!.push(e.target);
+    adj.get(e.target)!.push(e.source);
+  }
+
+  const visited = new Set<string>([from]);
+  const queue: string[][] = [[from]];
+
+  while (queue.length > 0) {
+    const path = queue.shift()!;
+    const node = path[path.length - 1]!;
+    for (const neighbor of adj.get(node) ?? []) {
+      if (neighbor === to) return [...path, to];
+      if (!visited.has(neighbor)) {
+        visited.add(neighbor);
+        queue.push([...path, neighbor]);
+      }
+    }
+  }
+  return null;
+}
+
+/** Map a node-ID path to the set of edge IDs that connect consecutive nodes. */
+export function pathToEdgeIds(path: string[], edges: ApiEdge[]): Set<string> {
+  if (path.length < 2) return new Set();
+  const lookup = new Map<string, string>();
+  for (const e of edges) {
+    lookup.set(`${e.source}|${e.target}`, e.id);
+    lookup.set(`${e.target}|${e.source}`, e.id);
+  }
+  const result = new Set<string>();
+  for (let i = 0; i < path.length - 1; i++) {
+    const id = lookup.get(`${path[i]}|${path[i + 1]}`);
+    if (id) result.add(id);
+  }
+  return result;
+}
+
+/** Group nodes by their parent directory path. */
+export function groupByDirectory(nodes: ApiNode[]): Map<string, ApiNode[]> {
+  const groups = new Map<string, ApiNode[]>();
+  for (const n of nodes) {
+    const path = n.data.path as string;
+    const lastSlash = path.lastIndexOf('/');
+    const dir = lastSlash >= 0 ? path.slice(0, lastSlash) : '.';
+    if (!groups.has(dir)) groups.set(dir, []);
+    groups.get(dir)!.push(n);
+  }
+  return groups;
+}
 
 // ─── Layout algorithms ────────────────────────────────────────────────────────
 
@@ -78,7 +170,6 @@ function applyHierarchicalLayout(
   nodes: ApiNode[],
   edges: ApiEdge[],
 ): Map<string, { x: number; y: number }> {
-  // Build in-degree map to find roots
   const inDegree = new Map<string, number>(nodes.map((n) => [n.id, 0]));
   for (const e of edges) {
     inDegree.set(e.target, (inDegree.get(e.target) ?? 0) + 1);
@@ -88,7 +179,6 @@ function applyHierarchicalLayout(
     adj.get(e.source)?.push(e.target);
   }
 
-  // BFS to assign levels
   const level = new Map<string, number>();
   const queue: string[] = [];
   for (const [id, deg] of inDegree) {
@@ -98,7 +188,6 @@ function applyHierarchicalLayout(
     }
   }
   if (queue.length === 0 && nodes.length > 0) {
-    // Cyclic — just put first node as root
     level.set(nodes[0]!.id, 0);
     queue.push(nodes[0]!.id);
   }
@@ -114,7 +203,6 @@ function applyHierarchicalLayout(
     }
   }
 
-  // Assign x positions within each level
   const levelNodes = new Map<number, string[]>();
   for (const [id, l] of level) {
     if (!levelNodes.has(l)) levelNodes.set(l, []);
@@ -132,7 +220,6 @@ function applyHierarchicalLayout(
     });
   }
 
-  // Any unplaced nodes
   let fallbackX = 0;
   for (const n of nodes) {
     if (!positions.has(n.id)) {
@@ -150,7 +237,6 @@ function applyRadialLayout(
 ): Map<string, { x: number; y: number }> {
   if (nodes.length === 0) return new Map();
 
-  // Degree centrality — most-connected node goes to center
   const degree = new Map<string, number>(nodes.map((n) => [n.id, 0]));
   for (const e of edges) {
     degree.set(e.source, (degree.get(e.source) ?? 0) + 1);
@@ -183,6 +269,69 @@ function applyRadialLayout(
   }
 
   return positions;
+}
+
+// ─── Cluster layout builder ───────────────────────────────────────────────────
+
+const CLUSTER_PADDING = 20;
+const CLUSTER_NODE_W = 200;
+const CLUSTER_NODE_H = 60;
+const CLUSTER_HEADER_H = 24;
+const CLUSTER_GAP = 10;
+const CLUSTER_COLS = 2;
+
+function buildClusterLayout(
+  nodes: ApiNode[],
+  basePositions: Map<string, { x: number; y: number }>,
+): Node<GraphNodeData>[] {
+  const dirMap = groupByDirectory(nodes);
+  const allNodes: Node<GraphNodeData>[] = [];
+
+  for (const [dir, dirNodes] of dirMap) {
+    const rows = Math.ceil(dirNodes.length / CLUSTER_COLS);
+    const groupW =
+      CLUSTER_COLS * CLUSTER_NODE_W + (CLUSTER_COLS - 1) * CLUSTER_GAP + CLUSTER_PADDING * 2;
+    const groupH =
+      rows * CLUSTER_NODE_H + (rows - 1) * CLUSTER_GAP + CLUSTER_PADDING * 2 + CLUSTER_HEADER_H;
+
+    // Group position: centroid of children's base positions
+    let cx = 0;
+    let cy = 0;
+    for (const n of dirNodes) {
+      const p = basePositions.get(n.id) ?? { x: 0, y: 0 };
+      cx += p.x;
+      cy += p.y;
+    }
+    cx /= dirNodes.length;
+    cy /= dirNodes.length;
+
+    const groupId = `__dir_${dir}`;
+    allNodes.push({
+      id: groupId,
+      type: 'dirGroup',
+      position: { x: cx - groupW / 2, y: cy - groupH / 2 },
+      style: { width: groupW, height: groupH },
+      data: { label: dir, path: '', symbolCount: 0, __isGroup: true } as unknown as GraphNodeData,
+    });
+
+    dirNodes.forEach((n, i) => {
+      const col = i % CLUSTER_COLS;
+      const row = Math.floor(i / CLUSTER_COLS);
+      allNodes.push({
+        id: n.id,
+        type: 'file',
+        parentId: groupId,
+        extent: 'parent',
+        position: {
+          x: CLUSTER_PADDING + col * (CLUSTER_NODE_W + CLUSTER_GAP),
+          y: CLUSTER_PADDING + CLUSTER_HEADER_H + row * (CLUSTER_NODE_H + CLUSTER_GAP),
+        },
+        data: n.data,
+      });
+    });
+  }
+
+  return allNodes;
 }
 
 // ─── Conversion helpers ───────────────────────────────────────────────────────
@@ -250,8 +399,79 @@ function InnerGraphViewer({
   const containerRef = useRef<HTMLDivElement>(null);
   const layoutKey = useRef(0);
 
+  // ─── Filter / cluster state ─────────────────────────────────────────────────
+  const [langFilter, setLangFilter] = useState('');
+  const [clusterByDir, setClusterByDir] = useState(false);
+
+  // ─── Path highlight state ────────────────────────────────────────────────────
+  const [pathFrom, setPathFrom] = useState<string | null>(null);
+  const [pathTo, setPathTo] = useState<string | null>(null);
+  const [pathNodeIds, setPathNodeIds] = useState<Set<string>>(new Set());
+  const [pathEdgeIds, setPathEdgeIds] = useState<Set<string>>(new Set());
+  const [selectingPath, setSelectingPath] = useState<'from' | 'to' | null>(null);
+  const [pathStatus, setPathStatus] = useState<'idle' | 'found' | 'not-found'>('idle');
+
+  // ─── Derived data ────────────────────────────────────────────────────────────
+
+  const availableLangs = useMemo(() => {
+    const exts = new Set<string>();
+    for (const n of apiNodes) {
+      const path = n.data.path as string;
+      const ext = path.includes('.') ? path.split('.').pop() : undefined;
+      if (ext) exts.add(ext);
+    }
+    return [...exts].sort();
+  }, [apiNodes]);
+
+  const filteredNodes = useMemo(
+    () => filterNodesByLang(apiNodes, langFilter),
+    [apiNodes, langFilter],
+  );
+
+  const filteredEdges = useMemo(() => {
+    if (!langFilter) return apiEdges;
+    const nodeSet = new Set(filteredNodes.map((n) => n.id));
+    return apiEdges.filter((e) => nodeSet.has(e.source) && nodeSet.has(e.target));
+  }, [apiEdges, filteredNodes, langFilter]);
+
+  const stats = useMemo(
+    () => ({ nodeCount: filteredNodes.length, edgeCount: filteredEdges.length }),
+    [filteredNodes, filteredEdges],
+  );
+
+  // ─── Path operations ────────────────────────────────────────────────────────
+
+  const handleFindPath = useCallback(() => {
+    if (!pathFrom || !pathTo) return;
+    const path = findShortestPath(pathFrom, pathTo, filteredEdges);
+    if (path) {
+      setPathNodeIds(new Set(path));
+      setPathEdgeIds(pathToEdgeIds(path, filteredEdges));
+      setPathStatus('found');
+    } else {
+      setPathNodeIds(new Set());
+      setPathEdgeIds(new Set());
+      setPathStatus('not-found');
+    }
+  }, [pathFrom, pathTo, filteredEdges]);
+
+  const handleClearPath = useCallback(() => {
+    setPathFrom(null);
+    setPathTo(null);
+    setPathNodeIds(new Set());
+    setPathEdgeIds(new Set());
+    setPathStatus('idle');
+    setSelectingPath(null);
+  }, []);
+
+  const handleSelectPath = useCallback((which: 'from' | 'to') => {
+    setSelectingPath((prev) => (prev === which ? null : which));
+  }, []);
+
+  // ─── Layout ─────────────────────────────────────────────────────────────────
+
   const runLayout = useCallback(() => {
-    if (apiNodes.length === 0) {
+    if (filteredNodes.length === 0) {
       setNodes([]);
       setEdges([]);
       return;
@@ -261,41 +481,95 @@ function InnerGraphViewer({
 
     let positions: Map<string, { x: number; y: number }>;
     if (layout === 'force') {
-      positions = applyForceLayout(apiNodes, apiEdges, w, h);
+      positions = applyForceLayout(filteredNodes, filteredEdges, w, h);
     } else if (layout === 'hierarchical') {
-      positions = applyHierarchicalLayout(apiNodes, apiEdges);
+      positions = applyHierarchicalLayout(filteredNodes, filteredEdges);
     } else {
-      positions = applyRadialLayout(apiNodes, apiEdges);
+      positions = applyRadialLayout(filteredNodes, filteredEdges);
     }
 
-    setNodes(toFlowNodes(apiNodes, positions, focusFile));
-    setEdges(toFlowEdges(apiEdges));
+    if (clusterByDir) {
+      setNodes(buildClusterLayout(filteredNodes, positions));
+    } else {
+      setNodes(toFlowNodes(filteredNodes, positions, focusFile));
+    }
+    setEdges(toFlowEdges(filteredEdges));
     layoutKey.current++;
-
-    // Fit after a tick so React Flow has measured nodes
     setTimeout(() => fitView({ duration: 300, padding: 0.1 }), 50);
-  }, [apiNodes, apiEdges, focusFile, layout, setNodes, setEdges, fitView]);
+  }, [filteredNodes, filteredEdges, focusFile, layout, clusterByDir, setNodes, setEdges, fitView]);
 
-  // Re-layout whenever data or layout changes
   useEffect(() => {
     runLayout();
   }, [runLayout]);
 
+  // ─── Path highlighting effect ────────────────────────────────────────────────
+  // Runs separately from runLayout so layout positions are not re-randomized.
+
+  useEffect(() => {
+    const hasPath = pathNodeIds.size > 0;
+    setNodes((prev) =>
+      prev.map((n) => {
+        if ((n.data as GraphNodeData & { __isGroup?: boolean }).__isGroup) return n;
+        return {
+          ...n,
+          style: {
+            ...(n.style ?? {}),
+            opacity: hasPath && !pathNodeIds.has(n.id) ? 0.2 : 1,
+          },
+        };
+      }),
+    );
+    setEdges((prev) =>
+      prev.map((e) => {
+        const onPath = !hasPath || pathEdgeIds.has(e.id);
+        return {
+          ...e,
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: hasPath && onPath ? '#3b82f6' : '#4b5563',
+            width: 12,
+            height: 12,
+          },
+          style: {
+            stroke: hasPath && onPath ? '#3b82f6' : '#4b5563',
+            strokeWidth: hasPath && onPath ? 2.5 : 1.5,
+            opacity: onPath ? 1 : 0.2,
+          },
+        };
+      }),
+    );
+  }, [pathNodeIds, pathEdgeIds, setNodes, setEdges]);
+
+  // ─── Node click ──────────────────────────────────────────────────────────────
+
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
       const path = (node.data as { path?: string }).path;
-      if (path) onNodeClick?.(path);
-    },
-    [onNodeClick],
-  );
+      if (!path) return;
 
-  const stats = useMemo(
-    () => ({ nodeCount: apiNodes.length, edgeCount: apiEdges.length }),
-    [apiNodes, apiEdges],
+      if (selectingPath === 'from') {
+        setPathFrom(path);
+        setSelectingPath(null);
+        return;
+      }
+      if (selectingPath === 'to') {
+        setPathTo(path);
+        setSelectingPath(null);
+        return;
+      }
+
+      onNodeClick?.(path);
+    },
+    [onNodeClick, selectingPath],
   );
 
   return (
-    <div ref={containerRef} className="relative w-full h-full" data-testid="graph-viewer">
+    <div
+      ref={containerRef}
+      className="relative w-full h-full"
+      data-testid="graph-viewer"
+      style={{ cursor: selectingPath ? 'crosshair' : undefined }}
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -310,6 +584,16 @@ function InnerGraphViewer({
         className="bg-gray-950"
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#1f2937" />
+        <MiniMap
+          nodeColor={(n) =>
+            (n.data as GraphNodeData & { __isGroup?: boolean }).__isGroup
+              ? 'transparent'
+              : '#374151'
+          }
+          maskColor="rgba(17, 24, 39, 0.7)"
+          style={{ background: '#111827' }}
+          data-testid="graph-minimap"
+        />
       </ReactFlow>
 
       {/* Controls overlay */}
@@ -323,6 +607,18 @@ function InnerGraphViewer({
           edgeCount={stats.edgeCount}
           truncated={truncated}
           onRelayout={runLayout}
+          langFilter={langFilter}
+          onLangFilterChange={setLangFilter}
+          availableLangs={availableLangs}
+          clusterByDir={clusterByDir}
+          onClusterByDirChange={setClusterByDir}
+          pathFrom={pathFrom}
+          pathTo={pathTo}
+          selectingPath={selectingPath}
+          onSelectPath={handleSelectPath}
+          onFindPath={handleFindPath}
+          onClearPath={handleClearPath}
+          pathStatus={pathStatus}
         />
       </div>
     </div>

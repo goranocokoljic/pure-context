@@ -40,6 +40,19 @@ import { elixirHandler } from '../handlers/elixir.js';
 import { haskellHandler } from '../handlers/haskell.js';
 import { scalaHandler } from '../handlers/scala.js';
 import { rHandler } from '../handlers/r.js';
+import { openApiHandler } from '../handlers/openapi.js';
+import { sqlHandler } from '../handlers/sql.js';
+import { bashHandler } from '../handlers/bash.js';
+import { perlHandler } from '../handlers/perl.js';
+import { terraformHandler } from '../handlers/terraform.js';
+import { nixHandler } from '../handlers/nix.js';
+import { protobufHandler } from '../handlers/protobuf.js';
+import { graphqlHandler } from '../handlers/graphql.js';
+import { groovyHandler } from '../handlers/groovy.js';
+import { erlangHandler } from '../handlers/erlang.js';
+import { gleamHandler } from '../handlers/gleam.js';
+import { gdscriptHandler } from '../handlers/gdscript.js';
+import { xmlHandler } from '../handlers/xml.js';
 
 registerHandler(typescriptHandler);
 registerHandler(tsxHandler);
@@ -61,6 +74,19 @@ registerHandler(elixirHandler);
 registerHandler(haskellHandler);
 registerHandler(scalaHandler);
 registerHandler(rHandler);
+registerHandler(openApiHandler);
+registerHandler(sqlHandler);
+registerHandler(bashHandler);
+registerHandler(perlHandler);
+registerHandler(terraformHandler);
+registerHandler(nixHandler);
+registerHandler(protobufHandler);
+registerHandler(graphqlHandler);
+registerHandler(groovyHandler);
+registerHandler(erlangHandler);
+registerHandler(gleamHandler);
+registerHandler(gdscriptHandler);
+registerHandler(xmlHandler);
 
 // ─── Adapter self-registration ────────────────────────────────────────────────
 // Workers have their own module instance — adapters must be imported here so

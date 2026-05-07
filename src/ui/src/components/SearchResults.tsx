@@ -47,6 +47,7 @@ export interface SearchResultsProps {
   error: string | null;
   focusedIndex: number;
   onSelect: (result: SearchResult) => void;
+  showRepo?: boolean;
 }
 
 export function SearchResults({
@@ -56,6 +57,7 @@ export function SearchResults({
   error,
   focusedIndex,
   onSelect,
+  showRepo,
 }: SearchResultsProps) {
   if (loading) return <ResultSkeleton />;
   if (error) return <ErrorState message={error} />;
@@ -77,6 +79,7 @@ export function SearchResults({
           query={query}
           focused={idx === focusedIndex}
           onClick={() => onSelect(result)}
+          showRepo={showRepo}
         />
       ))}
     </div>

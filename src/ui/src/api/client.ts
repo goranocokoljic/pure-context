@@ -9,6 +9,11 @@ import type {
   FindImportersResponse,
   GetGraphResponse,
   GetBlastRadiusResponse,
+  GetSymbolCoverageResponse,
+  GetRepoCoverageResponse,
+  GetQualityMetricsResponse,
+  GetChurnMetricsResponse,
+  SymbolHistoryResponse,
 } from './types.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -102,11 +107,24 @@ export const api = {
     );
   },
 
-  /** Search for symbols within a repository. */
-  searchSymbols(repoId: string, params: SearchSymbolsParams): Promise<SearchSymbolsResponse> {
+  /** Search for symbols within one or more repositories. */
+  searchSymbols(repoId: string | null, params: SearchSymbolsParams): Promise<SearchSymbolsResponse> {
+    const { repoIds, ...rest } = params;
+    if (repoIds && repoIds.length > 1) {
+      // Cross-repo search: use the /api/search endpoint
+      return apiFetch<SearchSymbolsResponse>(
+        '/search',
+        {
+          ...(rest as unknown as Record<string, string | number | boolean | undefined>),
+          repoIds: repoIds.join(','),
+        },
+      );
+    }
+    // Single-repo search (use repoIds[0] if provided, otherwise repoId)
+    const targetRepo = (repoIds && repoIds.length === 1 ? repoIds[0] : repoId) ?? '';
     return apiFetch<SearchSymbolsResponse>(
-      `/repos/${encodeURIComponent(repoId)}/search`,
-      params as unknown as Record<string, string | number | boolean | undefined>,
+      `/repos/${encodeURIComponent(targetRepo)}/search`,
+      rest as unknown as Record<string, string | number | boolean | undefined>,
     );
   },
 
@@ -154,6 +172,55 @@ export const api = {
     return apiFetch<GetBlastRadiusResponse>(
       `/repos/${encodeURIComponent(repoId)}/blast-radius`,
       { symbolId, ...(depth !== undefined ? { depth } : {}) },
+    );
+  },
+
+  /** Get test coverage mapping for a single symbol. */
+  getSymbolCoverage(repoId: string, symbolId: string): Promise<GetSymbolCoverageResponse> {
+    return apiFetch<GetSymbolCoverageResponse>(
+      `/repos/${encodeURIComponent(repoId)}/coverage`,
+      { symbolId },
+    );
+  },
+
+  /** Get test coverage mappings for all production symbols in a repo. */
+  getRepoCoverage(repoId: string): Promise<GetRepoCoverageResponse> {
+    return apiFetch<GetRepoCoverageResponse>(
+      `/repos/${encodeURIComponent(repoId)}/coverage`,
+    );
+  },
+
+  /** Get per-symbol quality metrics for a repo (used to build heatmap). */
+  getQualityMetrics(
+    repoId: string,
+    scope?: string,
+  ): Promise<GetQualityMetricsResponse> {
+    return apiFetch<GetQualityMetricsResponse>(
+      `/repos/${encodeURIComponent(repoId)}/quality`,
+      scope !== undefined ? { scope } : undefined,
+    );
+  },
+
+  /** Get the git commit history for a specific symbol. */
+  getSymbolHistory(repoId: string, symbolId: string, limit?: number): Promise<SymbolHistoryResponse> {
+    return apiFetch<SymbolHistoryResponse>(
+      `/repos/${encodeURIComponent(repoId)}/symbols/${encodeURIComponent(symbolId)}/history`,
+      limit !== undefined ? { limit } : undefined,
+    );
+  },
+
+  /** Get per-file churn metrics for a repo (used to build heatmap). */
+  getChurnMetrics(
+    repoId: string,
+    scope?: string,
+    days?: number,
+  ): Promise<GetChurnMetricsResponse> {
+    const params: Record<string, string | number | undefined> = {};
+    if (scope !== undefined) params['scope'] = scope;
+    if (days !== undefined) params['days'] = days;
+    return apiFetch<GetChurnMetricsResponse>(
+      `/repos/${encodeURIComponent(repoId)}/churn`,
+      Object.keys(params).length > 0 ? params : undefined,
     );
   },
 };

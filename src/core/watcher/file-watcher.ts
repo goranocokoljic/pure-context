@@ -8,6 +8,8 @@ import { getSupportedExtensions } from '../../handlers/handler-registry.js';
 
 export interface WatchOptions {
   debounceMs?: number;
+  /** Called after a successful reindex with the paths that changed or were deleted. */
+  onChanged?: (repoId: string, changedPaths: string[], deletedPaths: string[]) => void;
 }
 
 export interface FileWatcher {
@@ -49,6 +51,7 @@ export function startWatching(
 ): FileWatcher {
   const absRoot = resolve(rootPath);
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+  const { onChanged } = options;
 
   const supportedExts = new Set(getSupportedExtensions());
 
@@ -94,6 +97,7 @@ export function startWatching(
           logger.warn(`Watcher reindex error in ${e.file}: ${e.message}`);
         }
       }
+      onChanged?.(repoId, changedPaths, deletedPaths);
     } catch (err) {
       logger.error(`Watcher reindex failed: ${err}`);
     }

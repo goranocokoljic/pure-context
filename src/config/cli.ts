@@ -1,5 +1,5 @@
 import { writeFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, join, resolve as resolvePath } from 'path';
 import { homedir } from 'os';
 import { createInterface } from 'readline';
 import { getConfigPath, validateConfig, DEFAULT_CONFIG } from './config-schema.js';
@@ -299,4 +299,222 @@ export function cmdCheck(): boolean {
 export function cmdShow(): void {
   const cfg = loadConfig();
   console.log(JSON.stringify(cfg, null, 2));
+}
+
+/**
+ * `purecontext-mcp export --repo <path> --out <bundle.pcx>`
+ * Export a repo's index to a portable .pcx bundle.
+ */
+export async function cmdExport(cliArgs: string[]): Promise<void> {
+  const repoIdx = cliArgs.indexOf('--repo');
+  const outIdx = cliArgs.indexOf('--out');
+  const autoFlag = cliArgs.includes('--auto');
+
+  if (autoFlag) {
+    // --auto: export current working directory with auto-named output file
+    const cwd = process.cwd();
+    const { handler } = await import('../server/tools/export-index.js');
+    const { computeRepoId } = await import('../core/db/schema.js');
+    const repoId = computeRepoId(cwd);
+    const { execSync } = await import('child_process');
+    let sha = 'local';
+    try {
+      sha = execSync('git rev-parse --short HEAD', { cwd, encoding: 'utf8' }).trim();
+    } catch {
+      // Not a git repo or no commits — use 'local'
+    }
+    const repoName = cwd.split(/[/\\]/).pop() ?? 'repo';
+    const outputPath = resolvePath(cwd, `${repoName}-${sha}.pcx`);
+    const result = await handler({ repoId, outputPath });
+    const text = result.content[0];
+    if (text.type === 'text') console.log(text.text);
+    return;
+  }
+
+  if (repoIdx < 0 || outIdx < 0) {
+    console.error('Usage: purecontext-mcp export --repo <path> --out <bundle.pcx>');
+    console.error('       purecontext-mcp export --auto  (exports cwd with git-sha name)');
+    process.exit(1);
+  }
+
+  const repoPath = resolvePath(cliArgs[repoIdx + 1]);
+  const outputPath = resolvePath(cliArgs[outIdx + 1]);
+
+  const { handler } = await import('../server/tools/export-index.js');
+  const { computeRepoId } = await import('../core/db/schema.js');
+  const repoId = computeRepoId(repoPath);
+
+  const result = await handler({ repoId, outputPath });
+  const text = result.content[0];
+  if (text.type === 'text') console.log(text.text);
+}
+
+/**
+ * `purecontext-mcp import --bundle <bundle.pcx> [--repo <path>]`
+ * Import a .pcx bundle into the local index store.
+ */
+export async function cmdImport(cliArgs: string[]): Promise<void> {
+  const bundleIdx = cliArgs.indexOf('--bundle');
+  const repoIdx = cliArgs.indexOf('--repo');
+
+  if (bundleIdx < 0) {
+    console.error('Usage: purecontext-mcp import --bundle <bundle.pcx> [--repo <override-path>]');
+    process.exit(1);
+  }
+
+  const bundlePath = resolvePath(cliArgs[bundleIdx + 1]);
+  const repoPath = repoIdx >= 0 ? resolvePath(cliArgs[repoIdx + 1]) : undefined;
+
+  const { handler } = await import('../server/tools/import-index.js');
+  const result = await handler({ bundlePath, repoPath });
+  const text = result.content[0];
+  if (text.type === 'text') console.log(text.text);
+}
+
+/**
+ * `purecontext-mcp fetch <owner/repo> [--version <tag>] [--force]`
+ * Download and import a pre-built index from the public registry.
+ */
+export async function cmdFetch(cliArgs: string[]): Promise<void> {
+  const repo = cliArgs[0];
+
+  if (!repo || repo.startsWith('--')) {
+    console.error('Usage: purecontext-mcp fetch <owner/repo> [--version <tag>] [--force]');
+    console.error('Example: purecontext-mcp fetch expressjs/express');
+    process.exit(1);
+  }
+
+  const versionIdx = cliArgs.indexOf('--version');
+  const version = versionIdx >= 0 ? cliArgs[versionIdx + 1] : undefined;
+  const force = cliArgs.includes('--force');
+
+  const { handler } = await import('../server/tools/fetch-public-index.js');
+  const result = await handler({ repo, version, force });
+  const text = result.content[0];
+  if (text.type === 'text') console.log(text.text);
+}
+
+/**
+ * `purecontext-mcp index-folder --path <dir>`
+ * Index a local project folder (used by CI pipelines and the GitHub Actions action).
+ */
+export async function cmdIndexFolder(cliArgs: string[]): Promise<void> {
+  const pathIdx = cliArgs.indexOf('--path');
+  const repoPath = pathIdx >= 0 ? resolvePath(cliArgs[pathIdx + 1]) : process.cwd();
+
+  const { handler } = await import('../server/tools/index-folder.js');
+  const result = await handler({ path: repoPath });
+  const text = result.content[0];
+  if (text.type === 'text') console.log(text.text);
+}
+
+/**
+ * `purecontext-mcp analyze-diff --diff <patch> [--diff-file <path>] [--repo <path>]`
+ * Parse a unified git diff and print an impact analysis as JSON.
+ * Exits non-zero when reviewPriority is "critical".
+ */
+export async function cmdAnalyzeDiff(cliArgs: string[]): Promise<void> {
+  const diffIdx = cliArgs.indexOf('--diff');
+  const diffFileIdx = cliArgs.indexOf('--diff-file');
+  const repoIdx = cliArgs.indexOf('--repo');
+
+  if (diffIdx < 0 && diffFileIdx < 0) {
+    console.error('Usage: purecontext-mcp analyze-diff --diff <patch> [--repo <path>]');
+    console.error('       purecontext-mcp analyze-diff --diff-file <path> [--repo <path>]');
+    process.exit(1);
+  }
+
+  let diff: string;
+  if (diffFileIdx >= 0) {
+    const { readFileSync } = await import('fs');
+    diff = readFileSync(resolvePath(cliArgs[diffFileIdx + 1]), 'utf8');
+  } else {
+    diff = cliArgs[diffIdx + 1] ?? '';
+  }
+
+  const repoPath = repoIdx >= 0 ? resolvePath(cliArgs[repoIdx + 1]) : process.cwd();
+
+  const { computeRepoId } = await import('../core/db/schema.js');
+  const repoId = computeRepoId(repoPath);
+
+  const { handler } = await import('../server/tools/analyze-diff.js');
+  const result = await handler({ repoId, diff });
+  const text = result.content[0];
+  if (text.type === 'text') {
+    console.log(text.text);
+    try {
+      const output = JSON.parse(text.text) as { reviewPriority?: string };
+      if (output.reviewPriority === 'critical') {
+        process.exit(1);
+      }
+    } catch {
+      // Non-fatal: if parse fails, exit 0
+    }
+  }
+}
+
+/**
+ * `purecontext-mcp detect-antipatterns [--repo <path>] [--fail-on-critical]`
+ * Scan an indexed repo for structural anti-patterns and print findings as JSON.
+ * With --fail-on-critical: exits non-zero if any error-severity findings exist.
+ */
+export async function cmdDetectAntipatterns(cliArgs: string[]): Promise<void> {
+  const repoIdx = cliArgs.indexOf('--repo');
+  const failOnCritical = cliArgs.includes('--fail-on-critical');
+
+  const repoPath = repoIdx >= 0 ? resolvePath(cliArgs[repoIdx + 1]) : process.cwd();
+
+  const { computeRepoId } = await import('../core/db/schema.js');
+  const repoId = computeRepoId(repoPath);
+
+  const { handler } = await import('../server/tools/detect-antipatterns.js');
+  const result = await handler({ repoId });
+  const text = result.content[0];
+  if (text.type === 'text') {
+    console.log(text.text);
+    if (failOnCritical) {
+      try {
+        const output = JSON.parse(text.text) as { errorCount?: number };
+        if ((output.errorCount ?? 0) > 0) {
+          process.exit(1);
+        }
+      } catch {
+        // Non-fatal: if parse fails, exit 0
+      }
+    }
+  }
+}
+
+/**
+ * `purecontext-mcp list-public`
+ * List all pre-built indexes available in the public registry.
+ */
+export async function cmdListPublic(): Promise<void> {
+  const { fetchManifest } = await import('../server/tools/fetch-public-index.js');
+
+  let manifest;
+  try {
+    manifest = await fetchManifest();
+  } catch (err) {
+    console.error(`Failed to fetch registry manifest: ${String(err)}`);
+    process.exit(1);
+  }
+
+  if (manifest.repos.length === 0) {
+    console.log('No pre-built indexes available yet.');
+    return;
+  }
+
+  console.log(`PureContext Public Registry — ${manifest.repos.length} repos available\n`);
+
+  for (const entry of manifest.repos) {
+    const latest = entry.versions.find((v) => v.version === entry.latest);
+    const sizeStr = latest
+      ? ` (${(latest.bundleSize / 1_000_000).toFixed(1)} MB, ${latest.symbolCount.toLocaleString()} symbols)`
+      : '';
+    console.log(`  ${entry.repo}  @${entry.latest}${sizeStr}`);
+  }
+
+  console.log(`\nFetch a repo: purecontext-mcp fetch <owner/repo>`);
+  console.log(`Registry updated: ${manifest.updatedAt}`);
 }

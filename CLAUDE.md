@@ -6,12 +6,6 @@ PureContext MCP is a Node.js/TypeScript MCP (Model Context Protocol) server for 
 
 The full product requirements are in `docs/PureContext_MCP_PRD_v1.0.docx`. Read it before making architectural decisions.
 
-## Reference Implementation
-
-The `reference/jcodemunch-mcp/` directory contains the jCodeMunch MCP source code (Python) — local only, not in the repo. This is a **decision reference**, not code to translate. When facing a design choice, check how jCodeMunch handled it — then decide whether to adopt, adapt, or reject their approach. Section 6 of the PRD catalogs the key decisions already evaluated.
-
-Never copy Python code and convert it to TypeScript. Build clean implementations informed by their decisions.
-
 ## Architecture Rules
 
 ### Three-Layer Architecture (never violate)
@@ -185,8 +179,6 @@ purecontext-mcp/
 │   └── tree-sitter-javascript.wasm
 ├── docs/
 │   └── PureContext_MCP_PRD_v1.0.docx
-├── reference/
-│   └── jcodemunch-mcp/           # jCodeMunch source for decision reference
 ├── test/
 │   ├── core/
 │   ├── handlers/
@@ -205,27 +197,46 @@ purecontext-mcp/
 
 ## Current Phase
 
-**Phase 16 — npm Release Readiness**
+**Phase 19 — Missing Core Tools**
 
-Focus: Ship PureContext as a production npm package. Fix `better-sqlite3` native binary distribution (prebuilt binaries for Node 18/20/22 × Win/macOS/Linux), set up GitHub Actions CI (9-job matrix), clean up the published package with a `files` allowlist, and release v1.0.0.
+Focus: Close the four largest tool-level gaps vs other tools: `find_references` (identifier-level usage search), `get_file_content` (raw cached file retrieval with line slicing), `get_symbols` (batch symbol fetch by ID), and `invalidate_cache` (force re-index).
 
-See `docs/PHASE16_TASKS.md` for the sequenced task breakdown.
+See `docs/PHASE19_TASKS.md` for the sequenced task breakdown (Tasks 131–134).
 
-Phases 17 (public launch polish: fileLimit, error messages, telemetry) and 18 (team/cloud: API keys, workspaces, Docker, MCP-over-HTTP) are planned — see their respective task docs.
+**Upcoming phases (parity with other tools):**
+- Phase 20: Tool Capability Enhancements — search debug mode, `context_lines`/`verify` on symbol retrieval, GitHub API indexing, Gemini Flash summarization (Tasks 135–138)
+- Phase 21: Ecosystem & Data Tools — context provider framework, dbt provider, `search_columns`, OpenAPI/Swagger handler, SQL handler with dbt Jinja (Tasks 139–143)
+- Phase 22: Language Coverage Expansion — Bash, Perl, Terraform/HCL, Nix, Protobuf, GraphQL, Groovy, Erlang, Gleam, GDScript, XML, Objective-C, Fortran (Tasks 144–149)
+
+**Differentiation phases (beyond other tools):**
+- Phase 23: Cross-Repo Intelligence — cross-repo search, code similarity search, cross-repo dep tracking, MCP Resources (Tasks 150–153)
+- Phase 24: Git & History Integration — git metadata indexing, symbol history, PR/diff analysis, churn metrics (Tasks 154–157)
+- Phase 25: AI-Powered Architecture Analysis — quality metrics, anti-pattern detection, architecture docs, smart context bundling, refactoring detector (Tasks 158–162)
+- Phase 26: Enhanced Web UI — architecture heatmap, symbol timeline, test coverage overlay, multi-repo workspace, advanced graph (Tasks 163–167)
+- Phase 27: Distribution & Platform — index export/import, pre-built registry, webhook auto-reindex, GitHub Actions, VS Code extension (Tasks 168–172)
 
 ## Decision Log
 
 Record significant design decisions here as the project evolves:
 
-| Date | Decision | Rationale |
-|------|----------|-----------|
-| 2026-04-10 | Project initiated | PRD v1.0 finalized |
-| 2026-04-20 | Competitive benchmark added (`benchmarks/`) | Head-to-head vs jcodemunch-mcp on token efficiency, search quality, symbol coverage, semantic search |
+| Date | Decision | Rationale                                                                                                                                          |
+|------|----------|----------------------------------------------------------------------------------------------------------------------------------------------------|
+| 2026-04-10 | Project initiated | PRD v1.0 finalized                                                                                                                                 |
+| 2026-04-20 | Competitive benchmark added (`benchmarks/`) | Head-to-head vs other tools on token efficiency, search quality, symbol coverage, semantic search                                                  |
 | 2026-04-20 | Phase 14: FTS5 search upgrade | Benchmark revealed 0% keyword search quality; fix by wiring existing FTS5 infrastructure, adding camelCase query preprocessor and relevance ranker |
-| 2026-04-21 | Phase 15: Worker thread pool for parallel parsing | Enterprise target requires viable indexing at 10k–50k files; sequential WASM parsing is the bottleneck |
-| 2026-04-25 | Phase 16: npm release readiness | better-sqlite3 prebuilt binaries + CI + package hygiene + v1.0.0 |
-| 2026-04-25 | Phase 17: Public launch polish | fileLimit raised, actionable errors, --health, opt-in telemetry |
-| 2026-04-25 | Phase 18: Team/cloud features | API keys, workspaces, Docker, MCP-over-HTTP — monetization foundation |
+| 2026-04-21 | Phase 15: Worker thread pool for parallel parsing | Enterprise target requires viable indexing at 10k–50k files; sequential WASM parsing is the bottleneck                                             |
+| 2026-04-25 | Phase 16: npm release readiness | better-sqlite3 prebuilt binaries + CI + package hygiene + v1.0.0                                                                                   |
+| 2026-04-25 | Phase 17: Public launch polish | fileLimit raised, actionable errors, --health, opt-in telemetry                                                                                    |
+| 2026-04-25 | Phase 18: Team/cloud features | API keys, workspaces, Docker, MCP-over-HTTP — monetization foundation                                                                              |
+| 2026-05-02 | Phase 19: Missing core tools | find_references, get_file_content, get_symbols, invalidate_cache — closes other tools parity gap                                                   |
+| 2026-05-02 | Phase 20: Tool capability enhancements | Search debug mode, context_lines/verify, GitHub API indexing, Gemini Flash                                                                         |
+| 2026-05-02 | Phase 21: Ecosystem & data tools | Context provider framework, dbt, search_columns, OpenAPI/Swagger, SQL handler                                                                      |
+| 2026-05-02 | Phase 22: Language coverage expansion | 14 new handlers: Bash, Terraform, Protobuf, GraphQL, and 10 more                                                                                   |
+| 2026-05-02 | Phase 23: Cross-repo intelligence | Cross-repo search, code similarity (HNSW), cross-repo deps, MCP Resources                                                                          |
+| 2026-05-02 | Phase 24: Git & history integration | Symbol-level git history, PR diff analysis, churn metrics                                                                                          |
+| 2026-05-02 | Phase 25: AI-powered architecture analysis | Quality metrics, anti-patterns, arch docs, smart context, refactoring detector                                                                     |
+| 2026-05-02 | Phase 26: Enhanced Web UI | Heatmap, symbol timeline, coverage overlay, multi-repo workspace, advanced graph                                                                   |
+| 2026-05-02 | Phase 27: Distribution & platform | Index export/import, public registry CDN, webhooks, GitHub Actions, VS Code extension                                                              |
 
 ## Quick Commands
 

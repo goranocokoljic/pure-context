@@ -3,6 +3,27 @@ import { Handle, Position } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import type { GraphNodeData } from '../api/types.js';
 
+// ─── Heatmap color scale ──────────────────────────────────────────────────────
+// score: 0 = best (green), 1 = worst (red), via yellow midpoint
+
+function heatScoreColor(score: number): string {
+  if (score < 0.5) {
+    const t = score * 2;
+    // green (#22c55e) → yellow (#eab308)
+    const r = Math.round(34 + t * (234 - 34));
+    const g = Math.round(197 + t * (179 - 197));
+    const b = Math.round(94 + t * (8 - 94));
+    return `rgb(${r},${g},${b})`;
+  } else {
+    const t = (score - 0.5) * 2;
+    // yellow (#eab308) → red (#ef4444)
+    const r = Math.round(234 + t * (239 - 234));
+    const g = Math.round(179 + t * (68 - 179));
+    const b = Math.round(8 + t * (68 - 8));
+    return `rgb(${r},${g},${b})`;
+  }
+}
+
 // ─── File icon ────────────────────────────────────────────────────────────────
 
 function FileIcon({ ext }: { ext: string }) {
@@ -43,11 +64,16 @@ export const GraphFileNode = memo(function GraphFileNode({
   const label = data.label ?? '';
   const ext = label.includes('.') ? label.split('.').pop() ?? '' : '';
 
+  // Optional quality/churn indicators — only shown when heatmap data is loaded
+  const heatmapScore =
+    typeof data.heatmapScore === 'number' ? (data.heatmapScore as number) : undefined;
+  const isChurnHotspot = Boolean(data.isChurnHotspot);
+
   return (
     <div
       data-testid="graph-file-node"
       className={`
-        rounded border px-2.5 py-1.5 text-xs font-mono select-none
+        relative rounded border px-2.5 py-1.5 text-xs font-mono select-none
         bg-gray-900 text-gray-200 transition-colors
         ${selected ? 'border-blue-500 shadow-lg shadow-blue-500/20' : 'border-gray-700 hover:border-gray-500'}
       `}
@@ -58,6 +84,24 @@ export const GraphFileNode = memo(function GraphFileNode({
         position={Position.Top}
         style={{ background: '#4b5563', width: 6, height: 6 }}
       />
+
+      {/* Quality indicator dot — colored ring based on heatmap score */}
+      {heatmapScore !== undefined && (
+        <div
+          className="absolute -top-1.5 -right-1.5 w-3 h-3 rounded-full border-2 border-gray-950"
+          style={{ background: heatScoreColor(heatmapScore) }}
+          title={`Quality score: ${Math.round((1 - heatmapScore) * 100)}%`}
+          aria-label="quality-indicator"
+        />
+      )}
+
+      {/* Churn indicator — pulsing dot for hotspot files */}
+      {isChurnHotspot && (
+        <div
+          className="absolute -top-1.5 -left-1.5 w-3 h-3 rounded-full bg-orange-500 animate-ping opacity-75"
+          aria-label="churn-indicator"
+        />
+      )}
 
       <div className="flex items-center gap-1.5 truncate">
         <FileIcon ext={ext} />

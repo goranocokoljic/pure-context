@@ -1,4 +1,4 @@
-import type { Database } from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import type Parser from 'web-tree-sitter';
 
 // web-tree-sitter types live in the Parser namespace
@@ -33,6 +33,15 @@ export type SymbolKind =
 
 // ─── Core records ─────────────────────────────────────────────────────────────
 
+export interface ComplexityMetrics {
+  lineCount: number;
+  cyclomaticComplexity: number;
+  cognitiveComplexity: number;
+  paramCount: number;
+  returnCount: number;
+  nestingDepth: number;
+}
+
 export interface SymbolRecord {
   /** Deterministic hash: SHA-256(filePath:name:kind).slice(0, 16) */
   id: string;
@@ -47,6 +56,8 @@ export interface SymbolRecord {
   /** One-line description (from docstring, framework meta, or signature fallback) */
   summary: string;
   frameworkMeta?: Record<string, unknown>;
+  /** Code quality metrics — populated at index time for functions, methods, and classes */
+  metrics?: ComplexityMetrics;
 }
 
 export interface ImportRecord {
@@ -128,6 +139,12 @@ export interface IndexOptions {
   workspacePlan?: 'free' | 'team' | 'enterprise';
   /** Current repo count for this workspace — used to enforce free-tier repo limit. */
   workspaceRepoCount?: number;
+  /**
+   * Context providers to run after indexing completes.
+   * When absent, providers are auto-discovered from the global registry.
+   * Pass an empty array to disable all providers.
+   */
+  providers?: ContextProvider[];
 }
 
 export interface IndexResult {
@@ -154,11 +171,21 @@ export interface DiscoveredFile {
 
 export interface LanguageHandler {
   extensions(): string[];
-  /** Absolute path to the .wasm grammar file. filePath hint allows per-extension grammar selection (e.g. .tsx vs .ts). */
-  grammarPath(filePath?: string): string;
+  /**
+   * Absolute path to the .wasm grammar file, or null for handlers that do not
+   * use tree-sitter (e.g. OpenAPI, which parses YAML/JSON directly).
+   * filePath hint allows per-extension grammar selection (e.g. .tsx vs .ts).
+   */
+  grammarPath(filePath?: string): string | null;
   extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRecord[];
   extractImports(tree: Tree, source: Buffer): ImportRecord[];
   extractDocstring(node: SyntaxNode): string | null;
+  /**
+   * Optional content-based detection gate for handlers that claim ambiguous
+   * extensions (e.g. .yaml/.yml/.json). When present, the file-processor calls
+   * this before parsing; returning false skips the file silently.
+   */
+  detect?(content: Buffer): boolean;
 }
 
 // ─── Framework adapter interface ─────────────────────────────────────────────
@@ -183,10 +210,27 @@ export interface FrameworkAdapter {
   enrichMetadata?(symbol: SymbolRecord): SymbolRecord;
 }
 
+// ─── Context provider interface ──────────────────────────────────────────────
+
+export interface EnrichmentResult {
+  symbolsEnriched: number;
+  /** Provider-specific stats */
+  metadataAdded: Record<string, unknown>;
+}
+
+export interface ContextProvider {
+  name: string;
+  description: string;
+  /** Return true if this provider applies to the given project root */
+  detect(projectRoot: string): Promise<boolean>;
+  /** Called once after full indexing completes for a repo */
+  enrich(repoId: string, projectRoot: string, db: Database.Database): Promise<EnrichmentResult>;
+}
+
 // ─── Services container ───────────────────────────────────────────────────────
 
 export interface Services {
-  db: Database;
+  db: Database.Database;
   repoId: string;
   rootPath: string;
 }

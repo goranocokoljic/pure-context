@@ -1,4 +1,4 @@
-import type { SymbolKind } from '../api/types.js';
+import type { SymbolKind, CoverageStatus } from '../api/types.js';
 import type { SearchFilters } from '../hooks/useSearch.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -43,8 +43,17 @@ export interface SearchFiltersProps {
   onChange: (f: SearchFilters) => void;
 }
 
+const COVERAGE_OPTIONS: Array<{ value: CoverageStatus; label: string; color: string }> = [
+  { value: 'tested',   label: 'Tested',   color: 'bg-green-900/60 border-green-700 text-green-400' },
+  { value: 'untested', label: 'Untested', color: 'bg-red-900/60 border-red-700 text-red-400' },
+  { value: 'unknown',  label: 'Unknown',  color: 'bg-gray-800 border-gray-600 text-gray-400' },
+];
+
 export function SearchFilters({ filters, onChange }: SearchFiltersProps) {
-  const hasFilters = filters.kinds.length > 0 || filters.filePath !== '';
+  const hasFilters =
+    filters.kinds.length > 0 ||
+    filters.filePath !== '' ||
+    !!filters.coverageStatus;
 
   function toggleKind(kind: SymbolKind) {
     const next = filters.kinds.includes(kind)
@@ -53,8 +62,12 @@ export function SearchFilters({ filters, onChange }: SearchFiltersProps) {
     onChange({ ...filters, kinds: next });
   }
 
+  function setCoverage(status: CoverageStatus | undefined) {
+    onChange({ ...filters, coverageStatus: status });
+  }
+
   function clearAll() {
-    onChange({ kinds: [], filePath: '' });
+    onChange({ kinds: [], filePath: '', coverageStatus: undefined });
   }
 
   return (
@@ -86,6 +99,35 @@ export function SearchFilters({ filters, onChange }: SearchFiltersProps) {
           placeholder="e.g. src/**/*.ts"
           className="w-full px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500"
         />
+      </div>
+
+      {/* Coverage filter */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+          Coverage
+        </p>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by coverage status">
+          {COVERAGE_OPTIONS.map(({ value, label, color }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setCoverage(filters.coverageStatus === value ? undefined : value)}
+              aria-pressed={filters.coverageStatus === value}
+              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors border ${
+                filters.coverageStatus === value
+                  ? color
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:border-gray-500 hover:text-gray-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {filters.coverageStatus && (
+          <p className="text-[9px] text-gray-600 mt-1.5 leading-tight">
+            Based on symbol references — not instrumented coverage
+          </p>
+        )}
       </div>
 
       {/* Clear all */}

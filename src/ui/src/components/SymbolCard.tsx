@@ -53,11 +53,13 @@ export interface SymbolCardProps {
   query: string;
   focused: boolean;
   onClick: () => void;
+  showRepo?: boolean;
 }
 
-export function SymbolCard({ result, query, focused, onClick }: SymbolCardProps) {
+export function SymbolCard({ result, query, focused, onClick, showRepo }: SymbolCardProps) {
   const nameSegments = highlightSegments(result.name, query);
   const sigSegments  = result.signature ? highlightSegments(result.signature, query) : [];
+  const repoLabel = result.repoName ?? result.repoId;
 
   return (
     <button
@@ -89,6 +91,16 @@ export function SymbolCard({ result, query, focused, onClick }: SymbolCardProps)
             ),
           )}
         </span>
+
+        {/* Repo badge (shown in multi-repo results) */}
+        {showRepo && (
+          <span
+            className="ml-auto shrink-0 text-[9px] font-medium px-1.5 py-0.5 rounded bg-indigo-900/60 text-indigo-300 border border-indigo-800/40"
+            data-testid="repo-name-badge"
+          >
+            {repoLabel}
+          </span>
+        )}
       </div>
 
       {/* Signature */}

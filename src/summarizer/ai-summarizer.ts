@@ -1,9 +1,10 @@
 /**
  * AI-powered batch summarizer (Stage 3 of the summary pipeline).
  *
- * Supports two providers:
+ * Supports three providers:
  *   'anthropic'         — Anthropic Messages API (https.request)
  *   'openai-compatible' — Any /v1/chat/completions endpoint (fetch)
+ *   'gemini'            — Google Gemini REST API (https.request, no SDK)
  *
  * Error handling: any failure (network, API error, parse failure) logs a
  * warning and returns an empty Map so the caller can continue with Stage 4
@@ -13,14 +14,20 @@
 import { request as httpsRequest } from 'https';
 import type { SymbolRecord } from '../core/types.js';
 import { logger } from '../core/logger.js';
+import { callGemini, DEFAULT_GEMINI_MODEL } from './providers/gemini-provider.js';
+import type { HttpRequestFn as GeminiHttpRequestFn } from './providers/gemini-provider.js';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 export interface AISummarizerConfig {
   /** Enable AI summarization. */
   enabled: boolean;
-  /** Provider. Defaults to 'anthropic'. */
-  provider?: 'anthropic' | 'openai-compatible';
+  /**
+   * Provider. Defaults to 'anthropic'.
+   * 'gemini' uses the Gemini REST API (requires GOOGLE_API_KEY or apiKey).
+   * Auto-detection: if GOOGLE_API_KEY is set and no provider is specified, 'gemini' is used.
+   */
+  provider?: 'anthropic' | 'openai-compatible' | 'gemini';
   /** Model to use. Provider-specific defaults apply when omitted. */
   model?: string;
   /** Resolved API key (after env-var expansion). */
@@ -67,6 +74,9 @@ export type HttpRequestFn = typeof httpsRequest;
 
 /** Injectable type for fetch (OpenAI-compatible path). */
 export type FetchFn = typeof fetch;
+
+/** Re-exported for tests that inject a custom HTTP client for the Gemini path. */
+export type { GeminiHttpRequestFn };
 
 // ─── Prompt builder ───────────────────────────────────────────────────────────
 
@@ -246,18 +256,23 @@ export async function summarizeBatchWithRetry(
  * Create an AISummarizer if AI summarization is enabled and an API key is
  * available. Returns null if either condition is not met.
  *
- * @param config       Summarizer configuration.
- * @param httpClient   Injectable Anthropic HTTP client (defaults to https.request).
- * @param fetchFn      Injectable fetch function for OpenAI-compatible path.
+ * @param config           Summarizer configuration.
+ * @param httpClient       Injectable Anthropic HTTP client (defaults to https.request).
+ * @param fetchFn          Injectable fetch function for OpenAI-compatible path.
+ * @param geminiHttpClient Injectable HTTP client for the Gemini path (defaults to https.request).
  */
 export function createAISummarizer(
   config: AISummarizerConfig,
   httpClient: HttpRequestFn = httpsRequest,
   fetchFn: FetchFn = globalThis.fetch,
+  geminiHttpClient: GeminiHttpRequestFn = httpsRequest,
 ): AISummarizer | null {
   if (!config.enabled) return null;
 
-  const provider = config.provider ?? 'anthropic';
+  // Auto-detect Gemini when GOOGLE_API_KEY is set and no provider is explicitly configured
+  const autoGemini =
+    !config.provider && !!process.env['GOOGLE_API_KEY'] && !process.env['ANTHROPIC_API_KEY'];
+  const provider = config.provider ?? (autoGemini ? 'gemini' : 'anthropic');
   const batchSize = config.batchSize ?? 50;
 
   // ── Anthropic ───────────────────────────────────────────────────────────────
@@ -327,6 +342,46 @@ export function createAISummarizer(
 
             for (const [id, summary] of results) allResults.set(id, summary);
             logger.debug(`AI summarized ${results.size}/${batch.length} symbols (batch ${Math.floor(i / batchSize) + 1})`);
+          } catch (err) {
+            logger.warn(`AI summarization batch failed: ${err} — falling back to Stage 4`);
+          }
+        }
+
+        return allResults;
+      },
+    };
+  }
+
+  // ── Gemini ──────────────────────────────────────────────────────────────────
+  if (provider === 'gemini') {
+    const apiKey = config.apiKey || process.env['GOOGLE_API_KEY'] || '';
+    if (!apiKey) {
+      logger.warn(
+        'AI summarization enabled with provider=gemini but no GOOGLE_API_KEY — skipping Stage 3',
+      );
+      return null;
+    }
+
+    const model = config.model ?? DEFAULT_GEMINI_MODEL;
+
+    return {
+      async summarizeBatch(symbols: SymbolRecord[]): Promise<Map<string, string>> {
+        if (symbols.length === 0) return new Map();
+
+        const allResults = new Map<string, string>();
+
+        for (let i = 0; i < symbols.length; i += batchSize) {
+          const batch = symbols.slice(i, i + batchSize);
+
+          try {
+            const results = await summarizeBatchWithRetry(batch, async (prompt) => {
+              return callGemini(apiKey, model, prompt, geminiHttpClient);
+            });
+
+            for (const [id, summary] of results) allResults.set(id, summary);
+            logger.debug(
+              `AI summarized ${results.size}/${batch.length} symbols (batch ${Math.floor(i / batchSize) + 1})`,
+            );
           } catch (err) {
             logger.warn(`AI summarization batch failed: ${err} — falling back to Stage 4`);
           }

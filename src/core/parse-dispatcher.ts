@@ -58,7 +58,15 @@ export async function parseFile(source: Buffer, handler: LanguageHandler): Promi
     throw new ParseError('Parser not initialized — call initParser() first', '<unknown>');
   }
 
-  const language = await loadLanguage(handler.grammarPath());
+  const grammarPath = handler.grammarPath();
+  if (grammarPath === null) {
+    throw new ParseError(
+      'parseFile called on a handler with no grammar (grammarPath is null). ' +
+        'Use the null-grammar path in file-processor instead.',
+      '<unknown>',
+    );
+  }
+  const language = await loadLanguage(grammarPath);
   sharedParser.setLanguage(language);
 
   // Pass a callback so tree-sitter operates on the raw Buffer bytes.

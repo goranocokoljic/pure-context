@@ -33,6 +33,11 @@ import { createResolver } from '../graph/path-resolver.js';
 import { buildGraph } from '../graph/graph-builder.js';
 import { join } from 'path';
 import { track } from './telemetry.js';
+import { discoverProviders } from '../providers/provider-registry.js';
+import { isGitRepo, readFileHistory } from './git-log-reader.js';
+import { updateFileGitMeta } from './db/file-store.js';
+import { insertGitCommits, deleteGitMetadataForFile } from './db/git-metadata-store.js';
+import { buildTestMappings } from './test-mapper.js';
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -304,6 +309,70 @@ export async function indexFolder(
         logger.warn(`AI summarization failed: ${err}`);
       }
     }
+  }
+
+  // ── 10d. Run context providers ───────────────────────────────────────────
+  // Providers enrich already-indexed symbols with ecosystem metadata (dbt, etc.).
+  // Provider errors never abort indexing — log at warn and continue.
+  const providersToRun = options.providers ?? await discoverProviders(absRoot);
+  for (const provider of providersToRun) {
+    try {
+      const enrichResult = await provider.enrich(repoId, absRoot, db);
+      logger.info(
+        `Provider '${provider.name}': enriched ${enrichResult.symbolsEnriched} symbols`,
+      );
+    } catch (err) {
+      logger.warn(`Provider '${provider.name}' enrich() failed: ${err}`);
+    }
+  }
+
+  // ── 10e. Test coverage mapping ────────────────────────────────────────────
+  // Heuristic: find which production symbols are referenced in test files.
+  // Runs after symbols are indexed; errors never abort indexing.
+  try {
+    const mappedCount = buildTestMappings(repoId, db);
+    logger.info(`Test mapper: ${mappedCount} production symbols mapped`);
+  } catch (err) {
+    logger.warn(`Test mapper failed: ${err}`);
+  }
+
+  // ── 10f. Git metadata capture ─────────────────────────────────────────────
+  // Runs after file content is indexed so git metadata is additive; failures
+  // never abort indexing.  Skipped silently for non-git directories.
+  if (toProcess.length > 0 && await isGitRepo(absRoot)) {
+    logger.info(`Capturing git metadata for ${toProcess.length} file(s)`);
+
+    // Bounded concurrency — avoid spawning hundreds of git processes at once.
+    const GIT_CONCURRENCY = 4;
+    const filePaths = toProcess.map((f) => f.relPath);
+
+    for (let i = 0; i < filePaths.length; i += GIT_CONCURRENCY) {
+      const chunk = filePaths.slice(i, i + GIT_CONCURRENCY);
+      await Promise.all(
+        chunk.map(async (relPath) => {
+          try {
+            const meta = await readFileHistory(absRoot, relPath);
+            if (!meta) return;
+
+            updateFileGitMeta(db, repoId, relPath, {
+              lastCommitSha: meta.lastCommit.sha,
+              lastCommitAuthor: meta.lastCommit.authorName,
+              lastCommitDate: meta.lastCommit.date,
+              lastCommitMessage: meta.lastCommit.message,
+              commitCount: meta.commitCount,
+            });
+
+            // Replace stored commit history for this file.
+            deleteGitMetadataForFile(db, repoId, relPath);
+            insertGitCommits(db, repoId, relPath, meta.history);
+          } catch (err) {
+            logger.debug(`Git metadata skipped for ${relPath}: ${err}`);
+          }
+        }),
+      );
+    }
+
+    logger.info('Git metadata capture complete');
   }
 
   // ── 11. Update repo metadata ──────────────────────────────────────────────

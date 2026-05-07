@@ -36,6 +36,21 @@ import { elixirHandler } from './handlers/elixir.js';
 import { haskellHandler } from './handlers/haskell.js';
 import { scalaHandler } from './handlers/scala.js';
 import { rHandler } from './handlers/r.js';
+import { openApiHandler } from './handlers/openapi.js';
+import { sqlHandler } from './handlers/sql.js';
+import { bashHandler } from './handlers/bash.js';
+import { perlHandler } from './handlers/perl.js';
+import { terraformHandler } from './handlers/terraform.js';
+import { nixHandler } from './handlers/nix.js';
+import { protobufHandler } from './handlers/protobuf.js';
+import { graphqlHandler } from './handlers/graphql.js';
+import { groovyHandler } from './handlers/groovy.js';
+import { erlangHandler } from './handlers/erlang.js';
+import { gleamHandler } from './handlers/gleam.js';
+import { gdscriptHandler } from './handlers/gdscript.js';
+import { xmlHandler } from './handlers/xml.js';
+import { objectiveCHandler } from './handlers/objective-c.js';
+import { fortranHandler } from './handlers/fortran.js';
 // Framework adapters — imported for side-effect self-registration
 import './adapters/vue.js';
 import './adapters/nuxt.js';
@@ -69,7 +84,7 @@ import './adapters/hibernate.js';
 import './adapters/sqlalchemy.js';
 import './adapters/django-orm.js';
 import { startServer } from './server/mcp-server.js';
-import { cmdInit, cmdCheck, cmdShow, cmdHealth } from './config/cli.js';
+import { cmdInit, cmdCheck, cmdShow, cmdHealth, cmdExport, cmdImport, cmdFetch, cmdListPublic, cmdIndexFolder, cmdAnalyzeDiff, cmdDetectAntipatterns } from './config/cli.js';
 import { runKeysCommand } from './config/keys-cli.js';
 import { runWorkspacesCommand } from './config/workspaces-cli.js';
 import { VERSION } from './version.js';
@@ -104,6 +119,15 @@ Usage:
   purecontext-mcp keys revoke <prefix>    Revoke an API key
   purecontext-mcp workspaces list         List workspaces
   purecontext-mcp workspaces create --name   Create a workspace
+  purecontext-mcp export --repo <path> --out <bundle.pcx>  Export repo index
+  purecontext-mcp export --auto           Export cwd index (auto-named .pcx)
+  purecontext-mcp import --bundle <bundle.pcx> [--repo <path>]  Import index bundle
+  purecontext-mcp fetch <owner/repo>      Download pre-built index from public registry
+  purecontext-mcp fetch <owner/repo> --version <tag>  Fetch a specific version
+  purecontext-mcp list-public             List repos available in the public registry
+  purecontext-mcp index-folder [--path <dir>]   Index a folder (defaults to cwd)
+  purecontext-mcp analyze-diff --diff-file <f>  Analyze PR diff, print JSON impact report
+  purecontext-mcp detect-antipatterns [--fail-on-critical]  Scan for anti-patterns
   purecontext-mcp --version               Print version
   purecontext-mcp --help                  Print this help
 
@@ -142,6 +166,26 @@ async function bootstrap(): Promise<void> {
   registerHandler(haskellHandler);
   registerHandler(scalaHandler);
   registerHandler(rHandler);
+  // OpenAPI/Swagger handler — content-detected, no tree-sitter grammar needed
+  registerHandler(openApiHandler);
+  // SQL handler — regex-based, no tree-sitter grammar needed; handles dbt Jinja
+  registerHandler(sqlHandler);
+  // Scripting language handlers
+  registerHandler(bashHandler);
+  registerHandler(perlHandler);
+  registerHandler(terraformHandler);
+  registerHandler(nixHandler);
+  // Schema language handlers
+  registerHandler(protobufHandler);
+  registerHandler(graphqlHandler);
+  registerHandler(groovyHandler);
+  registerHandler(erlangHandler);
+  registerHandler(gleamHandler);
+  registerHandler(gdscriptHandler);
+  registerHandler(xmlHandler);
+  // Legacy and scientific language handlers
+  registerHandler(objectiveCHandler);
+  registerHandler(fortranHandler);
 
   // Initialise tree-sitter (loads WASM runtime + grammars lazily on first use)
   await initParser();
@@ -200,6 +244,54 @@ async function main(): Promise<void> {
 
     // Default: show effective config (no bootstrap needed)
     cmdShow();
+    process.exit(0);
+  }
+
+  // ── export sub-command ────────────────────────────────────────────────────
+  if (args[0] === 'export') {
+    await bootstrap();
+    await cmdExport(args.slice(1));
+    process.exit(0);
+  }
+
+  // ── import sub-command ────────────────────────────────────────────────────
+  if (args[0] === 'import') {
+    await bootstrap();
+    await cmdImport(args.slice(1));
+    process.exit(0);
+  }
+
+  // ── fetch sub-command (download from public registry) ─────────────────────
+  if (args[0] === 'fetch') {
+    await bootstrap();
+    await cmdFetch(args.slice(1));
+    process.exit(0);
+  }
+
+  // ── list-public sub-command ───────────────────────────────────────────────
+  if (args[0] === 'list-public') {
+    await cmdListPublic();
+    process.exit(0);
+  }
+
+  // ── index-folder sub-command (CI / GitHub Actions) ────────────────────────
+  if (args[0] === 'index-folder') {
+    await bootstrap();
+    await cmdIndexFolder(args.slice(1));
+    process.exit(0);
+  }
+
+  // ── analyze-diff sub-command (CI / GitHub Actions) ───────────────────────
+  if (args[0] === 'analyze-diff') {
+    await bootstrap();
+    await cmdAnalyzeDiff(args.slice(1));
+    process.exit(0);
+  }
+
+  // ── detect-antipatterns sub-command (CI / GitHub Actions) ─────────────────
+  if (args[0] === 'detect-antipatterns') {
+    await bootstrap();
+    await cmdDetectAntipatterns(args.slice(1));
     process.exit(0);
   }
 

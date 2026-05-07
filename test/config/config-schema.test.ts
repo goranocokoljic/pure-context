@@ -61,7 +61,7 @@ describe('validateConfig', () => {
   });
 
   it('rejects invalid ai.provider', () => {
-    expect(validateConfig({ ai: { provider: 'gemini' } }).valid).toBe(false);
+    expect(validateConfig({ ai: { provider: 'invalid-provider' } }).valid).toBe(false);
   });
 
   it('rejects non-boolean ai.allowRemoteAI', () => {

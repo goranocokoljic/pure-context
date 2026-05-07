@@ -6,10 +6,11 @@
  * pipeline (DB, watcher, etc.).
  */
 
-import type { ImportRecord, FrameworkAdapter, SymbolRecord } from './types.js';
+import type { ImportRecord, FrameworkAdapter, SymbolRecord, Tree } from './types.js';
 import { parseFile } from './parse-dispatcher.js';
 import { getHandler, getHandlerByLanguage } from '../handlers/handler-registry.js';
 import { enrichSymbols } from '../summarizer/summarizer.js';
+import { calculateComplexity, shouldCalculateMetrics } from './metrics/complexity-calculator.js';
 
 export interface ProcessedResult {
   symbols: SymbolRecord[];
@@ -43,12 +44,27 @@ export async function processFile(
     const handler = getHandler(relPath);
     if (!handler) return { symbols: [], imports: [] };
 
-    const tree = await parseFile(content, handler);
-    symbols = handler.extractSymbols(tree, content, relPath);
-    imports = handler.extractImports(tree, content).map((imp) => ({
-      ...imp,
-      sourceFile: relPath,
-    }));
+    // Content-based detection gate: handlers with detect() may claim ambiguous
+    // extensions (.yaml, .json) but only want to process matching files.
+    if (handler.detect && !handler.detect(content)) {
+      return { symbols: [], imports: [] };
+    }
+
+    if (handler.grammarPath() === null) {
+      // No tree-sitter grammar — handler parses the content directly.
+      symbols = handler.extractSymbols(null as unknown as Tree, content, relPath);
+      imports = handler.extractImports(null as unknown as Tree, content).map((imp) => ({
+        ...imp,
+        sourceFile: relPath,
+      }));
+    } else {
+      const tree = await parseFile(content, handler);
+      symbols = handler.extractSymbols(tree, content, relPath);
+      imports = handler.extractImports(tree, content).map((imp) => ({
+        ...imp,
+        sourceFile: relPath,
+      }));
+    }
   }
 
   // Apply enrichMetadata from ALL active adapters — not just the one that handled
@@ -59,6 +75,14 @@ export async function processFile(
       symbols = symbols.map((s) => a.enrichMetadata!(s));
     }
   }
+
+  // Calculate complexity metrics for measurable symbol kinds.
+  // We slice the source bytes for each symbol and run token-based analysis.
+  symbols = symbols.map((s) => {
+    if (!shouldCalculateMetrics(s.kind)) return s;
+    const source = content.slice(s.startByte, s.endByte).toString('utf8');
+    return { ...s, metrics: calculateComplexity(source) };
+  });
 
   // enrichSymbols runs AFTER enrichMetadata so Stage 2 (framework-derived
   // summaries) has access to the frameworkMeta set by adapters.

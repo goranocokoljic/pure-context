@@ -100,6 +100,72 @@ export function getAllFileHashes(
   return new Map(rows.map((r) => [r.path, r.content_hash]));
 }
 
+// ─── Git metadata ─────────────────────────────────────────────────────────────
+
+/**
+ * Update the denormalised last-commit summary columns on a files row.
+ * The full per-commit history lives in the git_metadata table.
+ */
+export function updateFileGitMeta(
+  db: Database.Database,
+  repoId: string,
+  filePath: string,
+  meta: {
+    lastCommitSha: string;
+    lastCommitAuthor: string;
+    lastCommitDate: number;
+    lastCommitMessage: string;
+    commitCount: number;
+  },
+): void {
+  db.prepare(`
+    UPDATE files
+    SET last_commit_sha     = @lastCommitSha,
+        last_commit_author  = @lastCommitAuthor,
+        last_commit_date    = @lastCommitDate,
+        last_commit_message = @lastCommitMessage,
+        commit_count        = @commitCount
+    WHERE repo_id = @repoId AND path = @filePath
+  `).run({ repoId, filePath, ...meta });
+}
+
+// ─── Remote SHA tracking (GitHub API indexing) ───────────────────────────────
+
+/**
+ * Get all stored Git blob SHAs for a repo.
+ * Returns a map of relative file path → blob SHA.
+ * Files without a remote_sha are omitted.
+ */
+export function getAllRemoteShas(
+  db: Database.Database,
+  repoId: string,
+): Map<string, string> {
+  const rows = db
+    .prepare<[string], { path: string; remote_sha: string | null }>(
+      'SELECT path, remote_sha FROM files WHERE repo_id = ? AND remote_sha IS NOT NULL',
+    )
+    .all(repoId);
+
+  return new Map(rows.map((r) => [r.path, r.remote_sha as string]));
+}
+
+/**
+ * Update the remote_sha for a specific file.
+ * No-op if the file does not exist in the DB.
+ */
+export function updateRemoteSha(
+  db: Database.Database,
+  repoId: string,
+  filePath: string,
+  remoteSha: string,
+): void {
+  db.prepare('UPDATE files SET remote_sha = ? WHERE repo_id = ? AND path = ?').run(
+    remoteSha,
+    repoId,
+    filePath,
+  );
+}
+
 // ─── Size queries ─────────────────────────────────────────────────────────────
 
 /**

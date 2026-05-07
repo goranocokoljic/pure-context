@@ -20,6 +20,15 @@ import {
 } from './auth/api-key.js';
 import type { AdminApi } from './admin-api.js';
 import type { HttpSseTransport } from './transport.js';
+import { verifyGitHubSignature, parseGitHubPayload, extractChangedFiles } from './webhooks/github-webhook.js';
+import { verifyGitLabToken, parseGitLabPayload, extractChangedFilesGitLab } from './webhooks/gitlab-webhook.js';
+import {
+  findRepoByFullName,
+  findRepoByPath,
+  isRateLimited,
+  triggerIncrementalReindex,
+  triggerAutoIndex,
+} from './webhooks/webhook-utils.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -61,6 +70,17 @@ export interface AdminApiConfig {
   api: AdminApi;
 }
 
+export interface WebhookConfig {
+  /** Enable /webhooks/* endpoints. Default: false. */
+  enabled: boolean;
+  /** HMAC secret for GitHub HMAC-SHA256 and GitLab plain-token verification. */
+  secret: string;
+  /** Optional allowlist of repo full names. Empty = all matched repos allowed. */
+  allowedRepos: string[];
+  /** Auto-index repos not yet indexed when a webhook arrives. Default: false. */
+  autoIndex: boolean;
+}
+
 export interface HttpServerOptions {
   port: number;
   host: string;
@@ -93,6 +113,12 @@ export interface HttpServerOptions {
    * with 404 assertions.
    */
   serveUi?: boolean;
+  /**
+   * Webhook auto-reindex configuration.
+   * When provided and enabled, registers /webhooks/github, /webhooks/gitlab,
+   * and /webhooks/generic routes.
+   */
+  webhook?: WebhookConfig;
 }
 
 // ─── CORS ──────────────────────────────────────────────────────────────────────
@@ -253,6 +279,24 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
+/**
+ * The search-symbols MCP tool returns `symbols` in its JSON, but the REST API
+ * exposes them as `results` for consistency. Transform the raw tool JSON before
+ * sending it to UI clients.
+ */
+function normalizeSearchResponse(rawJson: string): string {
+  try {
+    const parsed = JSON.parse(rawJson) as Record<string, unknown>;
+    if ('symbols' in parsed && !('results' in parsed)) {
+      parsed['results'] = parsed['symbols'];
+      delete parsed['symbols'];
+    }
+    return JSON.stringify(parsed);
+  } catch {
+    return rawJson;
+  }
+}
+
 async function handleRestApi(
   _req: IncomingMessage,
   res: ServerResponse,
@@ -320,6 +364,39 @@ async function handleRestApi(
     return;
   }
 
+  // GET /api/search (cross-repo: ?query=...&repoIds=id1,id2&...)
+  if (url.split('?')[0] === '/api/search') {
+    const q = query.get('query');
+    if (!q) {
+      sendJson(res, 400, { error: 'Missing required query parameter: query' });
+      return;
+    }
+    const { handler } = await import('./tools/search-symbols.js');
+    const repoIdsStr = query.get('repoIds');
+    const repoIds = repoIdsStr ? repoIdsStr.split(',').filter(Boolean) : undefined;
+    const limitStr = query.get('limit');
+    const result = await handler({
+      repoIds,
+      query: q,
+      kind: (query.get('kind') as Parameters<typeof handler>[0]['kind']) ?? undefined,
+      filePath: query.get('filePath') ?? undefined,
+      limit: limitStr ? parseInt(limitStr, 10) : undefined,
+      mode: (query.get('mode') as Parameters<typeof handler>[0]['mode']) ?? undefined,
+    });
+    const text = result.content[0];
+    if (text && text.type === 'text') {
+      if (result.isError) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+      }
+      res.end(normalizeSearchResponse(text.text));
+    } else {
+      sendJson(res, 500, { error: 'Unexpected tool response' });
+    }
+    return;
+  }
+
   // GET /api/repos/:id/search
   const searchParams = matchRoute(url, '/api/repos/:id/search');
   if (searchParams !== null) {
@@ -345,7 +422,7 @@ async function handleRestApi(
       } else {
         res.writeHead(200, { 'Content-Type': 'application/json' });
       }
-      res.end(text.text);
+      res.end(normalizeSearchResponse(text.text));
     } else {
       sendJson(res, 500, { error: 'Unexpected tool response' });
     }
@@ -456,6 +533,110 @@ async function handleRestApi(
     return;
   }
 
+  // GET /api/repos/:id/coverage?symbolId=...
+  const coverageParams = matchRoute(url, '/api/repos/:id/coverage');
+  if (coverageParams !== null) {
+    const symbolId = query.get('symbolId') ?? undefined;
+    const t0 = Date.now();
+    try {
+      const { openDatabase } = await import('../core/db/schema.js');
+      const { getSymbolCoverage, getAllCoverageForRepo } = await import('../core/test-mapper.js');
+      const db = openDatabase(coverageParams['id']!);
+      let payload: string;
+      if (symbolId) {
+        const mapping = getSymbolCoverage(coverageParams['id']!, symbolId, db);
+        db.close();
+        if (!mapping) {
+          sendJson(res, 404, { error: `No coverage data for symbol: ${symbolId}` });
+          return;
+        }
+        payload = JSON.stringify({ mapping, _meta: { timingMs: Date.now() - t0 } });
+      } else {
+        const mappings = getAllCoverageForRepo(coverageParams['id']!, db);
+        db.close();
+        payload = JSON.stringify({ mappings, _meta: { timingMs: Date.now() - t0 } });
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(payload);
+    } catch (err) {
+      sendJson(res, 500, { error: String(err) });
+    }
+    return;
+  }
+
+  // GET /api/repos/:id/quality?scope=...
+  const qualityParams = matchRoute(url, '/api/repos/:id/quality');
+  if (qualityParams !== null) {
+    const scope = query.get('scope') ?? undefined;
+    const { handler } = await import('./tools/get-quality-metrics.js');
+    const result = await handler({ repoId: qualityParams['id']!, scope, limit: 200 });
+    const text = result.content[0];
+    if (text && text.type === 'text') {
+      if (result.isError) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+      }
+      res.end(text.text);
+    } else {
+      sendJson(res, 500, { error: 'Unexpected tool response' });
+    }
+    return;
+  }
+
+  // GET /api/repos/:id/churn?scope=...&days=...
+  const churnParams = matchRoute(url, '/api/repos/:id/churn');
+  if (churnParams !== null) {
+    const scope = query.get('scope') ?? undefined;
+    const daysStr = query.get('days');
+    const dayWindow = daysStr ? parseInt(daysStr, 10) : 90;
+    const { handler } = await import('./tools/get-churn-metrics.js');
+    const result = await handler({
+      repoId: churnParams['id']!,
+      scope,
+      dayWindow,
+      topN: 200,
+      granularity: 'file',
+    });
+    const text = result.content[0];
+    if (text && text.type === 'text') {
+      if (result.isError) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+      }
+      res.end(text.text);
+    } else {
+      sendJson(res, 500, { error: 'Unexpected tool response' });
+    }
+    return;
+  }
+
+  // GET /api/repos/:id/symbols/:symbolId/history?limit=...
+  const symbolHistoryParams = matchRoute(url, '/api/repos/:id/symbols/:symbolId/history');
+  if (symbolHistoryParams !== null) {
+    const limitStr = query.get('limit');
+    const limit = limitStr ? parseInt(limitStr, 10) : undefined;
+    const { handler } = await import('./tools/get-symbol-history.js');
+    const result = await handler({
+      repoId: symbolHistoryParams['id']!,
+      symbolId: symbolHistoryParams['symbolId']!,
+      limit,
+    });
+    const text = result.content[0];
+    if (text && text.type === 'text') {
+      if (result.isError) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+      }
+      res.end(text.text);
+    } else {
+      sendJson(res, 500, { error: 'Unexpected tool response' });
+    }
+    return;
+  }
+
   // GET /api/repos/:id/importers
   const importersParams = matchRoute(url, '/api/repos/:id/importers');
   if (importersParams !== null) {
@@ -556,6 +737,157 @@ function serveStatic(_req: IncomingMessage, res: ServerResponse, url: string, se
 
   createReadStream(filePath).pipe(res);
   return true;
+}
+
+// ─── Webhook handler ──────────────────────────────────────────────────────────
+
+async function handleWebhook(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: string,
+  cfg: WebhookConfig,
+): Promise<void> {
+  // Read body first (needed for signature verification)
+  let body: Buffer;
+  try {
+    body = await readBody(req, MAX_BODY_BYTES);
+  } catch {
+    sendJson(res, 400, { error: 'Failed to read request body' });
+    return;
+  }
+
+  const path = url.split('?')[0];
+
+  // ── GitHub push ─────────────────────────────────────────────────────────────
+  if (path === '/webhooks/github') {
+    const sig = req.headers['x-hub-signature-256'] as string | undefined;
+    if (!verifyGitHubSignature(body, sig, cfg.secret)) {
+      sendJson(res, 403, { error: 'Forbidden: invalid signature' });
+      return;
+    }
+
+    const payload = parseGitHubPayload(body);
+    if (!payload) {
+      sendJson(res, 400, { error: 'Invalid GitHub push payload' });
+      return;
+    }
+
+    const fullName = payload.repository.full_name;
+
+    if (cfg.allowedRepos.length > 0 && !cfg.allowedRepos.includes(fullName)) {
+      sendJson(res, 403, { error: `Forbidden: repo ${fullName} is not in allowedRepos` });
+      return;
+    }
+
+    const repo = findRepoByFullName(fullName);
+    if (!repo) {
+      if (cfg.autoIndex) {
+        // Auto-index not applicable without a local path — nothing to do
+        sendJson(res, 202, { status: 'accepted', message: 'Repo not indexed locally; autoIndex requires a local clone' });
+      } else {
+        sendJson(res, 404, { error: `Repo not found: ${fullName}` });
+      }
+      return;
+    }
+
+    if (isRateLimited(repo.id)) {
+      sendJson(res, 202, { status: 'accepted', message: 'Reindex skipped: rate limited (max 1/min per repo)' });
+      return;
+    }
+
+    const { changedPaths, deletedPaths } = extractChangedFiles(payload);
+    logger.info(`Webhook: incremental reindex triggered for ${fullName} (${repo.id})`);
+    triggerIncrementalReindex(repo.id, changedPaths, deletedPaths, fullName);
+    sendJson(res, 202, { status: 'accepted', repoId: repo.id });
+    return;
+  }
+
+  // ── GitLab push ─────────────────────────────────────────────────────────────
+  if (path === '/webhooks/gitlab') {
+    const token = req.headers['x-gitlab-token'] as string | undefined;
+    if (!verifyGitLabToken(token, cfg.secret)) {
+      sendJson(res, 403, { error: 'Forbidden: invalid token' });
+      return;
+    }
+
+    const payload = parseGitLabPayload(body);
+    if (!payload) {
+      sendJson(res, 400, { error: 'Invalid GitLab push payload' });
+      return;
+    }
+
+    const fullName = payload.project.path_with_namespace;
+
+    if (cfg.allowedRepos.length > 0 && !cfg.allowedRepos.includes(fullName)) {
+      sendJson(res, 403, { error: `Forbidden: repo ${fullName} is not in allowedRepos` });
+      return;
+    }
+
+    const repo = findRepoByFullName(fullName);
+    if (!repo) {
+      sendJson(res, 404, { error: `Repo not found: ${fullName}` });
+      return;
+    }
+
+    if (isRateLimited(repo.id)) {
+      sendJson(res, 202, { status: 'accepted', message: 'Reindex skipped: rate limited (max 1/min per repo)' });
+      return;
+    }
+
+    const { changedPaths, deletedPaths } = extractChangedFilesGitLab(payload);
+    logger.info(`Webhook: incremental reindex triggered for ${fullName} (${repo.id})`);
+    triggerIncrementalReindex(repo.id, changedPaths, deletedPaths, fullName);
+    sendJson(res, 202, { status: 'accepted', repoId: repo.id });
+    return;
+  }
+
+  // ── Generic push ────────────────────────────────────────────────────────────
+  if (path === '/webhooks/generic') {
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(body.toString('utf8')) as Record<string, unknown>;
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON in request body' });
+      return;
+    }
+
+    const repoPath = parsed['repoPath'];
+    if (typeof repoPath !== 'string') {
+      sendJson(res, 400, { error: 'Missing required field: repoPath (string)' });
+      return;
+    }
+
+    const changedFiles = Array.isArray(parsed['changedFiles'])
+      ? (parsed['changedFiles'] as string[]).filter((f) => typeof f === 'string')
+      : [];
+    const deletedFiles = Array.isArray(parsed['deletedFiles'])
+      ? (parsed['deletedFiles'] as string[]).filter((f) => typeof f === 'string')
+      : [];
+
+    const repo = findRepoByPath(repoPath);
+    if (!repo) {
+      if (cfg.autoIndex) {
+        logger.info(`Webhook: auto-indexing ${repoPath}`);
+        triggerAutoIndex(repoPath);
+        sendJson(res, 202, { status: 'accepted', message: 'Auto-indexing started' });
+      } else {
+        sendJson(res, 404, { error: `Repo not found: ${repoPath}` });
+      }
+      return;
+    }
+
+    if (isRateLimited(repo.id)) {
+      sendJson(res, 202, { status: 'accepted', message: 'Reindex skipped: rate limited (max 1/min per repo)' });
+      return;
+    }
+
+    logger.info(`Webhook: incremental reindex triggered for ${repoPath} (${repo.id})`);
+    triggerIncrementalReindex(repo.id, changedFiles, deletedFiles, repoPath);
+    sendJson(res, 202, { status: 'accepted', repoId: repo.id });
+    return;
+  }
+
+  sendJson(res, 404, { error: 'Unknown webhook path' });
 }
 
 // ─── HTTP server ──────────────────────────────────────────────────────────────
@@ -916,6 +1248,12 @@ export function startHttpServer(options: HttpServerOptions): Promise<NodeHttpSer
       }
 
       await options.adminApi.api.handle(req, res, adminAuth);
+      return;
+    }
+
+    // ── Webhook endpoints ────────────────────────────────────────────────────
+    if (url.startsWith('/webhooks/') && method === 'POST' && options.webhook?.enabled) {
+      await handleWebhook(req, res, url, options.webhook);
       return;
     }
 

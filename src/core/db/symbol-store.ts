@@ -16,6 +16,12 @@ interface DbSymbolRow {
   summary: string;
   framework_meta: string | null;
   indexed_at: number;
+  line_count: number | null;
+  cyclomatic_complexity: number | null;
+  cognitive_complexity: number | null;
+  param_count: number | null;
+  return_count: number | null;
+  nesting_depth: number | null;
 }
 
 export interface SearchOptions {
@@ -36,7 +42,7 @@ function getFileStem(filePath: string): string {
 }
 
 function rowToSymbol(row: DbSymbolRow): SymbolRecord {
-  return {
+  const sym: SymbolRecord = {
     id: row.id,
     name: row.name,
     kind: row.kind as SymbolKind,
@@ -49,6 +55,17 @@ function rowToSymbol(row: DbSymbolRow): SymbolRecord {
       ? (JSON.parse(row.framework_meta) as Record<string, unknown>)
       : undefined,
   };
+  if (row.line_count !== null && row.line_count !== undefined) {
+    sym.metrics = {
+      lineCount: row.line_count,
+      cyclomaticComplexity: row.cyclomatic_complexity ?? 1,
+      cognitiveComplexity: row.cognitive_complexity ?? 0,
+      paramCount: row.param_count ?? 0,
+      returnCount: row.return_count ?? 0,
+      nestingDepth: row.nesting_depth ?? 0,
+    };
+  }
+  return sym;
 }
 
 // ─── Operations ───────────────────────────────────────────────────────────────
@@ -63,9 +80,11 @@ export function insertSymbols(
 
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO symbols
-      (id, repo_id, name, kind, file_path, start_byte, end_byte, signature, summary, framework_meta, indexed_at, tenant_id)
+      (id, repo_id, name, kind, file_path, start_byte, end_byte, signature, summary, framework_meta, indexed_at, tenant_id,
+       line_count, cyclomatic_complexity, cognitive_complexity, param_count, return_count, nesting_depth)
     VALUES
-      (@id, @repoId, @name, @kind, @filePath, @startByte, @endByte, @signature, @summary, @frameworkMeta, @indexedAt, @tenantId)
+      (@id, @repoId, @name, @kind, @filePath, @startByte, @endByte, @signature, @summary, @frameworkMeta, @indexedAt, @tenantId,
+       @lineCount, @cyclomaticComplexity, @cognitiveComplexity, @paramCount, @returnCount, @nestingDepth)
   `);
 
   const now = Date.now();
@@ -90,6 +109,12 @@ export function insertSymbols(
           frameworkMeta: s.frameworkMeta ? JSON.stringify(s.frameworkMeta) : null,
           indexedAt: now,
           tenantId,
+          lineCount: s.metrics?.lineCount ?? null,
+          cyclomaticComplexity: s.metrics?.cyclomaticComplexity ?? null,
+          cognitiveComplexity: s.metrics?.cognitiveComplexity ?? null,
+          paramCount: s.metrics?.paramCount ?? null,
+          returnCount: s.metrics?.returnCount ?? null,
+          nestingDepth: s.metrics?.nestingDepth ?? null,
         });
         // Keep FTS5 index in sync
         delFts.run(s.id, repoId);
@@ -378,6 +403,25 @@ export function deleteFtsByFile(
 }
 
 /**
+ * Update the summary and framework_meta for a single symbol.
+ * Used by context providers (e.g. dbt) to annotate indexed symbols with
+ * ecosystem metadata. Keeps the FTS5 index in sync.
+ */
+export function updateSymbolMeta(
+  db: Database.Database,
+  repoId: string,
+  id: string,
+  summary: string,
+  frameworkMeta: Record<string, unknown> | null,
+): void {
+  db.prepare(`
+    UPDATE symbols
+    SET summary = ?, framework_meta = ?
+    WHERE repo_id = ? AND id = ?
+  `).run(summary, frameworkMeta ? JSON.stringify(frameworkMeta) : null, repoId, id);
+}
+
+/**
  * Bulk-update the summary field for a set of symbols identified by id.
  * Used by the AI summarizer (Stage 3) to apply generated summaries after
  * indexing completes. Skips ids not present in the database.
@@ -400,4 +444,172 @@ export function updateSymbolSummaries(
   });
 
   update([...summaries.entries()]);
+}
+
+// ─── Quality metrics queries ──────────────────────────────────────────────────
+
+export interface QualityMetricsOptions {
+  scope?: string;
+  kind?: SymbolKind;
+  sortBy?: 'complexity' | 'size' | 'nesting' | 'params';
+  threshold?: {
+    cyclomaticComplexity?: number;
+    lineCount?: number;
+    nestingDepth?: number;
+  };
+  limit?: number;
+  tenantId?: string;
+}
+
+export interface QualitySymbolRow {
+  id: string;
+  name: string;
+  kind: string;
+  file_path: string;
+  line_count: number;
+  cyclomatic_complexity: number;
+  cognitive_complexity: number;
+  param_count: number;
+  return_count: number;
+  nesting_depth: number;
+}
+
+/**
+ * Query symbols that have quality metrics, applying optional filters and sorting.
+ * Only returns symbols that were indexed with metrics (non-null line_count).
+ */
+export function queryQualityMetrics(
+  db: Database.Database,
+  repoId: string,
+  options: QualityMetricsOptions = {},
+): QualitySymbolRow[] {
+  const { scope, kind, sortBy = 'complexity', threshold = {}, limit = 20, tenantId } = options;
+
+  const parts: string[] = ['repo_id = ?', 'line_count IS NOT NULL'];
+  const params: unknown[] = [repoId];
+
+  if (tenantId !== undefined) {
+    parts.push('tenant_id = ?');
+    params.push(tenantId);
+  }
+  if (scope) {
+    parts.push('file_path LIKE ?');
+    params.push(`${scope}%`);
+  }
+  if (kind) {
+    parts.push('kind = ?');
+    params.push(kind);
+  }
+  if (threshold.cyclomaticComplexity !== undefined) {
+    parts.push('cyclomatic_complexity >= ?');
+    params.push(threshold.cyclomaticComplexity);
+  }
+  if (threshold.lineCount !== undefined) {
+    parts.push('line_count >= ?');
+    params.push(threshold.lineCount);
+  }
+  if (threshold.nestingDepth !== undefined) {
+    parts.push('nesting_depth >= ?');
+    params.push(threshold.nestingDepth);
+  }
+
+  const orderCol =
+    sortBy === 'size'    ? 'line_count' :
+    sortBy === 'nesting' ? 'nesting_depth' :
+    sortBy === 'params'  ? 'param_count' :
+    'cyclomatic_complexity'; // default: 'complexity'
+
+  params.push(limit);
+
+  const sql = `
+    SELECT id, name, kind, file_path,
+           COALESCE(line_count, 0)            AS line_count,
+           COALESCE(cyclomatic_complexity, 1)  AS cyclomatic_complexity,
+           COALESCE(cognitive_complexity, 0)   AS cognitive_complexity,
+           COALESCE(param_count, 0)            AS param_count,
+           COALESCE(return_count, 0)           AS return_count,
+           COALESCE(nesting_depth, 0)          AS nesting_depth
+    FROM symbols
+    WHERE ${parts.join(' AND ')}
+    ORDER BY ${orderCol} DESC
+    LIMIT ?
+  `;
+
+  return db.prepare<unknown[], QualitySymbolRow>(sql).all(...params);
+}
+
+/**
+ * Count all symbols with quality metrics for a repo (for symbolsAnalyzed field).
+ */
+export function countSymbolsWithMetrics(
+  db: Database.Database,
+  repoId: string,
+  tenantId?: string,
+): number {
+  if (tenantId !== undefined) {
+    return db
+      .prepare<[string, string], { c: number }>(
+        'SELECT COUNT(*) AS c FROM symbols WHERE repo_id = ? AND tenant_id = ? AND line_count IS NOT NULL',
+      )
+      .get(repoId, tenantId)?.c ?? 0;
+  }
+  return db
+    .prepare<[string], { c: number }>(
+      'SELECT COUNT(*) AS c FROM symbols WHERE repo_id = ? AND line_count IS NOT NULL',
+    )
+    .get(repoId)?.c ?? 0;
+}
+
+// ─── Cache invalidation ───────────────────────────────────────────────────────
+
+export interface InvalidateResult {
+  repoId: string;
+  repoPath: string;
+  symbolsDeleted: number;
+  filesDeleted: number;
+}
+
+/**
+ * Delete all indexed data for a repo in a single atomic transaction.
+ * Clears symbols, files, dep_edges, FTS5 entries, and embeddings.
+ * The SQLite file itself is NOT deleted — only the rows.
+ *
+ * Returns null if the repo is not found in the database.
+ */
+export function invalidateCache(
+  db: Database.Database,
+  repoId: string,
+): InvalidateResult | null {
+  const repoRow = db
+    .prepare<[string], { root_path: string }>('SELECT root_path FROM repos WHERE id = ?')
+    .get(repoId);
+
+  if (!repoRow) return null;
+
+  const symbolCount =
+    db.prepare<[string], { c: number }>('SELECT COUNT(*) AS c FROM symbols WHERE repo_id = ?').get(repoId)?.c ?? 0;
+  const fileCount =
+    db.prepare<[string], { c: number }>('SELECT COUNT(*) AS c FROM files WHERE repo_id = ?').get(repoId)?.c ?? 0;
+
+  db.transaction(() => {
+    // 1. FTS5 virtual-table entries (must precede symbols delete for consistency)
+    db.prepare('DELETE FROM fts_symbols WHERE repo_id = ?').run(repoId);
+    // 2. Embeddings
+    db.prepare('DELETE FROM embeddings WHERE repo_id = ?').run(repoId);
+    // 3. Dependency edges
+    db.prepare('DELETE FROM dep_edges WHERE repo_id = ?').run(repoId);
+    // 4. Symbols
+    db.prepare('DELETE FROM symbols WHERE repo_id = ?').run(repoId);
+    // 5. Files
+    db.prepare('DELETE FROM files WHERE repo_id = ?').run(repoId);
+    // 6. Repo metadata row
+    db.prepare('DELETE FROM repos WHERE id = ?').run(repoId);
+  })();
+
+  return {
+    repoId,
+    repoPath: repoRow.root_path,
+    symbolsDeleted: symbolCount,
+    filesDeleted: fileCount,
+  };
 }

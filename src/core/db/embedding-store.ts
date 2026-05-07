@@ -147,6 +147,26 @@ export function deleteAllEmbeddings(db: Database.Database, repoId: string): void
 }
 
 /**
+ * Load a single embedding for one symbol.
+ * Returns null when not found or when the stored dimension does not match.
+ */
+export function getEmbedding(
+  db: Database.Database,
+  repoId: string,
+  symbolId: string,
+): Float32Array | null {
+  interface Row { embedding: Buffer; dimension: number; }
+  const row = db
+    .prepare<[string, string], Row>(
+      'SELECT embedding, dimension FROM embeddings WHERE repo_id = ? AND symbol_id = ?',
+    )
+    .get(repoId, symbolId);
+  if (!row) return null;
+  const vec = bufferToFloat32(row.embedding);
+  return vec.length === row.dimension ? vec : null;
+}
+
+/**
  * Return the number of stored embeddings for a repo.
  */
 export function countEmbeddings(db: Database.Database, repoId: string): number {
