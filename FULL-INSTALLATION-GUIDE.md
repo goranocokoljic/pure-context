@@ -12,7 +12,7 @@
 ## Install via npm (recommended)
 
 ```bash
-npm install -g purecontext-mcp
+npm install -g purecontext-mcp@latest
 ```
 
 After this, `purecontext-mcp` is available as a global command.
@@ -20,7 +20,7 @@ After this, `purecontext-mcp` is available as a global command.
 If you prefer not to install globally, use `npx` to run without installing:
 
 ```bash
-npx purecontext-mcp
+npx purecontext-mcp@latest
 ```
 
 `npx` downloads the package on first use and caches it. This is the recommended approach for most AI client integrations because it picks up new versions automatically without a manual upgrade step.
@@ -53,7 +53,7 @@ PureContext works with any MCP-compatible AI client. Choose the setup that match
 ### Claude Code (CLI)
 
 ```bash
-claude mcp add purecontext-mcp -- npx purecontext-mcp
+claude mcp add purecontext-mcp -- npx purecontext-mcp@latest
 ```
 
 Verify:
@@ -72,7 +72,7 @@ Edit `~/.claude/claude_desktop_config.json` (create it if it doesn't exist):
   "mcpServers": {
     "purecontext": {
       "command": "npx",
-      "args": ["purecontext-mcp"]
+      "args": ["purecontext-mcp@latest"]
     }
   }
 }
@@ -84,7 +84,7 @@ If you installed globally (`npm install -g purecontext-mcp`), you can use the bi
 {
   "mcpServers": {
     "purecontext": {
-      "command": "purecontext-mcp"
+      "command": "purecontext-mcp@latest"
     }
   }
 }
@@ -101,7 +101,7 @@ Create or edit `.cursor/mcp.json` in your project directory for a project-scoped
   "mcpServers": {
     "purecontext": {
       "command": "npx",
-      "args": ["purecontext-mcp"]
+      "args": ["purecontext-mcp@latest"]
     }
   }
 }
@@ -118,7 +118,7 @@ Open Windsurf Settings and navigate to the MCP section, or edit the MCP configur
   "mcpServers": {
     "purecontext": {
       "command": "npx",
-      "args": ["purecontext-mcp"]
+      "args": ["purecontext-mcp@latest"]
     }
   }
 }
@@ -134,7 +134,7 @@ Create `.vscode/mcp.json` in your project:
     "purecontext": {
       "type": "stdio",
       "command": "npx",
-      "args": ["purecontext-mcp"]
+      "args": ["purecontext-mcp@latest"]
     }
   }
 }
@@ -236,9 +236,33 @@ purecontext-mcp config --check
 
 ## Upgrading
 
+Run the command that matches how you installed PureContext:
+
+**Installed with Volta:**
 ```bash
-npm update -g purecontext-mcp
+volta install purecontext-mcp
 ```
+
+**Installed with npm globally:**
+```bash
+npm install -g purecontext-mcp@latest
+```
+
+**Running via npx (no global install):** npx may serve a cached older version. Force the latest:
+```bash
+npx purecontext-mcp@latest
+```
+To always get the latest version automatically, use `purecontext-mcp@latest` in your MCP client config instead of the bare package name.
+
+**Installed from source:**
+```bash
+cd /path/to/purecontext-mcp
+git pull
+npm install
+npm run build
+```
+
+> **Note:** `npm update -g purecontext-mcp` does not work reliably — use `npm install -g purecontext-mcp@latest` instead.
 
 Index files (SQLite databases) are forward-compatible within a major version. After upgrading from `1.x` to `1.y`, existing indexes continue to work. A major version upgrade (e.g., `1.x` → `2.0`) may require a re-index — the CLI will warn if it detects an incompatible index version.
 

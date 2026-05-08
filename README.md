@@ -84,7 +84,7 @@ You should start from docs/README.md.
 ### Claude Code
 
 ```bash
-claude mcp add purecontext-mcp -- npx purecontext-mcp
+claude mcp add purecontext-mcp -- npx purecontext-mcp@latest
 ```
 
 ### Claude Desktop
@@ -96,7 +96,7 @@ Edit `~/.claude/claude_desktop_config.json`:
   "mcpServers": {
     "purecontext": {
       "command": "npx",
-      "args": ["purecontext-mcp"]
+      "args": ["purecontext-mcp@latest"]
     }
   }
 }
@@ -111,7 +111,7 @@ Create `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` for global):
   "mcpServers": {
     "purecontext": {
       "command": "npx",
-      "args": ["purecontext-mcp"]
+      "args": ["purecontext-mcp@latest"]
     }
   }
 }
@@ -126,7 +126,7 @@ Open Windsurf Settings → MCP section, or edit the MCP config file directly:
   "mcpServers": {
     "purecontext": {
       "command": "npx",
-      "args": ["purecontext-mcp"]
+      "args": ["purecontext-mcp@latest"]
     }
   }
 }
@@ -142,7 +142,7 @@ Create `.vscode/mcp.json` in your project:
     "purecontext": {
       "type": "stdio",
       "command": "npx",
-      "args": ["purecontext-mcp"]
+      "args": ["purecontext-mcp@latest"]
     }
   }
 }

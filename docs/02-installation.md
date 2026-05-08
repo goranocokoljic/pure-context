@@ -236,9 +236,33 @@ purecontext-mcp config --check
 
 ## Upgrading
 
+Run the command that matches how you installed PureContext:
+
+**Installed with Volta:**
 ```bash
-npm update -g purecontext-mcp
+volta install purecontext-mcp
 ```
+
+**Installed with npm globally:**
+```bash
+npm install -g purecontext-mcp@latest
+```
+
+**Running via npx (no global install):** npx may serve a cached older version. Force the latest:
+```bash
+npx purecontext-mcp@latest
+```
+To always get the latest version automatically, use `purecontext-mcp@latest` in your MCP client config instead of the bare package name.
+
+**Installed from source:**
+```bash
+cd /path/to/purecontext-mcp
+git pull
+npm install
+npm run build
+```
+
+> **Note:** `npm update -g purecontext-mcp` does not work reliably — use `npm install -g purecontext-mcp@latest` instead.
 
 Index files (SQLite databases) are forward-compatible within a major version. After upgrading from `1.x` to `1.y`, existing indexes continue to work. A major version upgrade (e.g., `1.x` → `2.0`) may require a re-index — the CLI will warn if it detects an incompatible index version.
 
