@@ -1,6 +1,6 @@
 {
   "name": "purecontext-mcp",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "Token-efficient source code navigation MCP server for AI agents",
   "type": "module",
   "license": "MIT",
@@ -62,7 +62,7 @@
   },
   "scripts": {
     "build": "npm run build:server && npm run build:ui",
-    "build:server": "tsc",
+    "build:server": "node scripts/generate-version.mjs && tsc",
     "build:ui": "npm --prefix src/ui run build",
     "dev": "concurrently \"tsc --watch\" \"npm --prefix src/ui run dev\"",
     "test": "vitest run",
