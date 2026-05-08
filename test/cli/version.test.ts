@@ -36,10 +36,6 @@ function captureHealth(): { lines: string[]; ok: boolean } {
 // ─── VERSION constant ─────────────────────────────────────────────────────────
 
 describe('VERSION constant', () => {
-  it('is 1.0.0', () => {
-    expect(VERSION).toBe('1.0.0');
-  });
-
   it('is a semver string', () => {
     expect(VERSION).toMatch(/^\d+\.\d+\.\d+/);
   });
@@ -50,7 +46,7 @@ describe('VERSION constant', () => {
 describe('cmdHealth()', () => {
   it('prints the version as the first line', () => {
     const { lines } = captureHealth();
-    expect(lines[0]).toContain('1.0.0');
+    expect(lines[0]).toContain(VERSION);
     expect(lines[0]).toContain('purecontext-mcp');
   });
 
