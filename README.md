@@ -166,7 +166,7 @@ If your team runs a shared PureContext server, connect with an HTTP transport in
 }
 ```
 
-→ [Full installation guide](FULL-INSTALLATAION-GUIDE.md)
+→ [Full installation guide](FULL-INSTALLATION-GUIDE.md)
 
 ---
 
