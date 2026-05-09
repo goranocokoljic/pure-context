@@ -1,6 +1,5 @@
 # PureContext MCP
 
-[![CI](https://github.com/Goran-Ocokoljic/purecontext-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Goran-Ocokoljic/purecontext-mcp/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/purecontext-mcp.svg)](https://www.npmjs.com/package/purecontext-mcp)
 [![Stable](https://img.shields.io/badge/stability-stable-brightgreen.svg)](docs/27-api-stability.md)
 

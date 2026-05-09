@@ -243,7 +243,7 @@ export function WorkspacePanel({ onClose }: WorkspacePanelProps) {
             <div className="flex flex-col items-center justify-center h-40 text-gray-600 text-sm gap-2">
               <p>No indexed repositories.</p>
               <p className="text-xs text-center px-4">
-                Run <code className="font-mono bg-gray-800 px-1 rounded">index_folder</code> to get started.
+                Run <code className="font-mono bg-gray-800 px-1 rounded">index-folder</code> to get started.
               </p>
             </div>
           )}

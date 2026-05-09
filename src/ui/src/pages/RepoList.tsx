@@ -60,7 +60,7 @@ function EmptyState() {
       <div className="text-5xl opacity-30">&#128269;</div>
       <p className="text-lg font-medium text-gray-400">No repositories indexed</p>
       <p className="text-sm max-w-xs">
-        Use <code className="bg-gray-800 px-1 rounded text-gray-300">purecontext-mcp index_folder</code> to
+        Use <code className="bg-gray-800 px-1 rounded text-gray-300">npx purecontext-mcp index-folder</code> to
         index a project.
       </p>
     </div>

@@ -1,17 +1,22 @@
-FROM node:20-slim
+FROM node:22-slim
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y \
+  python3 \
+  make \
+  g++ \
+  curl \
+  && rm -rf /var/lib/apt/lists/*
+
 # Install only production deps; better-sqlite3 uses prebuilt binaries (Phase 16)
 COPY package*.json .npmrc ./
+COPY scripts/ ./scripts/
 RUN npm ci --omit=dev
 
 # Compiled output and static assets
 COPY dist/ ./dist/
 COPY grammars/ ./grammars/
-
-# Web UI static assets (built by CI before docker build)
-COPY src/ui/dist/ ./src/ui/dist/
 
 EXPOSE 3000
 
