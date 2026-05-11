@@ -6,23 +6,6 @@ import { logger } from './logger.js';
 export const BYTES_PER_TOKEN = 4;
 const FLUSH_INTERVAL = 5;
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-export interface CostEstimates {
-  cost_avoided: Record<string, number>;
-  total_cost_avoided: Record<string, number>;
-}
-
-// ─── Pricing tiers (USD per million input tokens) ─────────────────────────────
-
-const PRICING_TIERS: Record<string, number> = {
-  claude_opus_4: 15.0,
-  claude_sonnet_4: 3.0,
-  claude_haiku_4: 0.8,
-  gpt4o: 2.5,
-  gpt4o_mini: 0.15,
-};
-
 // ─── In-memory state ──────────────────────────────────────────────────────────
 
 class _State {
@@ -118,22 +101,6 @@ export function recordSavings(tokensSaved: number): number {
 export function getTotalSaved(): number {
   ensureLoaded();
   return state.total;
-}
-
-/**
- * Compute cost avoided in USD for a single call and cumulatively,
- * based on model pricing tiers. Values rounded to 4 decimal places.
- */
-export function costAvoided(tokensSaved: number, totalTokensSaved: number): CostEstimates {
-  const cost_avoided: Record<string, number> = {};
-  const total_cost_avoided: Record<string, number> = {};
-
-  for (const [model, ratePerMillion] of Object.entries(PRICING_TIERS)) {
-    cost_avoided[model] = parseFloat((tokensSaved * ratePerMillion / 1_000_000).toFixed(4));
-    total_cost_avoided[model] = parseFloat((totalTokensSaved * ratePerMillion / 1_000_000).toFixed(4));
-  }
-
-  return { cost_avoided, total_cost_avoided };
 }
 
 /**

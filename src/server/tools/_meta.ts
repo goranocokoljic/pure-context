@@ -1,4 +1,4 @@
-import { estimateSavings, recordSavings, costAvoided } from '../../core/token-tracker.js';
+import { estimateSavings, recordSavings } from '../../core/token-tracker.js';
 import { VERSION } from '../../version.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -13,8 +13,6 @@ export interface MetaEnvelope {
   timing_ms: number;
   tokens_saved?: number;
   total_tokens_saved?: number;
-  cost_avoided?: Record<string, number>;
-  total_cost_avoided?: Record<string, number>;
   powered_by: string;
   server_version: string;
 }
@@ -37,14 +35,11 @@ export function buildMeta(options: MetaOptions): MetaEnvelope {
   if (rawBytes !== undefined && responseBytes !== undefined) {
     const tokensSaved = estimateSavings(rawBytes, responseBytes);
     const newTotal = recordSavings(tokensSaved);
-    const { cost_avoided, total_cost_avoided } = costAvoided(tokensSaved, newTotal);
 
     return {
       timing_ms: timingMs,
       tokens_saved: tokensSaved,
       total_tokens_saved: newTotal,
-      cost_avoided,
-      total_cost_avoided,
       powered_by: POWERED_BY,
       server_version: VERSION,
     };

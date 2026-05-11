@@ -10,9 +10,8 @@
  *  5. 10 tool calls → total_tokens_saved = sum of individual calls
  *  6. get-savings-stats reset
  *  7. Persistence: flush to disk, restart simulation, verify total reloads
- *  8. cost_avoided arithmetic: tokens * (rate / 1_000_000)
- *  9. equivalent_context_windows arithmetic
- * 10. Performance: tracking overhead < 10ms per call
+ *  8. equivalent_context_windows arithmetic
+ *  9. Performance: tracking overhead < 10ms per call
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
@@ -87,8 +86,6 @@ interface Meta {
   timing_ms: number;
   tokens_saved?: number;
   total_tokens_saved?: number;
-  cost_avoided?: Record<string, number>;
-  total_cost_avoided?: Record<string, number>;
   powered_by: string;
 }
 
@@ -313,47 +310,9 @@ describe('7. persistence — savings survive in-memory reset (simulates restart)
   });
 });
 
-// ─── Test 8: cost_avoided arithmetic ─────────────────────────────────────────
+// ─── Test 8: equivalent_context_windows arithmetic ───────────────────────────
 
-describe('8. cost_avoided arithmetic: tokens * (rate / 1_000_000)', () => {
-  const RATES: Record<string, number> = {
-    claude_opus_4: 15.0,
-    claude_sonnet_4: 3.0,
-    claude_haiku_4: 0.8,
-    gpt4o: 2.5,
-    gpt4o_mini: 0.15,
-  };
-
-  it('cost_avoided values match expected formula for each tier', async () => {
-    const symbolId = await findSymbolId('formatDiagnostic');
-    const meta = parseMeta(symbolSourceHandler({ repoId, symbolId }));
-    const saved = meta.tokens_saved!;
-
-    expect(saved).toBeGreaterThan(0);
-
-    for (const [model, rate] of Object.entries(RATES)) {
-      const expected = parseFloat((saved * rate / 1_000_000).toFixed(4));
-      expect(meta.cost_avoided![model]).toBeCloseTo(expected, 6);
-    }
-  });
-
-  it('total_cost_avoided matches formula for cumulative total', async () => {
-    const symbolId = await findSymbolId('formatDiagnostic');
-    // Make a second call so total > single call savings
-    symbolSourceHandler({ repoId, symbolId });
-    const meta = parseMeta(symbolSourceHandler({ repoId, symbolId }));
-    const total = meta.total_tokens_saved!;
-
-    for (const [model, rate] of Object.entries(RATES)) {
-      const expected = parseFloat((total * rate / 1_000_000).toFixed(4));
-      expect(meta.total_cost_avoided![model]).toBeCloseTo(expected, 6);
-    }
-  });
-});
-
-// ─── Test 9: equivalent_context_windows arithmetic ───────────────────────────
-
-describe('9. equivalent_context_windows arithmetic', () => {
+describe('8. equivalent_context_windows arithmetic', () => {
   it('claude_200k = total / 200_000 rounded to 2dp', async () => {
     // Accumulate enough savings to get a measurable fraction
     for (let i = 0; i < 5; i++) {
@@ -374,9 +333,9 @@ describe('9. equivalent_context_windows arithmetic', () => {
   });
 });
 
-// ─── Test 10: performance — tracking overhead ─────────────────────────────────
+// ─── Test 9: performance — tracking overhead ──────────────────────────────────
 
-describe('10. performance — token tracking overhead', () => {
+describe('9. performance — token tracking overhead', () => {
   it('tracking overhead is < 10ms per tool call on average', async () => {
     const symbolId = await findSymbolId('formatDiagnostic');
     const N = 20;

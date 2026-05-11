@@ -76,20 +76,6 @@ describe('get_savings_stats — stats retrieval', () => {
     expect(data.equivalent_context_windows.gpt4_128k).toBe(0.96);
   });
 
-  it('includes total_cost_avoided for all model tiers', () => {
-    recordSavings(1_000_000);
-    const data = parse(handler({})) as {
-      total_cost_avoided: Record<string, number>;
-    };
-    expect(data.total_cost_avoided).toHaveProperty('claude_opus_4');
-    expect(data.total_cost_avoided).toHaveProperty('claude_sonnet_4');
-    expect(data.total_cost_avoided).toHaveProperty('claude_haiku_4');
-    expect(data.total_cost_avoided).toHaveProperty('gpt4o');
-    expect(data.total_cost_avoided).toHaveProperty('gpt4o_mini');
-    // 1M tokens * $15/M = $15 for claude_opus_4
-    expect(data.total_cost_avoided['claude_opus_4']).toBe(15.0);
-  });
-
   it('includes session_start as an ISO timestamp', () => {
     const before = new Date();
     recordSavings(100);

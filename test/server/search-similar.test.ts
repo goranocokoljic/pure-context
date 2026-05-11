@@ -69,7 +69,6 @@ vi.mock('../../src/semantic/embedding-provider.js', () => ({
 vi.mock('../../src/core/token-tracker.js', () => ({
   estimateSavings: vi.fn(() => 0),
   recordSavings: vi.fn(() => 0),
-  costAvoided: vi.fn(() => ({ cost_avoided: {}, total_cost_avoided: {} })),
 }));
 
 // ─── Mocked module references ─────────────────────────────────────────────────

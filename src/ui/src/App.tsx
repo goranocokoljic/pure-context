@@ -54,6 +54,7 @@ function GridIcon() {
 function Header({ onWorkspaceToggle }: { onWorkspaceToggle: () => void }) {
   const navigate = useNavigate();
   const pinnedCount = useWorkspaceStore((s) => s.pinnedRepos.length);
+  const activeRepoId = useWorkspaceStore((s) => s.activeRepoId);
 
   return (
     <header className="h-14 border-b border-gray-800 flex items-center px-6 gap-6 shrink-0 bg-gray-900">
@@ -72,7 +73,10 @@ function Header({ onWorkspaceToggle }: { onWorkspaceToggle: () => void }) {
         <NavLink to="/search" className={navLinkClass}>
           Search
         </NavLink>
-        <NavLink to="/graph" className={navLinkClass}>
+        <NavLink
+          to={activeRepoId ? `/repos/${encodeURIComponent(activeRepoId)}/graph` : '/graph'}
+          className={navLinkClass}
+        >
           Graph
         </NavLink>
         <NavLink to="/blast-radius" className={navLinkClass}>

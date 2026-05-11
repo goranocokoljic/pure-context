@@ -4,7 +4,6 @@
  * Verifies that each updated tool:
  *  - returns `_meta.tokens_saved >= 0`
  *  - returns `_meta.total_tokens_saved >= _meta.tokens_saved`
- *  - returns `_meta.cost_avoided` with all expected model keys
  *  - accumulates `total_tokens_saved` across multiple calls
  *
  * Uses the basic-ts-project fixture (same as tools.test.ts).
@@ -55,8 +54,6 @@ afterAll(() => {
 interface Meta {
   tokens_saved: number;
   total_tokens_saved: number;
-  cost_avoided: Record<string, number>;
-  total_cost_avoided: Record<string, number>;
 }
 
 function parseMeta(result: { content: { text: string }[] }): Meta {
@@ -64,19 +61,11 @@ function parseMeta(result: { content: { text: string }[] }): Meta {
   return data._meta;
 }
 
-const EXPECTED_MODELS = ['claude_opus_4', 'claude_sonnet_4', 'claude_haiku_4', 'gpt4o', 'gpt4o_mini'];
-
 function assertMeta(meta: Meta): void {
   expect(typeof meta.tokens_saved).toBe('number');
   expect(meta.tokens_saved).toBeGreaterThanOrEqual(0);
   expect(typeof meta.total_tokens_saved).toBe('number');
   expect(meta.total_tokens_saved).toBeGreaterThanOrEqual(meta.tokens_saved);
-  for (const model of EXPECTED_MODELS) {
-    expect(meta.cost_avoided).toHaveProperty(model);
-    expect(meta.total_cost_avoided).toHaveProperty(model);
-    expect(typeof meta.cost_avoided[model]).toBe('number');
-    expect(meta.cost_avoided[model]).toBeGreaterThanOrEqual(0);
-  }
 }
 
 // Find a symbol ID for reuse across tests

@@ -37,6 +37,23 @@ function EmptyPanel() {
   );
 }
 
+function NoRepoPanel() {
+  return (
+    <div className="flex items-center justify-center h-full">
+      <div className="text-center text-gray-500">
+        <div className="text-lg mb-1">No repository selected</div>
+        <div className="text-sm mb-3">Open a repository first, then navigate to its graph.</div>
+        <Link
+          to="/"
+          className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
+        >
+          ← Go to repositories
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 // ─── DependencyGraph page ─────────────────────────────────────────────────────
 
 export default function DependencyGraph() {
@@ -50,7 +67,10 @@ export default function DependencyGraph() {
   const [layout, setLayout] = useState<LayoutKind>('force');
 
   const loadGraph = useCallback(async () => {
-    if (!repoId) return;
+    if (!repoId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -131,10 +151,11 @@ export default function DependencyGraph() {
 
       {/* Graph area */}
       <div className="flex-1 overflow-hidden relative">
-        {loading && <Loading />}
-        {!loading && error && <ErrorPanel message={error} />}
-        {!loading && !error && graphData && graphData.nodes.length === 0 && <EmptyPanel />}
-        {!loading && !error && graphData && graphData.nodes.length > 0 && (
+        {!repoId && <NoRepoPanel />}
+        {repoId && loading && <Loading />}
+        {repoId && !loading && error && <ErrorPanel message={error} />}
+        {repoId && !loading && !error && graphData && graphData.nodes.length === 0 && <EmptyPanel />}
+        {repoId && !loading && !error && graphData && graphData.nodes.length > 0 && (
           <GraphViewer
             apiNodes={graphData.nodes}
             apiEdges={graphData.edges}

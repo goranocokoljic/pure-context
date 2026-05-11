@@ -280,6 +280,35 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 /**
+ * The list-repos MCP tool returns `id` and `indexedAt` on each repo record, but the
+ * REST API exposes them as `repoId` and `lastIndexed` (ISO string) for UI clients.
+ */
+function normalizeReposResponse(rawJson: string): string {
+  try {
+    const parsed = JSON.parse(rawJson) as Record<string, unknown>;
+    const repos = parsed['repos'];
+    if (Array.isArray(repos)) {
+      parsed['repos'] = repos.map((repo: Record<string, unknown>) => {
+        const out: Record<string, unknown> = { ...repo };
+        if ('id' in out && !('repoId' in out)) {
+          out['repoId'] = out['id'];
+          delete out['id'];
+        }
+        if ('indexedAt' in out && !('lastIndexed' in out)) {
+          const ts = out['indexedAt'];
+          out['lastIndexed'] = typeof ts === 'number' ? new Date(ts).toISOString() : String(ts);
+          delete out['indexedAt'];
+        }
+        return out;
+      });
+    }
+    return JSON.stringify(parsed);
+  } catch {
+    return rawJson;
+  }
+}
+
+/**
  * The search-symbols MCP tool returns `symbols` in its JSON, but the REST API
  * exposes them as `results` for consistency. Transform the raw tool JSON before
  * sending it to UI clients.
@@ -317,7 +346,7 @@ async function handleRestApi(
     const text = result.content[0];
     if (text && text.type === 'text') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(text.text);
+      res.end(normalizeReposResponse(text.text));
     } else {
       sendJson(res, 500, { error: 'Unexpected tool response' });
     }

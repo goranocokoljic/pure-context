@@ -20,7 +20,6 @@ import {
   estimateSavings,
   recordSavings,
   getTotalSaved,
-  costAvoided,
   BYTES_PER_TOKEN,
   _resetForTesting,
 } from '../../src/core/token-tracker.js';
@@ -150,66 +149,6 @@ describe('getTotalSaved', () => {
     recordSavings(100);
     recordSavings(200);
     expect(getTotalSaved()).toBe(300);
-  });
-});
-
-// ─── costAvoided ─────────────────────────────────────────────────────────────
-
-describe('costAvoided', () => {
-  it('contains all expected model keys', () => {
-    const result = costAvoided(1_000_000, 2_000_000);
-    const keys = Object.keys(result.cost_avoided);
-    expect(keys).toContain('claude_opus_4');
-    expect(keys).toContain('claude_sonnet_4');
-    expect(keys).toContain('claude_haiku_4');
-    expect(keys).toContain('gpt4o');
-    expect(keys).toContain('gpt4o_mini');
-    expect(Object.keys(result.total_cost_avoided)).toEqual(keys);
-  });
-
-  it('computes claude_opus_4 cost at $15 per million tokens', () => {
-    // 1,000,000 tokens * $15 / 1,000,000 = $15.00
-    const { cost_avoided } = costAvoided(1_000_000, 0);
-    expect(cost_avoided['claude_opus_4']).toBe(15.0);
-  });
-
-  it('computes claude_sonnet_4 cost at $3 per million tokens', () => {
-    const { cost_avoided } = costAvoided(1_000_000, 0);
-    expect(cost_avoided['claude_sonnet_4']).toBe(3.0);
-  });
-
-  it('computes claude_haiku_4 cost at $0.80 per million tokens', () => {
-    const { cost_avoided } = costAvoided(1_000_000, 0);
-    expect(cost_avoided['claude_haiku_4']).toBe(0.8);
-  });
-
-  it('computes gpt4o cost at $2.50 per million tokens', () => {
-    const { cost_avoided } = costAvoided(1_000_000, 0);
-    expect(cost_avoided['gpt4o']).toBe(2.5);
-  });
-
-  it('computes gpt4o_mini cost at $0.15 per million tokens', () => {
-    const { cost_avoided } = costAvoided(1_000_000, 0);
-    expect(cost_avoided['gpt4o_mini']).toBe(0.15);
-  });
-
-  it('rounds to 4 decimal places', () => {
-    // 1234 tokens * $15 / 1,000,000 = 0.01851
-    const { cost_avoided } = costAvoided(1234, 0);
-    const val = cost_avoided['claude_opus_4'];
-    expect(val.toString().replace(/^\d+\./, '').length).toBeLessThanOrEqual(4);
-    expect(val).toBeCloseTo(0.01851, 4);
-  });
-
-  it('total_cost_avoided uses totalTokensSaved, not tokensSaved', () => {
-    const { cost_avoided, total_cost_avoided } = costAvoided(100, 1000);
-    expect(total_cost_avoided['claude_opus_4']).toBeCloseTo(cost_avoided['claude_opus_4'] * 10, 6);
-  });
-
-  it('returns zero costs for zero tokens', () => {
-    const { cost_avoided, total_cost_avoided } = costAvoided(0, 0);
-    for (const val of Object.values(cost_avoided)) expect(val).toBe(0);
-    for (const val of Object.values(total_cost_avoided)) expect(val).toBe(0);
   });
 });
 

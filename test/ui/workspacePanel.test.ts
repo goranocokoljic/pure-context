@@ -146,3 +146,63 @@ describe('normalizeSearchResponse', () => {
     expect(result.results).toHaveLength(1);
   });
 });
+
+// ─── normalizeReposResponse (HTTP server helper) ──────────────────────────────
+
+// Inline the same logic used in http-server.ts normalizeReposResponse
+function normalizeReposResponse(rawJson: string): string {
+  try {
+    const parsed = JSON.parse(rawJson) as Record<string, unknown>;
+    const repos = parsed['repos'];
+    if (Array.isArray(repos)) {
+      parsed['repos'] = repos.map((repo: Record<string, unknown>) => {
+        const out: Record<string, unknown> = { ...repo };
+        if ('id' in out && !('repoId' in out)) {
+          out['repoId'] = out['id'];
+          delete out['id'];
+        }
+        if ('indexedAt' in out && !('lastIndexed' in out)) {
+          const ts = out['indexedAt'];
+          out['lastIndexed'] = typeof ts === 'number' ? new Date(ts).toISOString() : String(ts);
+          delete out['indexedAt'];
+        }
+        return out;
+      });
+    }
+    return JSON.stringify(parsed);
+  } catch {
+    return rawJson;
+  }
+}
+
+describe('normalizeReposResponse', () => {
+  it('renames id → repoId and indexedAt → lastIndexed (ISO string)', () => {
+    const ts = 1745000000000;
+    const input = JSON.stringify({
+      repos: [{ id: 'abc123', rootPath: '/a', symbolCount: 10, fileCount: 5, indexedAt: ts }],
+      _meta: {},
+    });
+    const result = JSON.parse(normalizeReposResponse(input)) as {
+      repos: Array<Record<string, unknown>>;
+    };
+    expect(result.repos[0]!['repoId']).toBe('abc123');
+    expect(result.repos[0]!['id']).toBeUndefined();
+    expect(result.repos[0]!['lastIndexed']).toBe(new Date(ts).toISOString());
+    expect(result.repos[0]!['indexedAt']).toBeUndefined();
+  });
+
+  it('does not overwrite repoId if already present', () => {
+    const input = JSON.stringify({
+      repos: [{ id: 'abc', repoId: 'xyz', indexedAt: 0 }],
+    });
+    const result = JSON.parse(normalizeReposResponse(input)) as {
+      repos: Array<Record<string, unknown>>;
+    };
+    expect(result.repos[0]!['repoId']).toBe('xyz');
+    expect(result.repos[0]!['id']).toBe('abc');
+  });
+
+  it('passes through invalid JSON unchanged', () => {
+    expect(normalizeReposResponse('not-json')).toBe('not-json');
+  });
+});

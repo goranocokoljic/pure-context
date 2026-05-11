@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api, ApiClientError } from '../api/client.js';
 import { useRepoStore } from '../stores/repoStore.js';
 import { useHeatmapStore, buildHeatScores } from '../stores/heatmapStore.js';
+import { useWorkspaceStore } from '../stores/workspaceStore.js';
 import { FileTree } from '../components/FileTree.js';
 import { FileOutline } from '../components/FileOutline.js';
 import { HeatmapLegend } from '../components/HeatmapLegend.js';
@@ -194,9 +195,14 @@ export default function RepoDetail() {
 
   // ─── Select repo in store ──────────────────────────────────────────────────
 
+  const setActive = useWorkspaceStore((s) => s.setActive);
+
   useEffect(() => {
-    if (repoId) selectRepo(repoId);
-  }, [repoId, selectRepo]);
+    if (repoId) {
+      selectRepo(repoId);
+      setActive(repoId);
+    }
+  }, [repoId, selectRepo, setActive]);
 
   // ─── Load file tree ────────────────────────────────────────────────────────
 

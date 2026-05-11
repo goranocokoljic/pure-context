@@ -3,7 +3,6 @@ import {
   getTotalSaved,
   resetSavings,
   getSessionStart,
-  costAvoided,
 } from '../../core/token-tracker.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
@@ -47,7 +46,6 @@ export function handler(args: { reset?: boolean }): CallToolResult {
   }
 
   const total = getTotalSaved();
-  const { total_cost_avoided } = costAvoided(total, total);
 
   const equivalent_context_windows: Record<string, number> = {};
   for (const [label, size] of Object.entries(CONTEXT_WINDOWS)) {
@@ -62,7 +60,6 @@ export function handler(args: { reset?: boolean }): CallToolResult {
           {
             total_tokens_saved: total,
             equivalent_context_windows,
-            total_cost_avoided,
             session_start: getSessionStart().toISOString(),
             _meta: {
               powered_by: 'PureContext MCP',
