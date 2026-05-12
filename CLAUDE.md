@@ -197,23 +197,18 @@ purecontext-mcp/
 
 ## Current Phase
 
-**Phase 19 — Missing Core Tools**
+**All phases complete (1–33).** The jCodeMunch parity gap is closed. 29 new tools were added across Phases 28–33:
 
-Focus: Close the four largest tool-level gaps vs other tools: `find_references` (identifier-level usage search), `get_file_content` (raw cached file retrieval with line slicing), `get_symbols` (batch symbol fetch by ID), and `invalidate_cache` (force re-index).
+| Phase | Tools Added | Tasks |
+|-------|-------------|-------|
+| 28 — Advanced Relationship Analysis | `find_implementations`, `get_call_hierarchy`, `get_class_hierarchy`, `find_cycles`, `get_coupling_map` | 173–177 ✓ |
+| 29 — Architectural Visualization | `render_diagram`, `render_call_graph`, `render_import_graph`, `render_class_hierarchy`, `render_dep_matrix`, `get_architecture_snapshot` | 178–183 ✓ |
+| 30 — Refactoring Safety Checks | `check_rename_safe`, `check_delete_safe`, `check_move_safe`, `plan_refactoring` | 184–187 ✓ |
+| 31 — Health Dashboards & Debt Reporting | `health_radar`, `diff_health_radar`, `get_debt_report` | 188–190 ✓ |
+| 32 — AST-Level Search | `search_ast`, `search_by_signature`, `search_by_decorator`, `search_by_complexity` | 191–194 ✓ |
+| 33 — Code Intelligence Helpers | `get_entry_points`, `get_public_api`, `get_todos`, `get_complexity_hotspots`, `get_type_graph`, `find_untested_symbols`, `get_test_coverage_map` | 195–201 ✓ |
 
-See `docs/PHASE19_TASKS.md` for the sequenced task breakdown (Tasks 131–134).
-
-**Upcoming phases (parity with other tools):**
-- Phase 20: Tool Capability Enhancements — search debug mode, `context_lines`/`verify` on symbol retrieval, GitHub API indexing, Gemini Flash summarization (Tasks 135–138)
-- Phase 21: Ecosystem & Data Tools — context provider framework, dbt provider, `search_columns`, OpenAPI/Swagger handler, SQL handler with dbt Jinja (Tasks 139–143)
-- Phase 22: Language Coverage Expansion — Bash, Perl, Terraform/HCL, Nix, Protobuf, GraphQL, Groovy, Erlang, Gleam, GDScript, XML, Objective-C, Fortran (Tasks 144–149)
-
-**Differentiation phases (beyond other tools):**
-- Phase 23: Cross-Repo Intelligence — cross-repo search, code similarity search, cross-repo dep tracking, MCP Resources (Tasks 150–153)
-- Phase 24: Git & History Integration — git metadata indexing, symbol history, PR/diff analysis, churn metrics (Tasks 154–157)
-- Phase 25: AI-Powered Architecture Analysis — quality metrics, anti-pattern detection, architecture docs, smart context bundling, refactoring detector (Tasks 158–162)
-- Phase 26: Enhanced Web UI — architecture heatmap, symbol timeline, test coverage overlay, multi-repo workspace, advanced graph (Tasks 163–167)
-- Phase 27: Distribution & Platform — index export/import, pre-built registry, webhook auto-reindex, GitHub Actions, VS Code extension (Tasks 168–172)
+**Total tools:** 50+ MCP tools across all phases. See `src/server/tools/` for implementations and `test/` for coverage.
 
 ## Decision Log
 
@@ -237,6 +232,7 @@ Record significant design decisions here as the project evolves:
 | 2026-05-02 | Phase 25: AI-powered architecture analysis | Quality metrics, anti-patterns, arch docs, smart context, refactoring detector                                                                     |
 | 2026-05-02 | Phase 26: Enhanced Web UI | Heatmap, symbol timeline, coverage overlay, multi-repo workspace, advanced graph                                                                   |
 | 2026-05-02 | Phase 27: Distribution & platform | Index export/import, public registry CDN, webhooks, GitHub Actions, VS Code extension                                                              |
+| 2026-05-11 | Phases 28–33: jCodeMunch gap closure | Gap analysis vs jCodeMunch v1.4.1 (see docs/dev/jcodemunch-gap-analysis.md); 6 phases add 29 tools closing graph traversal, visualization, refactoring safety, health dashboards, AST search, and code intelligence gaps |
 
 ## Quick Commands
 

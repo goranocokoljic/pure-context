@@ -142,6 +142,18 @@ CREATE INDEX IF NOT EXISTS idx_dep_edges_target_sym  ON dep_edges(repo_id, targe
 CREATE INDEX IF NOT EXISTS idx_git_metadata_repo_file ON git_metadata(repo_id, file_path);
 CREATE INDEX IF NOT EXISTS idx_git_metadata_date      ON git_metadata(repo_id, commit_date);
 
+CREATE TABLE IF NOT EXISTS snapshots (
+  snapshot_id  TEXT    NOT NULL,
+  repo_id      TEXT    NOT NULL,
+  label        TEXT    NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL,
+  metrics      TEXT    NOT NULL,
+  PRIMARY KEY (snapshot_id, repo_id),
+  FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshots_repo ON snapshots(repo_id, created_at);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_symbols USING fts5(
   symbol_id UNINDEXED,
   repo_id   UNINDEXED,

@@ -46,6 +46,35 @@ import * as generateDocsTool from './tools/generate-docs.js';
 import * as exportIndexTool from './tools/export-index.js';
 import * as importIndexTool from './tools/import-index.js';
 import * as fetchPublicIndexTool from './tools/fetch-public-index.js';
+import * as getCouplingMapTool from './tools/get-coupling-map.js';
+import * as findImplementationsTool from './tools/find-implementations.js';
+import * as findCyclesTool from './tools/find-cycles.js';
+import * as getClassHierarchyTool from './tools/get-class-hierarchy.js';
+import * as getCallHierarchyTool from './tools/get-call-hierarchy.js';
+import * as renderDiagramTool from './tools/render-diagram.js';
+import * as renderCallGraphTool from './tools/render-call-graph.js';
+import * as renderImportGraphTool from './tools/render-import-graph.js';
+import * as renderDepMatrixTool from './tools/render-dep-matrix.js';
+import * as renderClassHierarchyTool from './tools/render-class-hierarchy.js';
+import * as getArchitectureSnapshotTool from './tools/get-architecture-snapshot.js';
+import * as checkRenameSafeTool from './tools/check-rename-safe.js';
+import * as checkDeleteSafeTool from './tools/check-delete-safe.js';
+import * as checkMoveSafeTool from './tools/check-move-safe.js';
+import * as planRefactoringTool from './tools/plan-refactoring.js';
+import * as getDebtReportTool from './tools/get-debt-report.js';
+import * as healthRadarTool from './tools/health-radar.js';
+import * as diffHealthRadarTool from './tools/diff-health-radar.js';
+import * as searchBySignatureTool from './tools/search-by-signature.js';
+import * as searchByComplexityTool from './tools/search-by-complexity.js';
+import * as searchAstTool from './tools/search-ast.js';
+import * as searchByDecoratorTool from './tools/search-by-decorator.js';
+import * as getPublicApiTool from './tools/get-public-api.js';
+import * as getTodosTool from './tools/get-todos.js';
+import * as getEntryPointsTool from './tools/get-entry-points.js';
+import * as getComplexityHotspotsTool from './tools/get-complexity-hotspots.js';
+import * as findUntestedSymbolsTool from './tools/find-untested-symbols.js';
+import * as getTestCoverageMapTool from './tools/get-test-coverage-map.js';
+import * as getTypeGraphTool from './tools/get-type-graph.js';
 
 // ── Resource handlers ──────────────────────────────────────────────────────────
 import {
@@ -312,6 +341,151 @@ export function createMcpServer(): McpServer {
     description: fetchPublicIndexTool.description,
     inputSchema: fetchPublicIndexTool.inputSchema,
   }, typed((args) => fetchPublicIndexTool.handler(args)));
+
+  server.registerTool(getCouplingMapTool.name, {
+    description: getCouplingMapTool.description,
+    inputSchema: getCouplingMapTool.inputSchema,
+  }, typed((args) => getCouplingMapTool.handler(args)));
+
+  server.registerTool(findImplementationsTool.name, {
+    description: findImplementationsTool.description,
+    inputSchema: findImplementationsTool.inputSchema,
+  }, typed((args) => findImplementationsTool.handler(args)));
+
+  server.registerTool(findCyclesTool.name, {
+    description: findCyclesTool.description,
+    inputSchema: findCyclesTool.inputSchema,
+  }, typed((args) => findCyclesTool.handler(args)));
+
+  server.registerTool(getClassHierarchyTool.name, {
+    description: getClassHierarchyTool.description,
+    inputSchema: getClassHierarchyTool.inputSchema,
+  }, typed((args) => getClassHierarchyTool.handler(args)));
+
+  server.registerTool(getCallHierarchyTool.name, {
+    description: getCallHierarchyTool.description,
+    inputSchema: getCallHierarchyTool.inputSchema,
+  }, typed((args) => getCallHierarchyTool.handler(args)));
+
+  server.registerTool(renderDiagramTool.name, {
+    description: renderDiagramTool.description,
+    inputSchema: renderDiagramTool.inputSchema,
+  }, typed((args) => renderDiagramTool.handler(args)));
+
+  server.registerTool(renderCallGraphTool.name, {
+    description: renderCallGraphTool.description,
+    inputSchema: renderCallGraphTool.inputSchema,
+  }, typed((args) => renderCallGraphTool.handler(args)));
+
+  server.registerTool(renderImportGraphTool.name, {
+    description: renderImportGraphTool.description,
+    inputSchema: renderImportGraphTool.inputSchema,
+  }, typed((args) => renderImportGraphTool.handler(args)));
+
+  server.registerTool(renderDepMatrixTool.name, {
+    description: renderDepMatrixTool.description,
+    inputSchema: renderDepMatrixTool.inputSchema,
+  }, typed((args) => renderDepMatrixTool.handler(args)));
+
+  server.registerTool(renderClassHierarchyTool.name, {
+    description: renderClassHierarchyTool.description,
+    inputSchema: renderClassHierarchyTool.inputSchema,
+  }, typed((args) => renderClassHierarchyTool.handler(args)));
+
+  server.registerTool(getArchitectureSnapshotTool.name, {
+    description: getArchitectureSnapshotTool.description,
+    inputSchema: getArchitectureSnapshotTool.inputSchema,
+  }, typed((args) => getArchitectureSnapshotTool.handler(args)));
+
+  server.registerTool(checkRenameSafeTool.name, {
+    description: checkRenameSafeTool.description,
+    inputSchema: checkRenameSafeTool.inputSchema,
+  }, typed((args) => checkRenameSafeTool.handler(args)));
+
+  server.registerTool(checkDeleteSafeTool.name, {
+    description: checkDeleteSafeTool.description,
+    inputSchema: checkDeleteSafeTool.inputSchema,
+  }, typed((args) => checkDeleteSafeTool.handler(args)));
+
+  server.registerTool(checkMoveSafeTool.name, {
+    description: checkMoveSafeTool.description,
+    inputSchema: checkMoveSafeTool.inputSchema,
+  }, typed((args) => checkMoveSafeTool.handler(args)));
+
+  server.registerTool(planRefactoringTool.name, {
+    description: planRefactoringTool.description,
+    inputSchema: planRefactoringTool.inputSchema,
+  }, typed((args) => planRefactoringTool.handler(args)));
+
+  server.registerTool(getDebtReportTool.name, {
+    description: getDebtReportTool.description,
+    inputSchema: getDebtReportTool.inputSchema,
+  }, typed((args) => getDebtReportTool.handler(args)));
+
+  server.registerTool(healthRadarTool.name, {
+    description: healthRadarTool.description,
+    inputSchema: healthRadarTool.inputSchema,
+  }, typed((args) => healthRadarTool.handler(args)));
+
+  server.registerTool(diffHealthRadarTool.name, {
+    description: diffHealthRadarTool.description,
+    inputSchema: diffHealthRadarTool.inputSchema,
+  }, typed((args) => diffHealthRadarTool.handler(args)));
+
+  server.registerTool(searchBySignatureTool.name, {
+    description: searchBySignatureTool.description,
+    inputSchema: searchBySignatureTool.inputSchema,
+  }, typed((args) => searchBySignatureTool.handler(args)));
+
+  server.registerTool(searchByComplexityTool.name, {
+    description: searchByComplexityTool.description,
+    inputSchema: searchByComplexityTool.inputSchema,
+  }, typed((args) => searchByComplexityTool.handler(args)));
+
+  server.registerTool(searchAstTool.name, {
+    description: searchAstTool.description,
+    inputSchema: searchAstTool.inputSchema,
+  }, typed((args) => searchAstTool.handler(args)));
+
+  server.registerTool(searchByDecoratorTool.name, {
+    description: searchByDecoratorTool.description,
+    inputSchema: searchByDecoratorTool.inputSchema,
+  }, typed((args) => searchByDecoratorTool.handler(args)));
+
+  server.registerTool(getPublicApiTool.name, {
+    description: getPublicApiTool.description,
+    inputSchema: getPublicApiTool.inputSchema,
+  }, typed((args) => getPublicApiTool.handler(args)));
+
+  server.registerTool(getTodosTool.name, {
+    description: getTodosTool.description,
+    inputSchema: getTodosTool.inputSchema,
+  }, typed((args) => getTodosTool.handler(args)));
+
+  server.registerTool(getEntryPointsTool.name, {
+    description: getEntryPointsTool.description,
+    inputSchema: getEntryPointsTool.inputSchema,
+  }, typed((args) => getEntryPointsTool.handler(args)));
+
+  server.registerTool(getComplexityHotspotsTool.name, {
+    description: getComplexityHotspotsTool.description,
+    inputSchema: getComplexityHotspotsTool.inputSchema,
+  }, typed((args) => getComplexityHotspotsTool.handler(args)));
+
+  server.registerTool(findUntestedSymbolsTool.name, {
+    description: findUntestedSymbolsTool.description,
+    inputSchema: findUntestedSymbolsTool.inputSchema,
+  }, typed((args) => findUntestedSymbolsTool.handler(args)));
+
+  server.registerTool(getTestCoverageMapTool.name, {
+    description: getTestCoverageMapTool.description,
+    inputSchema: getTestCoverageMapTool.inputSchema,
+  }, typed((args) => getTestCoverageMapTool.handler(args)));
+
+  server.registerTool(getTypeGraphTool.name, {
+    description: getTypeGraphTool.description,
+    inputSchema: getTypeGraphTool.inputSchema,
+  }, typed((args) => getTypeGraphTool.handler(args)));
 
   // ── MCP Resources ─────────────────────────────────────────────────────────
 

@@ -44,10 +44,16 @@ The guide explains what PureContext does, why each feature exists, and how to us
 | [Navigating a New Codebase](NAVIGATING-NEW-CODE.md) | Day one on an unfamiliar project |
 | [Finding Code](FINDING-CODE.md) | Three search modes with examples |
 | [Making Changes Safely](SAFE-CHANGES.md) | Blast radius and dependency analysis |
+| [Understanding Code Relationships](UNDERSTANDING-RELATIONSHIPS.md) | Call hierarchies, cycles, coupling, implementations |
+| [Refactoring Safely](REFACTORING-SAFELY.md) | Pre-flight checks before rename, delete, or move |
 | [Understanding Code History](CODE-HISTORY.md) | Symbol-level git history and churn |
 | [The Web UI](WEB-UI.md) | Visual graph, heatmap, symbol timeline |
 | [AI Summaries](AI-SUMMARIES.md) | Better search on undocumented codebases |
 | [Code Health & Architecture Analysis](CODE-HEALTH.md) | Quality metrics, anti-patterns, arch docs |
+| [Health Dashboards & Debt Reporting](HEALTH-DASHBOARDS.md) | Health radar, debt scores, PR health diffs |
+| [Visualizing Code Structure](VISUALIZING-CODE.md) | Mermaid/DOT diagrams, architecture snapshots |
+| [AST-Level Search](AST-SEARCH.md) | Node types, signatures, decorators, complexity |
+| [Code Intelligence](CODE-INTELLIGENCE.md) | Entry points, public API, TODOs, coverage |
 | [Using PureContext with a Team](TEAM-SETUP.md) | Shared server, enterprise setup |
 
 **Real-world workflows:**
@@ -57,6 +63,7 @@ The guide explains what PureContext does, why each feature exists, and how to us
 | [Onboarding to a New Codebase](WORKFLOW-ONBOARDING.md) | First day on a 6,000-file microservices platform |
 | [Refactoring Legacy Code](WORKFLOW-REFACTORING.md) | Replacing auth in a 6-year-old Django monolith |
 | [Reviewing a Pull Request](WORKFLOW-PR-REVIEW.md) | 40-file PR, 45 minutes, two real bugs found |
+| [Running a Tech Debt Sprint](WORKFLOW-TECH-DEBT.md) | Two-week debt reduction: assess, plan, execute, measure |
 
 → [Full guide index](USER-GUIDE.md)
 

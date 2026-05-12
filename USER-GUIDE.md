@@ -20,6 +20,10 @@ For parameter-level documentation — every tool input, output, and flag — see
 
 - [Making Changes Safely](safe-changes.md) — Blast radius analysis before touching anything, context bundles for understanding dependencies, the full pre-change workflow, and architectural violation detection
 
+- [Understanding Code Relationships](understanding-relationships.md) — Call hierarchies, class hierarchies, interface implementations, circular dependency detection, and coupling maps
+
+- [Refactoring Safely](refactoring-safely.md) — Pre-flight checks before renaming, deleting, or moving symbols. Sequenced, risk-annotated refactoring plans for structural changes.
+
 - [Understanding Code History](code-history.md) — Symbol-level git history (not file-level), churn analysis for identifying risk, ownership mapping, and PR analysis before you read a diff
 
 ---
@@ -31,6 +35,14 @@ For parameter-level documentation — every tool input, output, and flag — see
 - [AI Summaries](ai-summaries.md) — How symbol descriptions are generated, why they matter for search quality and AI accuracy, what they cost, and when to enable them
 
 - [Code Health & Architecture Analysis](code-health.md) — Quality metrics, anti-pattern detection, auto-generated architecture docs, CI enforcement, and finding refactoring opportunities before they become crises
+
+- [Health Dashboards & Debt Reporting](health-dashboards.md) — Five-axis health radar, before/after PR comparisons, and comprehensive debt reports with prioritized action items
+
+- [Visualizing Code Structure](visualizing-code.md) — Mermaid and DOT diagrams of import graphs, call graphs, class hierarchies, and dependency matrices. Architecture snapshots for tracking structural change over time.
+
+- [AST-Level Search](ast-search.md) — Find any tree-sitter node type, search by type signature pattern, find symbols by decorator, and filter by complexity thresholds
+
+- [Code Intelligence](code-intelligence.md) — Entry points, public API surface, TODO inventory, complexity hotspots, type graphs, untested symbols, and coverage mapping
 
 ---
 
@@ -49,6 +61,8 @@ Complete end-to-end examples showing how PureContext fits into real development 
 - [Refactoring Legacy Code](workflow-refactoring.md) — Replacing a custom JWT implementation in a 6-year-old Django monolith: discovery, hidden dependencies, migration planning, and verification
 
 - [Reviewing a Pull Request](workflow-pr-review.md) — A 40-file authentication migration PR: structured review in 45 minutes that found two real issues before reading most of the diff
+
+- [Running a Tech Debt Sprint](workflow-tech-debt.md) — Full lifecycle of a two-week debt reduction sprint: assessment, planning, safe execution, and proving the improvement with snapshots
 
 ---
 

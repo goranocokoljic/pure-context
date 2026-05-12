@@ -44,3 +44,5 @@ TELEMETRY.md
 .claude
 test/benchmarks/results
 dev-docs/
+PUBLISH-MANUAL.md
+reference/

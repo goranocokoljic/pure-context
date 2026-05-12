@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2026-05-13
+
+### Added
+
+**Advanced relationship analysis (Phase 28)**
+- `find_implementations` — find all concrete implementations of a TypeScript interface or abstract class; returns implementing classes with `implementedMethods` and `missingMethods` arrays compared against the interface contract
+- `get_call_hierarchy` — callers and callees of a function N levels deep as a hierarchical tree; supports `callers`, `callees`, and `both` directions; recursive calls marked `cyclic: true`
+- `get_class_hierarchy` — full inheritance tree rooted at a class, showing both ancestors and descendants; use before refactoring a base class to understand the full polymorphism surface
+- `find_cycles` — detect circular import dependencies across the repo or a subtree; returns strongly-connected components with severity rating
+- `get_coupling_map` — afferent/efferent coupling metrics and instability scores (`I = efferent / (afferent + efferent)`) for every file; highlights highest-risk refactoring candidates
+
+**Architectural visualization (Phase 29)**
+- `render_diagram` — general-purpose Mermaid or DOT dependency diagram (module, call graph, class hierarchy); output renders natively in GitHub, VS Code, and Claude
+- `render_call_graph` — specialized call graph diagram rooted at a symbol with call-graph-specific layout options
+- `render_import_graph` — file-level import graph for a directory or whole repo; nodes clustered by directory
+- `render_class_hierarchy` — class inheritance diagram in Mermaid `classDiagram` format; shows fields, methods, and inheritance/implementation relationships
+- `render_dep_matrix` — dependency matrix diagram showing coupling between modules as a grid; surfaces structural hotspots at a glance
+- `get_architecture_snapshot` — captures architectural state (file count, symbol count, module breakdown, coupling summary, health scores); take two snapshots to prove structural improvement objectively
+
+**Refactoring safety checks (Phase 30)**
+- `check_rename_safe` — pre-flight check before renaming a symbol; returns `safe` verdict and all `affectedSites` (call, import, type-reference, string-literal, comment) with file, line, column, and context snippet
+- `check_delete_safe` — pre-flight check before deleting a symbol; returns `safe: false` if anything in the repo still imports or references the symbol
+- `check_move_safe` — pre-flight check before moving a symbol to a different file; validates no import conflicts and lists all import statements that need updating
+- `plan_refactoring` — generate a sequenced, dependency-ordered plan for a structural change from a natural-language description; steps ordered so lower-risk changes happen first
+
+**Health dashboards & debt reporting (Phase 31)**
+- `health_radar` — five-axis health score (complexity, coupling, maintainability, documentation, stability), each 0–100; returns `overallHealth` score and letter grade (A–F); designed for CI health gates
+- `diff_health_radar` — compare two health radar snapshots (before/after a refactoring) with axis-by-axis deltas and regression/improvement verdicts
+- `get_debt_report` — detailed technical debt report with per-file rankings, priority tiers, worst files by each metric, specific symbols to address, and estimated effort indicators
+
+**AST-level search (Phase 32)**
+- `search_ast` — find every occurrence of a specific tree-sitter node type across all indexed files (e.g. `try_statement`, `arrow_function`, `await_expression`); returns file, line, column, and snippet
+- `search_by_signature` — search symbols by type signature pattern (regex or substring); find all functions returning `Promise<void>` or methods accepting a `Request` parameter
+- `search_by_decorator` — find all symbols annotated with a specific decorator; works for TypeScript (`@Injectable`, `@Controller`) and Python (`@app.route`, `@property`) decorators
+- `search_by_complexity` — find symbols above or below a complexity threshold; returns symbols ranked by complexity score; use before refactoring sprints or to enforce complexity budgets
+
+**Code intelligence helpers (Phase 33)**
+- `get_entry_points` — identify all runnable entry points: main functions, CLI handlers, HTTP server startups, Lambda handlers, test suites, and scripts; each result includes `kind`, `confidence`, and reason
+- `get_public_api` — all exported symbols grouped by file; use to document a library, audit what is exposed, or check for accidental exports
+- `get_todos` — find all TODO, FIXME, HACK, NOTE, and XXX comments across the repo with file, line, tag type, and comment text
+- `get_complexity_hotspots` — symbols ranked by complexity score, highest first; use to identify the worst functions before a refactoring sprint
+- `get_type_graph` — type dependency graph showing which types reference which other types, rooted at a specific type or across the whole repo; supports `uses`, `usedBy`, and `both` directions
+- `find_untested_symbols` — exported symbols with no corresponding test coverage, ranked by complexity (highest priority first); uses import-based heuristics
+- `get_test_coverage_map` — per-file coverage map showing which symbols are referenced by test files and which are not; produces `coverageRatio` per file and aggregated totals
+
+**Documentation guides**
+- `AST-SEARCH.md` — guide to AST-level search tools and tree-sitter node types
+- `CODE-INTELLIGENCE.md` — guide to code intelligence helper tools
+- `HEALTH-DASHBOARDS.md` — guide to health radar, debt reporting, and architecture snapshots
+- `REFACTORING-SAFELY.md` — guide to refactoring safety check tools and pre-flight workflows
+- `UNDERSTANDING-RELATIONSHIPS.md` — guide to relationship analysis tools (call hierarchy, class hierarchy, coupling)
+- `VISUALIZING-CODE.md` — guide to diagram rendering tools and Mermaid output
+- `WORKFLOW-TECH-DEBT.md` — end-to-end tech debt sprint workflow
+
+### Fixed
+
+- Token savings tracker: corrected cumulative savings calculation and fixed display in web UI
+- Web UI: dependency graph and repo detail pages now render correctly after token tracker refactor
+- Docker: UI workspace panel and repo list routing fixes
+
+---
+
 ## [1.1.0] - 2026-05-07
 
 ### Added

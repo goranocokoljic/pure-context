@@ -35,6 +35,31 @@ Always call `list_repos` before any code navigation. If the project is not liste
 | Get per-file quality scores (complexity, coupling) | `get_quality_metrics` |
 | Find god classes, circular deps, dead code | `detect_antipatterns` |
 | Generate an architecture overview doc | `get_architecture_doc` |
+| Find all implementations of an interface / abstract class | `find_implementations` |
+| Trace execution flow (callers / callees tree) | `get_call_hierarchy` |
+| Understand class inheritance (ancestors / descendants) | `get_class_hierarchy` |
+| Detect circular import dependencies | `find_cycles` |
+| Get per-file coupling and instability scores | `get_coupling_map` |
+| Generate a Mermaid / DOT diagram (import graph, call graph, class hierarchy) | `render_diagram` (or specialized variants) |
+| Capture an architectural snapshot for before/after comparison | `get_architecture_snapshot` |
+| Pre-flight check before renaming a symbol | `check_rename_safe` |
+| Pre-flight check before deleting a symbol | `check_delete_safe` |
+| Pre-flight check before moving a symbol to another file | `check_move_safe` |
+| Get a sequenced, risk-annotated refactoring plan | `plan_refactoring` |
+| 5-axis codebase health score (CI gate / dashboard) | `health_radar` |
+| Compare health before and after a refactoring | `diff_health_radar` |
+| Detailed debt report with per-file rankings | `get_debt_report` |
+| Find every occurrence of an AST node type (try/catch, arrow fn, etc.) | `search_ast` |
+| Find symbols matching a type signature pattern | `search_by_signature` |
+| Find all symbols with a specific decorator | `search_by_decorator` |
+| Find the most complex functions by threshold | `search_by_complexity` |
+| Identify where an application starts (main, CLI, Lambda, server) | `get_entry_points` |
+| Audit a module's exported public API surface | `get_public_api` |
+| Find all TODO / FIXME / HACK comments | `get_todos` |
+| Rank symbols by complexity score | `get_complexity_hotspots` |
+| Understand type dependency relationships | `get_type_graph` |
+| Find exported symbols with no test coverage | `find_untested_symbols` |
+| Get a per-file test coverage map | `get_test_coverage_map` |
 
 ---
 
@@ -61,6 +86,14 @@ Always call `list_repos` before any code navigation. If the project is not liste
 **10. Use `get_architecture_doc` when onboarding.** Call it early on an unfamiliar codebase to build a mental model before diving into symbols.
 
 **11. For dbt projects:** always run `dbt compile` before `index_folder`. Use `search_columns` for column lineage, `get_context_bundle` for model dependencies, and `search_symbols` with `kind: "route"` for API endpoints.
+
+**12. Always run a pre-flight check before rename/delete/move.** Call `check_rename_safe`, `check_delete_safe`, or `check_move_safe` first. If `safe: false`, resolve the listed blockers before proceeding — never bypass string-literal conflicts.
+
+**13. Before modifying an interface or base class:** call `find_implementations` to get every class that must be updated, and `get_class_hierarchy` to see the full descendant tree.
+
+**14. Use `health_radar` for quick health assessment; `get_debt_report` for actionable detail.** `health_radar` is compact (A–F grade + 5 scores); `get_debt_report` has per-file rankings and recommendations.
+
+**15. `search_ast` is for structural patterns, not symbol names.** Use it to find all try/catch blocks, all arrow functions, all JSX elements — things `search_symbols` cannot express. Node type names are case-sensitive tree-sitter names.
 
 ---
 
@@ -94,4 +127,24 @@ get_churn_metrics → get_symbol_history for changed symbols → search_symbols 
 **Architecture / code health review**
 ```
 get_quality_metrics → detect_antipatterns → get_architecture_doc (before) → [refactor] → detect_antipatterns (after)
+```
+
+**Rename / delete / move a symbol safely**
+```
+check_rename_safe / check_delete_safe / check_move_safe → [resolve blockers if safe:false] → [edit] → find_dead_code
+```
+
+**Modify an interface or base class**
+```
+find_implementations → get_class_hierarchy (descendants) → get_blast_radius → [edit] → find_implementations (verify missingMethods=[])
+```
+
+**Tech debt sprint**
+```
+health_radar → get_debt_report → get_complexity_hotspots → find_untested_symbols → find_cycles → get_architecture_snapshot (before) → [fix] → get_architecture_snapshot (after) → diff_health_radar
+```
+
+**Onboard to a new codebase**
+```
+get_entry_points → get_public_api → get_context_bundle (from entry point) → get_type_graph → get_todos → get_test_coverage_map
 ```

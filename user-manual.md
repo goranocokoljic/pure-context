@@ -19,6 +19,12 @@
 15. [Security](#15-security)
 16. [Architecture Overview](#16-architecture-overview)
 17. [Troubleshooting](#17-troubleshooting)
+18. [Advanced Relationship Analysis](#18-advanced-relationship-analysis)
+19. [Architectural Visualization](#19-architectural-visualization)
+20. [Refactoring Safety Checks](#20-refactoring-safety-checks)
+21. [Health Dashboards & Debt Reporting](#21-health-dashboards--debt-reporting)
+22. [AST-Level Search](#22-ast-level-search)
+23. [Code Intelligence Helpers](#23-code-intelligence-helpers)
 
 ---
 
@@ -33,6 +39,12 @@ It implements the **Model Context Protocol (MCP)** so it works natively with Cla
 - Framework-aware extraction: Vue, React, Nuxt, Next.js, Angular, NestJS, Express, Fastify, Django, Flask, FastAPI, Gin, Rails, Laravel, and more
 - Dependency graph: find what a symbol depends on and what depends on it
 - Semantic search: find symbols by meaning, not just keywords
+- Advanced relationship analysis: call hierarchies, class hierarchies, interface implementations, import cycles, coupling maps
+- Architectural visualization: Mermaid/DOT diagrams for call graphs, import graphs, class hierarchies, and dependency matrices
+- Refactoring safety checks: pre-flight analysis before renaming, deleting, or moving symbols
+- Health dashboards: multi-axis health radar, debt reports, and before/after diff comparisons
+- AST-level search: find any node type, signature pattern, decorator, or complexity threshold
+- Code intelligence: entry points, public API surface, TODO inventory, complexity hotspots, type graphs, and coverage mapping
 - Web UI for visual codebase exploration
 - Multi-tenant hosting for team deployments
 
@@ -1534,6 +1546,855 @@ Install Git and ensure it is on `PATH`. Verify with `git --version`.
 
 ---
 
+---
+
+## 18. Advanced Relationship Analysis
+
+Tools for understanding deep structural relationships between symbols and files.
+
+---
+
+### `find_implementations`
+
+Find all concrete implementations of a TypeScript interface or abstract class, and all method overrides for a given base method.
+
+```json
+{
+  "repoId": "a1b2c3d4e5f60001",
+  "symbolId": "abc123def456",
+  "includeAbstract": false,
+  "limit": 50
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `symbolId` | string | ID of the interface or abstract class (from `search_symbols`) |
+| `includeAbstract` | boolean | Include abstract subclasses in results (default false) |
+| `limit` | number | Max implementations to return (default 50) |
+
+**Returns:** `{ interfaceName, interfaceFilePath, implementations: [{ symbolId, name, kind, filePath, startLine, signature, summary, implementedMethods, missingMethods }], totalFound }`
+
+Each implementation records which interface methods it has implemented and which are missing.
+
+---
+
+### `get_call_hierarchy`
+
+Return the callers and callees of a function, N levels deep, as a tree structure. Unlike `get_blast_radius` (file-level, reverse-only), this tool returns a hierarchical view of the call stack.
+
+```json
+{
+  "repoId": "...",
+  "symbolId": "abc123",
+  "direction": "callees",
+  "maxDepth": 3,
+  "maxNodes": 50
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `direction` | string | `"callees"` — what this function calls; `"callers"` — what calls it; `"both"` — bidirectional |
+| `maxDepth` | number | Maximum tree depth (default 3, max 6) |
+| `maxNodes` | number | Stop expanding once this many nodes are reached (default 50) |
+| `maxTokens` | number | Soft cap on response size in tokens |
+
+**Returns:** `{ root: CallNode, direction, totalNodes, truncated }` where each `CallNode` has `children`, `callCount`, and `cyclic: true` for recursive calls.
+
+---
+
+### `get_class_hierarchy`
+
+Return the full inheritance chain for a class or interface — ancestors (extends chain upward) and/or descendants (all subclasses downward). External base classes not indexed in the repo appear as leaf nodes with `symbolId: null`.
+
+```json
+{
+  "repoId": "...",
+  "symbolId": "abc123",
+  "direction": "both",
+  "maxDepth": 5,
+  "includeInterfaces": true
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `direction` | string | `"ancestors"`, `"descendants"`, or `"both"` (default) |
+| `maxDepth` | number | Maximum traversal depth in each direction (default 5) |
+| `includeInterfaces` | boolean | Include implemented interfaces in the chain (default true) |
+
+**Returns:** `{ root: HierarchyNode, direction, totalNodes }` as a tree with `ancestors` and `descendants` sub-trees.
+
+---
+
+### `find_cycles`
+
+Detect all import cycles in the dependency graph and return them as ordered file paths. Unlike `detect_antipatterns` (which only counts cycles), this tool returns the actual cycle paths so you can resolve them.
+
+```json
+{
+  "repoId": "...",
+  "filePath": "src/auth/",
+  "maxCycles": 20,
+  "minLength": 2
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `filePath` | string | Scope to cycles involving this file/directory |
+| `maxCycles` | number | Stop after finding this many cycles (default 20) |
+| `minLength` | number | Minimum cycle length to report (default 2). Raise to skip direct mutual imports. |
+
+**Returns:** `{ cycles: [{ files: string[], length, severity }], totalFound, truncated }`
+
+Severity: `"error"` for tight 2–3-node cycles; `"warning"` for longer chains.
+
+---
+
+### `get_coupling_map`
+
+Return per-file coupling scores using Martin's instability metric. Goes beyond `get_quality_metrics` to show exactly which files each file imports and which files import it.
+
+```json
+{
+  "repoId": "...",
+  "topN": 20,
+  "minScore": 3,
+  "direction": "both"
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `filePath` | string | Scope to a single file. Omit for top-N across the whole repo. |
+| `topN` | number | Max files to return when `filePath` is omitted (default 20) |
+| `minScore` | number | Only include files whose total coupling ≥ this value |
+| `direction` | string | `"efferent"`, `"afferent"`, or `"both"` (default) |
+
+**Returns:** `{ files: [{ filePath, efferentCoupling, afferentCoupling, instability, efferentDeps, afferentDeps }] }`
+
+- `instability = efferentCoupling / (efferentCoupling + afferentCoupling)`
+- Score near `0` = stable hub (risky to change)
+- Score near `1` = leaf node (safe to change)
+
+---
+
+## 19. Architectural Visualization
+
+Generate diagrams of your codebase structure. All diagram tools support Mermaid format (renders natively in GitHub, VS Code, and Claude) and DOT format (for Graphviz).
+
+---
+
+### `render_diagram`
+
+The general-purpose diagram generator. Produces file-level import graphs, call graphs, or class hierarchy diagrams.
+
+```json
+{
+  "repoId": "...",
+  "type": "module",
+  "filePath": "src/core/",
+  "maxNodes": 30,
+  "maxDepth": 3,
+  "format": "mermaid"
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `type` | string | `"module"`/`"import"` — file-level import graph; `"call"` — call graph; `"class"` — class hierarchy |
+| `rootSymbolId` | string | Anchor for `call` and `class` diagrams (required for those types) |
+| `filePath` | string | Scope to a directory/file prefix |
+| `maxNodes` | number | Stop adding nodes at this count (default 30) |
+| `maxDepth` | number | Maximum traversal depth (default 3) |
+| `format` | string | `"mermaid"` (default) or `"dot"` |
+
+**Returns:** `{ diagram: string, format, nodeCount, edgeCount, truncated }`
+
+---
+
+### `render_call_graph`
+
+Render a call graph rooted at a symbol as a Mermaid flowchart or DOT diagram. A focused alternative to `render_diagram` with type `"call"`.
+
+```json
+{
+  "repoId": "...",
+  "symbolId": "abc123",
+  "direction": "both",
+  "maxDepth": 3,
+  "format": "mermaid"
+}
+```
+
+The root node is styled distinctly. Recursive/cyclic calls are shown as dashed arrows.
+
+---
+
+### `render_import_graph`
+
+Render a file-level import graph for a directory or the whole repo. A focused alternative to `render_diagram` with type `"module"`.
+
+```json
+{
+  "repoId": "...",
+  "filePath": "src/",
+  "maxNodes": 40,
+  "format": "mermaid"
+}
+```
+
+Files are clustered by directory. Use `filePath` to restrict the graph to a subtree.
+
+---
+
+### `render_class_hierarchy`
+
+Render a class inheritance diagram as a Mermaid `classDiagram`. A focused alternative to `render_diagram` with type `"class"`.
+
+```json
+{
+  "repoId": "...",
+  "symbolId": "abc123",
+  "direction": "both",
+  "maxDepth": 4,
+  "format": "mermaid"
+}
+```
+
+---
+
+### `render_dep_matrix`
+
+Render a dependency matrix (coupling heatmap) for the top-N most coupled files.
+
+```json
+{
+  "repoId": "...",
+  "topN": 10,
+  "filePath": "src/core/",
+  "format": "ascii"
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `topN` | number | Number of files in the matrix (default 10) |
+| `filePath` | string | Scope file selection to a directory |
+| `format` | string | `"ascii"` (default, token-efficient) or `"mermaid"` (graph diagram) |
+
+**Returns:** `{ matrix: string, files: string[], format }`
+
+Cell `[row][col]` is `1` when the row file imports the column file, `—` on the diagonal.
+
+---
+
+### `get_architecture_snapshot`
+
+Freeze the current architecture state into a named snapshot, then diff two snapshots to measure structural change over time.
+
+```json
+{
+  "repoId": "...",
+  "action": "create",
+  "label": "before-auth-refactor"
+}
+```
+
+| `action` | Description |
+|----------|-------------|
+| `"create"` | Compute and store a snapshot (fileCount, symbolCount, edgeCount, cycleCount, avgCoupling, avgComplexity) |
+| `"list"` | Return all snapshots for the repo, newest first |
+| `"diff"` | Compare two snapshots — requires `snapshotId` (base) and `compareId` (head) |
+| `"delete"` | Remove a snapshot by `snapshotId` |
+
+**Diff returns:** `{ base, head, deltas: { cycleCountDelta, avgCouplingDelta, ... }, trend }` — a negative `cycleCountDelta` means fewer cycles (improvement).
+
+**Workflow:**
+```
+1. get_architecture_snapshot(action: "create", label: "before")
+2. [make changes, re-index]
+3. get_architecture_snapshot(action: "create", label: "after")
+4. get_architecture_snapshot(action: "diff", snapshotId: "before-id", compareId: "after-id")
+```
+
+---
+
+## 20. Refactoring Safety Checks
+
+Pre-flight tools that return a verdict and an impact map before you make a destructive change.
+
+---
+
+### `check_rename_safe`
+
+Pre-flight check for renaming a symbol. Returns a verdict, all affected files, and the specific lines that need updating.
+
+```json
+{
+  "repoId": "...",
+  "symbolId": "abc123",
+  "newName": "validateCredentials",
+  "checkConflicts": true
+}
+```
+
+**Returns:** `{ safe: boolean, verdict, oldName, newName, affectedFiles: [{ filePath, line, column, changeType, snippet }], blockers: string[] }`
+
+`safe: false` when:
+- `newName` already exists in the same file (name conflict)
+- Any references are string literals (require manual updates — a rename tool can't fix these)
+
+`changeType` values: `"import"`, `"call"`, `"type-reference"`, `"string-literal"`, `"comment"`
+
+---
+
+### `check_delete_safe`
+
+Pre-flight check for deleting a symbol or an entire file.
+
+```json
+{
+  "repoId": "...",
+  "symbolId": "abc123",
+  "includeExternalRisk": true
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `symbolId` | string | Single symbol to check |
+| `filePath` | string | All symbols in a file (aggregate verdict) — use instead of `symbolId` |
+| `includeExternalRisk` | boolean | Flag exported symbols as risky (external npm consumers; default true) |
+
+**Returns:** `{ safe: boolean, verdict, risks: [{ kind, filePath, line, snippet }] }`
+
+Risk kinds: `"live-reference"`, `"exported-symbol"`, `"entry-point"`, `"test-subject"`
+
+---
+
+### `check_move_safe`
+
+Pre-flight check for moving a file to a new path. Identifies all import statements that reference the current path and reports which will break.
+
+```json
+{
+  "repoId": "...",
+  "filePath": "src/utils/auth.ts",
+  "newFilePath": "src/auth/utils.ts"
+}
+```
+
+**Returns:** `{ safe: boolean, verdict, affectedImports: [{ filePath, line, currentSpecifier, updatedSpecifier }], manualUpdatesRequired: boolean }`
+
+`safe: false` when any import uses a non-relative specifier (path alias, bare module name) that can't be automatically updated.
+
+---
+
+### `plan_refactoring`
+
+Generate a sequenced, risk-annotated refactoring plan for a symbol or file. Synthesizes the outputs of `check_rename_safe`, `check_delete_safe`, `check_move_safe`, `find_cycles`, `get_coupling_map`, `detect_antipatterns`, and `get_quality_metrics` into a prioritized action list.
+
+```json
+{
+  "repoId": "...",
+  "goal": "rename-symbol",
+  "symbolId": "abc123",
+  "newName": "validateCredentials"
+}
+```
+
+| `goal` | Description |
+|--------|-------------|
+| `"rename-symbol"` | Rename a symbol everywhere — requires `symbolId` + `newName` |
+| `"delete-symbol"` | Safely remove a symbol — requires `symbolId` |
+| `"break-cycle"` | Resolve a circular import — requires `filePath` or `symbolId` |
+| `"extract-module"` | Move a file to a new location — requires `filePath` + `newFilePath` |
+| `"reduce-coupling"` | Split a highly-coupled file — requires `filePath` or `symbolId` |
+| `"general"` | Open-ended analysis — surfaces top findings |
+
+**Returns:** `{ goal, steps: [{ order, action, target, risk, rationale }], summary, estimatedFiles, warnings }`
+
+Steps are ordered bottom-up: leaf files before hub files, reference updates before declaration changes.
+
+---
+
+## 21. Health Dashboards & Debt Reporting
+
+Tools for measuring, tracking, and comparing codebase health over time.
+
+---
+
+### `health_radar`
+
+Compute a multi-axis health radar for an indexed repo. Each axis is scored 0–100 (100 = perfectly healthy).
+
+```json
+{
+  "repoId": "...",
+  "scope": "src/core/",
+  "includeStability": true
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scope` | string | Directory prefix to narrow analysis |
+| `includeStability` | boolean | Include churn-based stability axis (requires git metadata; default true) |
+
+**Returns:**
+```json
+{
+  "axes": {
+    "complexity":      { "score": 72, "label": "Good", "rationale": "..." },
+    "coupling":        { "score": 58, "label": "Warning", "rationale": "..." },
+    "maintainability": { "score": 81, "label": "Good", "rationale": "..." },
+    "documentation":   { "score": 44, "label": "Poor", "rationale": "..." },
+    "stability":       { "score": 65, "label": "Fair", "rationale": "..." }
+  },
+  "overallHealth": 64,
+  "grade": "C",
+  "summary": { "totalFiles": 120, "symbolCount": 1840, "highRiskFiles": 7 }
+}
+```
+
+Five axes:
+- **complexity** — inverse of average/peak cyclomatic complexity
+- **coupling** — inverse of high-coupling file density
+- **maintainability** — inverse of dead-code and god-class density
+- **documentation** — percentage of symbols with non-trivial summaries
+- **stability** — inverse of churn-hotspot density (requires git metadata)
+
+---
+
+### `diff_health_radar`
+
+Compare health radar scores between two indexed repos (or two states of the same codebase). Positive delta = improvement; negative delta = regression.
+
+```json
+{
+  "baseRepoId": "main-branch-id",
+  "headRepoId": "feature-branch-id",
+  "scope": "src/"
+}
+```
+
+**Primary use cases:**
+- PR review: index `main` branch → index feature branch → compare
+- Refactoring validation: re-index before/after changes → compare
+- Cross-repo benchmarking
+
+**Returns:** `{ base, head, axes: { complexity: { base, head, delta, trend }, ... }, overallDelta, trend, regressions, improvements }`
+
+A delta ≥ +5 is a meaningful improvement; ≤ −5 is a meaningful regression.
+
+---
+
+### `get_debt_report`
+
+Generate a comprehensive technical debt report aggregating complexity, structural, maintainability, and volatility signals.
+
+```json
+{
+  "repoId": "...",
+  "scope": "src/",
+  "topN": 10,
+  "includeChurn": true
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scope` | string | Directory prefix to narrow analysis |
+| `topN` | number | Number of top debt files to return (default 10) |
+| `includeChurn` | boolean | Include churn-based volatility debt (requires git metadata; default true) |
+
+**Returns:**
+```json
+{
+  "overallDebt": 43,
+  "grade": "C",
+  "categories": {
+    "complexity":      { "score": 38, "topIssues": [...] },
+    "structural":      { "score": 61, "topIssues": [...] },
+    "maintainability": { "score": 29, "topIssues": [...] },
+    "volatility":      { "score": 44, "topIssues": [...] }
+  },
+  "topDebtFiles": [{ "filePath": "...", "score": 87, "reasons": [...] }],
+  "actionItems": [{ "priority": "high", "action": "...", "estimatedROI": "..." }]
+}
+```
+
+Debt score 0–100: higher = more debt. Use periodically for debt reviews, CI gates, and architecture planning.
+
+**Differs from `health_radar`:** Debt scores are inverted (100 = bad); adds a Documentation axis; no per-file breakdown in `health_radar`.
+
+---
+
+## 22. AST-Level Search
+
+Tools for searching source code at the structural (AST) level rather than by symbol name or text.
+
+---
+
+### `search_ast`
+
+Find every occurrence of a specific tree-sitter AST node type across all indexed files — without reading files manually.
+
+```json
+{
+  "repoId": "...",
+  "nodeType": "arrow_function",
+  "language": "typescript",
+  "filePath": "src/",
+  "limit": 50
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `nodeType` | string | Tree-sitter node type name (exact, case-sensitive) |
+| `language` | string | Restrict to a specific language handler |
+| `filePath` | string | Restrict to a file or directory prefix |
+| `limit` | number | Max results (default 50) |
+
+**Common node types:**
+
+| Language | Node Types |
+|----------|-----------|
+| TypeScript / JS | `arrow_function`, `function_declaration`, `class_declaration`, `interface_declaration`, `try_statement`, `await_expression`, `call_expression`, `import_statement`, `jsx_element`, `template_string`, `throw_statement`, `type_alias_declaration` |
+| Python | `function_definition`, `class_definition`, `for_statement`, `with_statement`, `decorated_definition`, `lambda` |
+| Rust | `function_item`, `struct_item`, `impl_item`, `match_expression`, `closure_expression`, `trait_item` |
+| Go | `function_declaration`, `method_declaration`, `go_statement`, `defer_statement`, `type_declaration`, `interface_type` |
+| Java/Kotlin | `method_declaration`, `class_declaration`, `try_statement`, `lambda_expression`, `annotation` |
+
+**Returns:** `{ matches: [{ filePath, startLine, endLine, text, nodeType }], totalFound, skippedFiles }`
+
+Note: only files backed by a WASM grammar are searched. Regex-only handlers (Terraform, Protobuf, GraphQL, etc.) are silently skipped and reported in `skippedFiles`.
+
+---
+
+### `search_by_signature`
+
+Find all symbols whose type signature matches a pattern. Operates on the stored one-line signature string — no AST re-parsing needed.
+
+```json
+{
+  "repoId": "...",
+  "pattern": "Promise<void>",
+  "mode": "contains",
+  "kind": "function",
+  "limit": 50
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `pattern` | string | Pattern to match against the signature |
+| `mode` | string | `"contains"` (default), `"startsWith"`, or `"regex"` |
+| `kind` | string | Filter by symbol kind |
+| `filePath` | string | Restrict to a file or directory prefix |
+
+**Pattern examples:**
+```
+"Promise<void>"     → all functions returning Promise<void>
+"async"             → all async functions
+"(req: Request"     → all functions accepting a Request parameter
+": string[]"        → all functions returning string[]
+"export async"      → all exported async symbols (use startsWith mode)
+```
+
+**Returns:** `{ matches: [{ ...symbol, signature }], totalFound }`
+
+---
+
+### `search_by_decorator`
+
+Find all symbols annotated with a specific decorator. Re-parses stored file content via tree-sitter to locate decorator nodes.
+
+```json
+{
+  "repoId": "...",
+  "decoratorName": "Injectable",
+  "matchMode": "exact",
+  "filePath": "src/services/"
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `decoratorName` | string | Decorator name without the `@` prefix |
+| `matchMode` | string | `"exact"` (default), `"contains"`, or `"prefix"` |
+| `filePath` | string | Restrict to a file or directory prefix |
+
+**Examples:**
+```
+decoratorName: "Injectable"              → all @Injectable classes
+decoratorName: "Controller"              → all @Controller route handlers
+decoratorName: "Column", matchMode: "prefix" → @Column, @ColumnType, etc.
+decoratorName: "test", matchMode: "contains" → anything with "test" in decorator
+```
+
+**Returns:** `{ matches: [{ ...symbol, decoratorName, decoratorArgs }], totalFound, skippedFiles }`
+
+---
+
+### `search_by_complexity`
+
+Find all symbols whose complexity metrics match a set of min/max filters. Covers six dimensions stored at index time.
+
+```json
+{
+  "repoId": "...",
+  "minCyclomaticComplexity": 8,
+  "minParamCount": 5,
+  "kind": "function",
+  "limit": 50
+}
+```
+
+**Available filters** (all optional, combined with AND):
+
+| Filter | Description |
+|--------|-------------|
+| `minCyclomaticComplexity` / `maxCyclomaticComplexity` | Branching complexity |
+| `minCognitiveComplexity` / `maxCognitiveComplexity` | Cognitive load |
+| `minLineCount` / `maxLineCount` | Function body size |
+| `minNestingDepth` / `maxNestingDepth` | Maximum nesting level |
+| `minParamCount` / `maxParamCount` | Number of parameters |
+| `minReturnCount` / `maxReturnCount` | Number of return statements |
+
+**Use cases:**
+```
+minCyclomaticComplexity: 8   → dangerously complex functions
+minParamCount: 5             → functions with too many arguments
+minLineCount: 100            → long functions to split
+minNestingDepth: 4           → deeply nested, hard-to-read code
+maxCyclomaticComplexity: 2, maxLineCount: 15  → simple utility functions
+```
+
+**Returns:** `{ matches: [{ ...symbol, metrics: { cyclomaticComplexity, cognitiveComplexity, lineCount, nestingDepth, paramCount, returnCount } }], totalFound }`
+
+---
+
+## 23. Code Intelligence Helpers
+
+Higher-level tools that answer specific questions about a codebase without requiring manual navigation.
+
+---
+
+### `get_entry_points`
+
+Identify the runnable entry points of a repository: main functions, CLI handlers, HTTP server startups, Lambda/serverless handlers, test suites, and standalone scripts.
+
+```json
+{
+  "repoId": "...",
+  "kind": "server_startup",
+  "minConfidence": "high",
+  "filePath": "src/cmd/"
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `kind` | string | Filter: `"main_function"`, `"cli_handler"`, `"server_startup"`, `"lambda_handler"`, `"test_suite"`, `"script"` |
+| `filePath` | string | Restrict to a file or directory prefix |
+| `minConfidence` | string | `"high"`, `"medium"`, or `"low"` (default: `"low"` — returns all candidates) |
+
+**Returns:** `{ entryPoints: [{ symbolId, name, kind, filePath, confidence, reason, signature }], totalFound }`
+
+**Use with:**
+- `get_context_bundle` to follow the full dependency chain from an entry point
+- `get_call_hierarchy` for a callee tree rooted at an entry point
+- `find_dead_code` to discover unreachable code relative to entry points
+
+---
+
+### `get_public_api`
+
+Return the public API surface of a repository: all exported symbols, grouped by file.
+
+```json
+{
+  "repoId": "...",
+  "filePath": "src/",
+  "kind": "function",
+  "includeMembers": false,
+  "groupByFile": true,
+  "limit": 200
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `filePath` | string | Restrict to a file or directory prefix |
+| `kind` | string | Filter by symbol kind |
+| `includeMembers` | boolean | Also include public methods of exported classes (default false) |
+| `groupByFile` | boolean | Group results by file path (default true) |
+| `limit` | number | Max symbols to return |
+
+**Returns:** `{ files: [{ filePath, exports: [{ symbolId, name, kind, signature, summary, isDefault }] }], totalExports }`
+
+A symbol is considered public when its signature begins with the `export` keyword.
+
+**Use with:**
+- `find_dead_code` to find exported symbols that nobody imports
+- `get_blast_radius` before removing an export
+
+---
+
+### `get_todos`
+
+Scan all indexed source files for comment tags and return a structured inventory.
+
+```json
+{
+  "repoId": "...",
+  "tags": ["TODO", "FIXME"],
+  "assignee": "alice",
+  "filePath": "src/",
+  "groupByFile": true,
+  "limit": 100
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `tags` | array | Tags to scan for (default: all 7 — `TODO`, `FIXME`, `HACK`, `NOTE`, `OPTIMIZE`, `BUG`, `XXX`) |
+| `filePath` | string | Restrict to a file or directory prefix |
+| `assignee` | string | Filter by assignee — matches `TODO(alice):` when `assignee: "alice"` (case-insensitive) |
+| `groupByFile` | boolean | Group results by file (default false) |
+| `limit` | number | Max results to return |
+
+**Returns:** `{ todos: [{ filePath, line, tag, assignee, text }], totalFound, byTag: { TODO: 12, FIXME: 3, ... } }`
+
+---
+
+### `get_complexity_hotspots`
+
+Aggregate per-symbol complexity metrics to the file level and return a ranked list of the files with the highest complexity concentration.
+
+```json
+{
+  "repoId": "...",
+  "scope": "src/core/",
+  "topN": 10,
+  "minComplexity": 3
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scope` | string | Restrict to a directory prefix |
+| `topN` | number | Number of hotspot files to return (default 10) |
+| `minComplexity` | number | Only count symbols with cyclomatic complexity ≥ this (default 1) |
+
+**Returns:** `{ hotspots: [{ filePath, hotspotScore, avgComplexity, maxComplexity, symbolCount, topOffenders: [{ name, kind, complexity }] }] }`
+
+`hotspotScore` is 0–100 (higher = more complex). Use this to answer "where should I focus refactoring effort?"
+
+**Differs from related tools:**
+- `get_quality_metrics` — per-symbol composite score
+- `search_by_complexity` — threshold/range filter for individual symbols
+- `get_debt_report` — broader tech-debt summary including structural issues
+
+---
+
+### `get_type_graph`
+
+Return the type dependency graph for a repository, showing how interfaces, classes, type aliases, and enums relate to each other through inheritance (`extends`), implementation (`implements`), and usage.
+
+```json
+{
+  "repoId": "...",
+  "rootSymbol": "UserRepository",
+  "maxDepth": 3,
+  "scope": "src/domain/",
+  "format": "mermaid"
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `rootSymbol` | string | Name or ID of a type to root the graph at. Omit to return the full graph for the scope. |
+| `maxDepth` | number | Maximum traversal depth from `rootSymbol` (default 3) |
+| `scope` | string | Restrict to a directory prefix |
+| `includeExternal` | boolean | Include types that extend non-indexed base classes (default false) |
+| `format` | string | `"json"` (default) or `"mermaid"` |
+
+**Returns (`json`):** `{ nodes: [{ id, name, kind, filePath }], edges: [{ source, target, relationship }] }` where `relationship` is `"extends"`, `"implements"`, or `"uses"`.
+
+**Returns (`mermaid`):** A `classDiagram` block ready to paste into any Mermaid renderer.
+
+**Differs from related tools:**
+- `get_class_hierarchy` — single-root ancestor/descendant tree for one class
+- `find_implementations` — all concrete implementations of one interface
+- `get_type_graph` — full multi-root graph of all type relationships in a scope
+
+---
+
+### `find_untested_symbols`
+
+Identify symbols that do not appear to have test coverage by scanning test files for references to each symbol name. Returns a prioritized list ranked by cyclomatic complexity.
+
+```json
+{
+  "repoId": "...",
+  "scope": "src/services/",
+  "kinds": ["function", "method"],
+  "minComplexity": 2,
+  "limit": 50
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scope` | string | Restrict to a directory prefix |
+| `kinds` | array | Symbol kinds to check (default: `function`, `method`, `class`, `interface`, `middleware`, `route`) |
+| `minComplexity` | number | Only include symbols with cyclomatic complexity ≥ this (default 1) |
+| `limit` | number | Max symbols to return |
+
+**Returns:** `{ untestedSymbols: [{ symbolId, name, kind, filePath, complexity, priority }], totalUntested, totalChecked }`
+
+Priority: `"high"` (complexity ≥ 5 or ≥ 20 lines), `"medium"` (complexity ≥ 2 or ≥ 8 lines), `"low"` (all others).
+
+**Detection strategy:** Static heuristic — a symbol's name must appear as an identifier in at least one test file. Not a coverage-report parser; use `get_test_coverage_map` for line-level accuracy.
+
+---
+
+### `get_test_coverage_map`
+
+Parse a coverage JSON report (Istanbul/NYC or V8/c8 format) and map line-level coverage data to symbols in the indexed codebase.
+
+```json
+{
+  "repoId": "...",
+  "coveragePath": "/project/coverage/coverage-final.json",
+  "scope": "src/",
+  "includeUncoveredOnly": false
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `coveragePath` | string | Absolute path to the coverage JSON file |
+| `scope` | string | Restrict to a directory prefix |
+| `includeUncoveredOnly` | boolean | Return only uncovered symbols (default false) |
+| `format` | string | Auto-detected: `"istanbul"` or `"v8"` |
+
+**Returns:** `{ files: [{ filePath, statements, functions, branches, lines, symbols: [{ name, kind, covered, callCount }] }], summary: { totalSymbols, coveredSymbols, coveragePercent } }`
+
+**Supported report formats:**
+- **Istanbul/NYC:** `coverage-final.json` produced by `nyc`, `jest --coverage`, `vitest --coverage.reporter=json`, `c8`
+- **V8:** Array of `{ url, functions }` objects produced by `node --experimental-vm-modules` or `c8 --reporter=json`
+
+**Differs from `find_untested_symbols`:** This tool requires a coverage file and delivers line-level accuracy. `find_untested_symbols` uses name-based heuristics and needs no coverage file.
+
+---
+
 ## Quick Reference Card
 
 ```
@@ -1549,16 +2410,57 @@ purecontext-mcp config --init
 # Start HTTP server with Web UI
 purecontext-mcp --transport http --port 3000
 
-# In Claude Code — typical workflow
-index_folder       → index a project
-search_symbols     → find code by name or kind
-get_file_outline   → see all symbols in a file
-get_symbol_source  → retrieve a symbol's source
-get_context_bundle → symbol + what it depends on
-get_blast_radius   → symbol + what depends on it
-search_text        → grep-style text search
-search_semantic    → meaning-based search
-find_dead_code     → unused exports
-get_layer_violations → architecture rule checking
-get_savings_stats  → view token savings
+# In Claude Code — core navigation
+index_folder           → index a project
+search_symbols         → find code by name or kind
+get_file_outline       → see all symbols in a file
+get_symbol_source      → retrieve a symbol's source
+get_context_bundle     → symbol + what it depends on
+get_blast_radius       → symbol + what depends on it
+search_text            → grep-style text search
+search_semantic        → meaning-based search
+find_dead_code         → unused exports
+get_layer_violations   → architecture rule checking
+get_savings_stats      → view token savings
+
+# Advanced relationship analysis (Phase 28)
+find_implementations   → all classes implementing an interface
+get_call_hierarchy     → callers/callees tree, N levels deep
+get_class_hierarchy    → full inheritance chain (up and down)
+find_cycles            → all import cycles with file paths
+get_coupling_map       → per-file coupling scores (Martin's instability)
+
+# Architectural visualization (Phase 29)
+render_diagram         → Mermaid/DOT: import graph, call graph, class diagram
+render_call_graph      → call graph rooted at a symbol
+render_import_graph    → file-level import graph for a directory
+render_class_hierarchy → class inheritance diagram
+render_dep_matrix      → dependency matrix heatmap (ASCII or Mermaid)
+get_architecture_snapshot → snapshot + diff of architecture state over time
+
+# Refactoring safety checks (Phase 30)
+check_rename_safe      → pre-flight: rename a symbol everywhere
+check_delete_safe      → pre-flight: delete a symbol or file
+check_move_safe        → pre-flight: move a file to a new path
+plan_refactoring       → sequenced, risk-annotated refactoring plan
+
+# Health dashboards & debt reporting (Phase 31)
+health_radar           → 5-axis health score (0–100) with letter grade
+diff_health_radar      → compare health between two repo states (PR review)
+get_debt_report        → comprehensive debt report with action items
+
+# AST-level search (Phase 32)
+search_ast             → find any tree-sitter node type across all files
+search_by_signature    → find symbols by type signature pattern
+search_by_decorator    → find all symbols with a specific decorator
+search_by_complexity   → find symbols matching complexity thresholds
+
+# Code intelligence helpers (Phase 33)
+get_entry_points       → find main functions, CLI handlers, Lambda, server startups
+get_public_api         → all exported symbols grouped by file
+get_todos              → TODO/FIXME/HACK/BUG inventory from comment tags
+get_complexity_hotspots → file-level complexity ranking for refactoring focus
+get_type_graph         → full type/interface dependency graph (Mermaid or JSON)
+find_untested_symbols  → symbols with no test coverage, ranked by complexity
+get_test_coverage_map  → map Istanbul/V8 coverage JSON to indexed symbols
 ```
