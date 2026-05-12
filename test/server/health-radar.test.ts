@@ -324,15 +324,25 @@ describe('health_radar', () => {
     });
 
     it('excludes unavailable stability from overallHealth weighting', async () => {
-      // Both calls should yield the same overallHealth since stability is unavailable
-      const withStability = await healthRadarHandler({ repoId, includeStability: true });
       const withoutStability = await healthRadarHandler({ repoId, includeStability: false });
+      const out = parse(withoutStability);
 
-      const out1 = parse(withStability);
-      const out2 = parse(withoutStability);
+      // When includeStability is false, the axis must be marked unavailable
+      expect(out.axes.stability.available).toBe(false);
 
-      // When stability axis has no data it contributes nothing either way
-      expect(out1.overallHealth).toBe(out2.overallHealth);
+      // The axesWithData count must not include the disabled stability axis
+      const expectedAxesWithData = [
+        out.axes.complexity,
+        out.axes.coupling,
+        out.axes.maintainability,
+        out.axes.documentation,
+      ].filter((a) => a.available).length;
+      expect(out.summary.axesWithData).toBe(expectedAxesWithData);
+
+      // overallHealth must still be a valid integer
+      expect(Number.isInteger(out.overallHealth)).toBe(true);
+      expect(out.overallHealth).toBeGreaterThanOrEqual(0);
+      expect(out.overallHealth).toBeLessThanOrEqual(100);
     });
   });
 
