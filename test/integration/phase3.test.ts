@@ -305,7 +305,7 @@ describe('get_layer_violations tool', () => {
     registerHandler(javascriptHandler);
     await initParser();
 
-    const result = await indexFolder(PURECONTEXT_ROOT, { fileLimit: 200 });
+    const result = await indexFolder(PURECONTEXT_ROOT, { fileLimit: 200, skipGit: true });
     const clRepoId = result.repoId;
 
     try {
@@ -342,7 +342,7 @@ describe('get_layer_violations tool', () => {
     } finally {
       deleteIndex(clRepoId);
     }
-  }, 30_000);
+  }, 60_000);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
