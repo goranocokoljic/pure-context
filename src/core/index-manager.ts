@@ -339,7 +339,7 @@ export async function indexFolder(
   // ── 10f. Git metadata capture ─────────────────────────────────────────────
   // Runs after file content is indexed so git metadata is additive; failures
   // never abort indexing.  Skipped silently for non-git directories.
-  if (toProcess.length > 0 && await isGitRepo(absRoot)) {
+  if (toProcess.length > 0 && !options.skipGit && await isGitRepo(absRoot)) {
     logger.info(`Capturing git metadata for ${toProcess.length} file(s)`);
 
     // Bounded concurrency — avoid spawning hundreds of git processes at once.

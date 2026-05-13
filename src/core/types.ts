@@ -145,6 +145,11 @@ export interface IndexOptions {
    * Pass an empty array to disable all providers.
    */
   providers?: ContextProvider[];
+  /**
+   * Skip git metadata capture entirely for this index run.
+   * Useful in tests that need a repo indexed without any git history.
+   */
+  skipGit?: boolean;
 }
 
 export interface IndexResult {
