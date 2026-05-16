@@ -41,6 +41,81 @@ function getFileStem(filePath: string): string {
   return dot > 0 ? base.slice(0, dot) : base;
 }
 
+/**
+ * Return lowercase split tokens for a symbol name, for inclusion in the
+ * FTS5 content field alongside the original name.
+ *
+ * FTS5's unicode61 tokenizer treats "FrontController" as a single token,
+ * making partial-word matches like "controller" impossible. By appending
+ * the split parts ("front controller") to the FTS5 document, we enable
+ * sub-identifier lookups without changing the tokenizer configuration.
+ *
+ * Handles three cases:
+ *  - Pure camelCase/PascalCase ("FrontController" → "front controller")
+ *  - Hybrid snake_case with camelCase segments ("CIR_FrontController" →
+ *    "front controller"). FTS5 already splits on the underscore, but the
+ *    individual segments ("frontcontroller") remain opaque tokens.
+ *  - Simple snake_case ("get_user_by_id") — no expansion needed since FTS5
+ *    splits all segments into individual lowercase words already.
+ *
+ * Returns an empty string when no expansion is needed.
+ */
+function splitNameForFts(name: string): string {
+  // All-caps acronym (MCP, HTTP, URL) — no camelCase boundary to detect.
+  if (/^[A-Z\d]+$/.test(name)) return '';
+
+  if (name.includes('_')) {
+    // For snake_case names: FTS5 already splits on underscores, so plain
+    // lowercase segments ("get", "user") don't need re-indexing.
+    // BUT segments that are themselves camelCase (e.g. "FrontController" in
+    // "CIR_FrontController") are treated as a single FTS5 token and must be
+    // split explicitly so that "front" and "controller" become searchable.
+    const parts: string[] = [];
+    for (const seg of name.split('_')) {
+      if (seg.length < 2) continue;
+      if (seg === seg.toLowerCase()) continue; // plain lowercase — FTS5 handles it
+      if (/^[A-Z\d]+$/.test(seg)) continue;   // all-caps acronym segment (CIR, HTTP)
+      const camelParts = splitCamelParts(seg);
+      if (camelParts.length > 1) parts.push(...camelParts);
+    }
+    if (parts.length === 0) return '';
+    return [...new Set(parts)].join(' ');
+  }
+
+  // Pure camelCase / PascalCase
+  const parts = splitCamelParts(name);
+  if (parts.length <= 1) return '';
+  return parts.join(' ');
+}
+
+/**
+ * Split a single camelCase or PascalCase token into lowercase word parts.
+ * Returns the original (lowercased) token as a single-element array when no
+ * split boundaries are detected (e.g. all-caps acronyms, single words).
+ */
+function splitCamelParts(token: string): string[] {
+  const spaced = token
+    .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+  return spaced.split(' ').filter((t) => t.length >= 2).map((t) => t.toLowerCase());
+}
+
+/**
+ * Build the FTS5 content string for a symbol.
+ *
+ * Includes:
+ *  - Original name (e.g. "FrontController")
+ *  - CamelCase-split name parts (e.g. "front controller") — enables partial-word search
+ *  - File stem (e.g. "UserController")
+ *  - Full signature and summary
+ *  - Body snippet (first ~200 bytes of function body, when available)
+ */
+function buildFtsContent(s: SymbolRecord): string {
+  return [s.name, splitNameForFts(s.name), getFileStem(s.filePath), s.signature, s.summary, s.bodySnippet ?? '']
+    .filter(Boolean)
+    .join(' ');
+}
+
 function rowToSymbol(row: DbSymbolRow): SymbolRecord {
   const sym: SymbolRecord = {
     id: row.id,
@@ -118,7 +193,7 @@ export function insertSymbols(
         });
         // Keep FTS5 index in sync
         delFts.run(s.id, repoId);
-        insFts.run(s.id, repoId, `${s.name} ${getFileStem(s.filePath)} ${s.signature} ${s.summary}`);
+        insFts.run(s.id, repoId, buildFtsContent(s));
       } catch (err) {
         throw new StorageError(`Failed to insert symbol "${s.name}"`, 'insertSymbols', err);
       }
@@ -289,7 +364,7 @@ export function upsertFtsSymbol(
   db.prepare('DELETE FROM fts_symbols WHERE symbol_id = ? AND repo_id = ?').run(symbol.id, repoId);
   db.prepare(
     'INSERT INTO fts_symbols (symbol_id, repo_id, content) VALUES (?, ?, ?)',
-  ).run(symbol.id, repoId, `${symbol.name} ${getFileStem(symbol.filePath)} ${symbol.signature} ${symbol.summary}`);
+  ).run(symbol.id, repoId, buildFtsContent(symbol));
 }
 
 /**
@@ -310,7 +385,7 @@ export function bulkUpsertFtsSymbols(
   const upsert = db.transaction((rows: SymbolRecord[]) => {
     for (const s of rows) {
       del.run(s.id, repoId);
-      ins.run(s.id, repoId, `${s.name} ${getFileStem(s.filePath)} ${s.signature} ${s.summary}`);
+      ins.run(s.id, repoId, buildFtsContent(s));
     }
   });
 

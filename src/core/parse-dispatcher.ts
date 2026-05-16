@@ -84,11 +84,26 @@ export async function parseFile(source: Buffer, handler: LanguageHandler): Promi
   const language = await loadLanguage(grammarPath);
   sharedParser.setLanguage(language);
 
-  // Pass a callback so tree-sitter operates on the raw Buffer bytes.
-  // Node startIndex/endIndex are byte offsets into the original source Buffer.
-  const tree = sharedParser.parse((startByte: number): string | null => {
-    if (startByte >= source.length) return null;
-    return source.toString('utf8', startByte);
+  // Decode the buffer once to a JS string for character-indexed parsing.
+  //
+  // web-tree-sitter's callback mode advances its internal cursor by the
+  // JavaScript character count of each returned chunk, NOT by byte count.
+  // For files containing multibyte UTF-8 sequences (e.g. accented letters,
+  // CJK, emoji), this means the WASM cursor is a CHARACTER index, not a byte
+  // offset. The callback must therefore also use character indices so that
+  // multi-chunk reads (triggered during complex grammar parsing, e.g. PHP
+  // qualified namespaces) return the correct text.
+  //
+  // Consequence: node.startIndex / node.endIndex are JavaScript CHARACTER
+  // indices into source.toString('utf8'), NOT raw byte offsets.
+  // Always extract node text via sourceStr.slice(node.startIndex, node.endIndex)
+  // — NEVER source.toString('utf8', startIndex, endIndex), which treats
+  // character indices as byte offsets and produces garbled text for multibyte
+  // files.
+  const sourceStr = source.toString('utf8');
+  const tree = sharedParser.parse((startIndex: number): string | null => {
+    if (startIndex >= sourceStr.length) return null;
+    return sourceStr.slice(startIndex);
   });
 
   return tree;

@@ -29,7 +29,9 @@ export type SymbolKind =
   | 'signal'     // Django signals, framework event emitters
   // Phase 6 additions
   | 'namespace'  // C++ named namespace; PHP namespace (retroactive enrichment); Kotlin package object
-  | 'widget';    // Flutter StatelessWidget / StatefulWidget subclasses
+  | 'widget'     // Flutter StatelessWidget / StatefulWidget subclasses
+  // Phase 36 additions
+  | 'property';  // PHP class property declarations (public/protected instance variables)
 
 // ─── Core records ─────────────────────────────────────────────────────────────
 
@@ -58,6 +60,12 @@ export interface SymbolRecord {
   frameworkMeta?: Record<string, unknown>;
   /** Code quality metrics — populated at index time for functions, methods, and classes */
   metrics?: ComplexityMetrics;
+  /**
+   * First ~200 chars of the symbol's body, stripped of syntax noise.
+   * Populated by language handlers at index time; not stored in the symbols table.
+   * Used only to enrich FTS content so natural-language queries can match body words.
+   */
+  bodySnippet?: string;
 }
 
 export interface ImportRecord {

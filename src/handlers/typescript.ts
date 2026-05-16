@@ -24,8 +24,8 @@ function makeId(filePath: string, name: string, kind: SymbolKind): string {
 
 // ─── Signature building ───────────────────────────────────────────────────────
 
-function buildSignature(node: SyntaxNode, source: Buffer): string {
-  let endByte = node.endIndex;
+function buildSignature(node: SyntaxNode, sourceStr: string): string {
+  let endChar = node.endIndex;
 
   // If this is an export_statement, unwrap to the inner declaration before
   // searching for a body node so we don't miss class_body / statement_block.
@@ -35,10 +35,12 @@ function buildSignature(node: SyntaxNode, source: Buffer): string {
       : node;
 
   const bodyNode = findBodyNode(declNode);
-  if (bodyNode) endByte = bodyNode.startIndex;
+  if (bodyNode) endChar = bodyNode.startIndex;
 
-  return source
-    .toString('utf8', node.startIndex, endByte)
+  // node.startIndex / endIndex are JavaScript character indices (not byte offsets)
+  // because web-tree-sitter callback mode advances its cursor by char count.
+  return sourceStr
+    .slice(node.startIndex, endChar)
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120);
@@ -97,13 +99,31 @@ function getChildText(node: SyntaxNode, sourceStr: string, ...types: string[]): 
   return '';
 }
 
+// ─── Body snippet extraction ──────────────────────────────────────────────────
+
+/**
+ * Extract the first ~200 chars of a function/method body as plain searchable text.
+ * Skips the opening brace and normalises whitespace so body tokens land in FTS.
+ */
+function extractBodySnippet(bodyNode: SyntaxNode, sourceStr: string): string {
+  // Skip the opening '{' (+1 char); grab up to 600 raw chars for normalisation headroom
+  // node.startIndex / endIndex are character indices (not byte offsets)
+  const start = bodyNode.startIndex + 1;
+  const end = Math.min(start + 600, bodyNode.endIndex - 1);
+  if (start >= end) return '';
+  return sourceStr
+    .slice(start, end)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
+}
+
 // ─── Symbol extraction ────────────────────────────────────────────────────────
 
 function processDeclaration(
   declNode: SyntaxNode,
   outerNode: SyntaxNode,   // export_statement if exported, same as declNode otherwise
-  source: Buffer,
-  sourceStr: string,       // source.toString('utf8') — for character-indexed text extraction
+  sourceStr: string,       // source.toString('utf8') — character-indexed
   filePath: string,
   symbols: SymbolRecord[],
   tsOnly: boolean,
@@ -113,6 +133,7 @@ function processDeclaration(
       const name = getChildText(declNode, sourceStr, 'identifier');
       if (!name) break;
       const summary = extractDocstring(declNode) ?? '';
+      const fnBody = findBodyNode(declNode);
       symbols.push({
         id: makeId(filePath, name, 'function'),
         name,
@@ -120,8 +141,9 @@ function processDeclaration(
         filePath,
         startByte: outerNode.startIndex,
         endByte: outerNode.endIndex,
-        signature: buildSignature(outerNode, source),
+        signature: buildSignature(outerNode, sourceStr),
         summary,
+        ...(fnBody ? { bodySnippet: extractBodySnippet(fnBody, sourceStr) } : {}),
       });
       break;
     }
@@ -138,7 +160,7 @@ function processDeclaration(
         filePath,
         startByte: outerNode.startIndex,
         endByte: outerNode.endIndex,
-        signature: buildSignature(outerNode, source),
+        signature: buildSignature(outerNode, sourceStr),
         summary,
       });
       // Extract methods from class_body
@@ -152,6 +174,7 @@ function processDeclaration(
             const methodDoc = member.previousNamedSibling?.type === 'comment'
               ? extractDocstring(member)
               : null;
+            const methodBody = findBodyNode(member);
             symbols.push({
               id: makeId(filePath, qualified, 'method'),
               name: qualified,
@@ -159,8 +182,9 @@ function processDeclaration(
               filePath,
               startByte: member.startIndex,
               endByte: member.endIndex,
-              signature: buildSignature(member, source),
+              signature: buildSignature(member, sourceStr),
               summary: methodDoc ?? '',
+              ...(methodBody ? { bodySnippet: extractBodySnippet(methodBody, sourceStr) } : {}),
             });
           }
         }
@@ -177,6 +201,15 @@ function processDeclaration(
         const hasArrow = child.children.some((c) => c.type === 'arrow_function');
         const kind: SymbolKind = hasArrow ? 'function' : 'const';
         const summary = extractDocstring(declNode) ?? '';
+        // For arrow functions, try to find a block body for the snippet
+        let arrowBodySnippet: string | undefined;
+        if (hasArrow) {
+          const arrowNode = child.children.find((c) => c.type === 'arrow_function');
+          if (arrowNode) {
+            const arrowBody = arrowNode.children.find((c) => BODY_NODE_TYPES.has(c.type));
+            if (arrowBody) arrowBodySnippet = extractBodySnippet(arrowBody, sourceStr);
+          }
+        }
         symbols.push({
           id: makeId(filePath, name, kind),
           name,
@@ -184,8 +217,9 @@ function processDeclaration(
           filePath,
           startByte: outerNode.startIndex,
           endByte: outerNode.endIndex,
-          signature: buildSignature(outerNode, source),
+          signature: buildSignature(outerNode, sourceStr),
           summary,
+          ...(arrowBodySnippet ? { bodySnippet: arrowBodySnippet } : {}),
         });
       }
       break;
@@ -202,7 +236,7 @@ function processDeclaration(
         filePath,
         startByte: outerNode.startIndex,
         endByte: outerNode.endIndex,
-        signature: buildSignature(outerNode, source),
+        signature: buildSignature(outerNode, sourceStr),
         summary: extractDocstring(declNode) ?? '',
       });
       break;
@@ -219,7 +253,7 @@ function processDeclaration(
         filePath,
         startByte: outerNode.startIndex,
         endByte: outerNode.endIndex,
-        signature: buildSignature(outerNode, source),
+        signature: buildSignature(outerNode, sourceStr),
         summary: extractDocstring(declNode) ?? '',
       });
       break;
@@ -236,7 +270,7 @@ function processDeclaration(
         filePath,
         startByte: outerNode.startIndex,
         endByte: outerNode.endIndex,
-        signature: buildSignature(outerNode, source),
+        signature: buildSignature(outerNode, sourceStr),
         summary: extractDocstring(declNode) ?? '',
       });
       break;
@@ -253,13 +287,13 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string, tsOnly: bo
       // Find the declaration inside, skipping export/default keywords
       for (const child of node.children) {
         if (!SKIP_IN_EXPORT.has(child.type)) {
-          processDeclaration(child, node, source, sourceStr, filePath, symbols, tsOnly);
+          processDeclaration(child, node, sourceStr, filePath, symbols, tsOnly);
           break;
         }
       }
     } else {
       // Also index non-exported top-level declarations (useful for navigation)
-      processDeclaration(node, node, source, sourceStr, filePath, symbols, tsOnly);
+      processDeclaration(node, node, sourceStr, filePath, symbols, tsOnly);
     }
   }
 

@@ -10,16 +10,27 @@
  *  100 — exact name match (case-insensitive)
  *   60 — name starts with query
  *   40 — name contains query as substring
- *   30 — all query words appear in name
- *   20 — any query word is exact name match
- *   10 — any query word appears in name (per word)
+ *   30 — all query words match a word-boundary name part
+ *   20 — any query word matches a word-boundary name part
+ *   10 — each query word that matches a word-boundary name part
  *    8 — query phrase in signature
  *    2 — any query word in signature (per word)
  *    5 — query phrase in summary
  *    1 — any query word in summary (per word)
+ *
+ * Query word extraction:
+ *  - Hyphenated tokens split ("front-end" → "front", "end")
+ *  - camelCase and snake_case tokens split into components
+ *  - English stop words removed
+ *  - Inflectional suffixes stripped to add stem variants:
+ *      -s  (plural)     "models"     → "model"
+ *      -ing (gerund)    "building"   → "build"
+ *      -ed  (past)      "updated"    → "update" and "updat"
+ *      -tion (nominal)  "pagination" → "paginat"
  */
 
 import type { SymbolRecord } from '../types.js';
+import { isStopWord } from './query-preprocessor.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -111,19 +122,27 @@ function score(
     matchReason = 'name_contains';
   }
 
-  // ── Word-overlap rules (always additive; update matchReason if not yet set) ─
+  // ── Word-overlap rules (word-boundary matching against split name parts) ────
+  //
+  // We split the symbol name into its constituent word-boundary parts
+  // (camelCase + snake_case + namespace separators) and check query words
+  // against those parts exactly.  This is more precise than substring
+  // matching: query word "model" matches the "model" part of "CIR_Model" but
+  // NOT the "models" namespace prefix in "models\\Article_base".
 
   let wordOverlap = 0;
 
   if (queryWords.length > 0) {
-    if (queryWords.every((w) => nameLower.includes(w))) {
-      wordOverlap += 30;
+    const nameParts = splitNameParts(symbol.name);
+    const partExact = (w: string): boolean => nameParts.some((p) => p === w);
+
+    if (queryWords.every(partExact)) {
+      wordOverlap += 30; // all query words match name parts
     }
-    if (queryWords.some((w) => nameLower === w)) {
-      wordOverlap += 20;
+    if (queryWords.some(partExact)) {
+      wordOverlap += 20; // at least one query word matches a name part
     }
-    const wordsInName = queryWords.filter((w) => nameLower.includes(w)).length;
-    wordOverlap += wordsInName * 10;
+    wordOverlap += queryWords.filter(partExact).length * 10; // per-word bonus
 
     if (wordOverlap > 0) {
       total += wordOverlap;
@@ -161,28 +180,126 @@ function score(
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Extract a deduplicated set of lowercase search terms from the raw query.
+ * Split a symbol name into word-boundary parts for precise matching.
  *
- * For camelCase/snake_case identifiers the component words are included so
- * scoring works on both the full token and its parts.
+ * Handles namespace separators (\\, ::), snake_case underscores, and
+ * camelCase/PascalCase boundaries.  Parts shorter than 2 characters are
+ * excluded.
  *
  * Examples:
- *   'indexFolder'      → ['indexfolder', 'index', 'folder']
- *   'blast radius'     → ['blast', 'radius']
- *   'get_symbol_source'→ ['get_symbol_source', 'get', 'symbol', 'source']
+ *   'CIR_Model'                        → ['cir', 'model']
+ *   'Homepage_model::getSettings'      → ['homepage', 'model', 'get', 'settings']
+ *   'models\\Article_base'             → ['models', 'article', 'base']
+ *   'CIR_FrontController'              → ['cir', 'front', 'controller']
+ *   'CI_DB_query_builder::_insert'     → ['ci', 'db', 'query', 'builder', 'insert']
+ */
+function splitNameParts(name: string): string[] {
+  const parts: string[] = [];
+  // Split on namespace/method-call separators (\ and :)
+  for (const segment of name.split(/[\\:]+/)) {
+    // Split each segment on underscores
+    for (const subSeg of segment.split('_').filter(Boolean)) {
+      // camelCase / PascalCase split within each snake_case segment
+      const camelParts = subSeg
+        .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+        .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+        .split(' ')
+        .map((p) => p.toLowerCase())
+        .filter((p) => p.length >= 2);
+      parts.push(...camelParts);
+    }
+  }
+  return parts;
+}
+
+/**
+ * Add inflectional suffix stems of `word` to `set`.
+ *
+ * Adding stems (rather than replacing the original word) means both the
+ * inflected form and the stem are available for matching — the inflected form
+ * matches index tokens that include the suffix; the stem matches code symbol
+ * parts that use the base form.
+ *
+ * Suffixes handled:
+ *   -s     (plural / 3rd-person)   "models"     → "model"
+ *   -ing   (gerund)                "building"   → "build"
+ *   -ed    (past tense)            "updated"    → "update" + "updat"
+ *                                  "matched"    → "matche" + "match"
+ *   -tion  (nominalisation)        "pagination" → "paginat"
+ *
+ * For -ed we add both the e-drop form (strip only -d) and the regular form
+ * (strip -ed) so that both "update" (code symbol) and "match" are covered
+ * regardless of the inflection pattern.
+ */
+function addStemsOf(word: string, set: Set<string>): void {
+  // -tion: "pagination" → "paginat" (minimum total length 7 to avoid "on" → "")
+  if (word.length > 6 && word.endsWith('tion')) {
+    const s = word.slice(0, -4);
+    if (s.length >= 2) set.add(s);
+    return;
+  }
+  // -ing: "building" → "build" (minimum total length 6 to avoid "ring" → "r")
+  if (word.length > 5 && word.endsWith('ing')) {
+    const s = word.slice(0, -3);
+    if (s.length >= 2) set.add(s);
+    return;
+  }
+  // -ed: add both e-drop ("updated"→"update") and regular strip ("matched"→"match")
+  // The e-drop form may produce noise ("matche") but it won't match real symbol parts.
+  if (word.length > 4 && word.endsWith('ed')) {
+    const dStem = word.slice(0, -1);   // strip -d  : "updated"→"update", "matched"→"matche"
+    const edStem = word.slice(0, -2);  // strip -ed : "updated"→"updat",  "matched"→"match"
+    if (dStem.length >= 2) set.add(dStem);
+    if (edStem.length >= 2 && edStem !== dStem) set.add(edStem);
+    return;
+  }
+  // -s: "models"→"model", "records"→"record" (skip -ss endings like "class")
+  if (word.length > 3 && word.endsWith('s') && !word.endsWith('ss')) {
+    const s = word.slice(0, -1);
+    if (s.length >= 2) set.add(s);
+  }
+}
+
+/**
+ * Extract a deduplicated set of lowercase search terms from the raw query.
+ *
+ * Processing pipeline:
+ *  1. Split on whitespace AND hyphens ("front-end" → "front", "end").
+ *  2. Discard English stop words.
+ *  3. Add inflectional stem variants via addStemsOf.
+ *  4. For snake_case tokens split on underscores and repeat steps 2-3.
+ *  5. For camelCase tokens split on case boundaries and repeat steps 2-3.
+ *
+ * Examples:
+ *   'indexFolder'          → ['indexfolder', 'index', 'folder']
+ *   'blast radius'         → ['blast', 'radius']
+ *   'get_symbol_source'    → ['get_symbol_source', 'get', 'symbol', 'source']
+ *   'models'               → ['models', 'model']
+ *   'updated homepage'     → ['updated', 'update', 'updat', 'homepage']
+ *   'front-end controller' → ['front', 'end', 'controller']
  */
 function extractQueryWords(raw: string): string[] {
   const words = new Set<string>();
 
-  for (const part of raw.split(/\s+/).filter(Boolean)) {
+  // Split on both whitespace and hyphens so "front-end" → ["front", "end"]
+  for (const part of raw.split(/[\s-]+/).filter(Boolean)) {
     const lower = part.toLowerCase();
+    // Skip English function words — they never appear in code symbol names and
+    // inflate the "all words in name" (30-pt) and per-word (10-pt) scoring
+    // rules, making the 30-pt bonus unachievable for any real symbol.
+    if (isStopWord(lower)) continue;
+    if (lower.length < 2) continue;
     words.add(lower);
+    addStemsOf(lower, words);
 
     if (part.includes('_')) {
       // snake_case — split on underscores
       for (const seg of part.split('_')) {
         const s = seg.toLowerCase();
-        if (s.length >= 2) words.add(s);
+        if (s.length >= 2 && !isStopWord(s)) {
+          words.add(s);
+          addStemsOf(s, words);
+        }
       }
     } else {
       // camelCase — split on case boundaries using the raw (cased) token
@@ -194,7 +311,12 @@ function extractQueryWords(raw: string): string[] {
         .filter((s) => s.length >= 2);
 
       if (parts.length > 1) {
-        for (const s of parts) words.add(s);
+        for (const s of parts) {
+          if (!isStopWord(s)) {
+            words.add(s);
+            addStemsOf(s, words);
+          }
+        }
       }
     }
   }

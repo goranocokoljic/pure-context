@@ -9,7 +9,7 @@ import { createEmbeddingProvider } from '../../semantic/embedding-provider.js';
 import { VectorStore } from '../../semantic/vector-store.js';
 import { HybridSearcher } from '../../semantic/hybrid-search.js';
 import { logger } from '../../core/logger.js';
-import { preprocessQuery } from '../../core/search/query-preprocessor.js';
+import { preprocessQuery, toOrFallbackQuery } from '../../core/search/query-preprocessor.js';
 import { rankSymbols } from '../../core/search/relevance-ranker.js';
 import { resolveRepoScope } from '../../core/db/repo-scope.js';
 import type { ScoredSymbol } from '../../core/search/relevance-ranker.js';
@@ -267,7 +267,7 @@ export async function handler(args: {
   const allKeywordResults: TaggedKeywordResult[] = [];
   let totalRawBytes = 0;
   let totalResponseBytes = 0;
-  let searchMode: 'fts' | 'like_fallback' = 'fts';
+  let searchMode: 'fts' | 'fts_or_fallback' | 'like_fallback' = 'fts';
 
   for (const repo of repos) {
     const db = openDatabase(repo.id);
@@ -283,6 +283,23 @@ export async function handler(args: {
             filePath: args.filePath,
             limit,
           });
+
+          // OR-fallback: when the AND query returns nothing, retry with terms joined
+          // by OR so that natural-language queries match symbols containing only some
+          // of the query words (e.g. "parse source file tree-sitter ast" → parseFile).
+          if (symbols.length === 0) {
+            const orQuery = toOrFallbackQuery(ftsQuery);
+            if (orQuery !== ftsQuery) {
+              symbols = ftsSearchSymbols(db, repo.id, orQuery, {
+                kind: args.kind as never,
+                filePath: args.filePath,
+                limit,
+              });
+              if (symbols.length > 0) {
+                searchMode = 'fts_or_fallback';
+              }
+            }
+          }
         } catch (err) {
           logger.warn(`search_symbols: FTS query failed for ${repo.id}, falling back to LIKE: ${err}`);
           symbols = searchSymbols(db, repo.id, args.query, {
