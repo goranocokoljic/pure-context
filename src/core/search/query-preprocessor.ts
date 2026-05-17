@@ -80,15 +80,25 @@ const VERB_SYNONYMS: Readonly<Record<string, ReadonlyArray<string>>> = {
   'disable':      ['deactivate'],
   'deactivate':   ['disable'],
   'confirm':      ['verify'],
-  'verify':       ['confirm'],
+  'verify':       ['confirm', 'check'],
+  'check':        ['verify', 'confirm'],
   'suspend':      ['deactivate', 'disable'],
   'revoke':       ['delete', 'remove'],
   'forgot':       ['reset'],   // "forgotPassword" ↔ "resetPassword" flow
   'reset':        ['forgot'],
+  'fetch':        ['get', 'retrieve'],
+  'execute':      ['run', 'perform'],
+  'run':          ['execute'],
+  'perform':      ['execute', 'run'],
+  'resolve':      ['verify', 'check'],
   // → one-directional expansions
   'signin':       ['login'],   // "sign-in" has its hyphen stripped → "signin"
+  'sign':         ['login'],   // "sign in" after stop-word removal of "in" → "sign"
   'authenticate': ['login'],
+  'log':          ['insert', 'record'],  // "log action" = "insert/record an entry"
   'retrieve':     ['get', 'fetch'],
+  'load':         ['get', 'find', 'fetch'],
+  'lookup':       ['find', 'get'],
   'expose':       ['register'],
   'attach':       ['add'],
   'initiate':     ['create', 'start'],
@@ -184,7 +194,7 @@ export function preprocessQuery(raw: string): string {
   // filter ("column:token") which causes a syntax error for unknown column names.
   // Single quote is stripped because FTS5 interprets it as a string-literal delimiter
   // ("user's" → "users" after collapsing the resulting space).
-  const escaped = raw.replace(/["'()\^*+\-]/g, ' ').replace(/\s+/g, ' ').trim();
+  const escaped = raw.replace(/["'()\^*+\-,:;!?.\/]/g, ' ').replace(/\s+/g, ' ').trim();
 
   if (!escaped) return '';
 

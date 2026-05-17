@@ -10,7 +10,7 @@ import { VectorStore } from '../../semantic/vector-store.js';
 import { HybridSearcher } from '../../semantic/hybrid-search.js';
 import { logger } from '../../core/logger.js';
 import { preprocessQuery, toOrFallbackQuery } from '../../core/search/query-preprocessor.js';
-import { rankSymbols } from '../../core/search/relevance-ranker.js';
+import { rankSymbols, isLibraryPath } from '../../core/search/relevance-ranker.js';
 import { resolveRepoScope } from '../../core/db/repo-scope.js';
 import type { ScoredSymbol } from '../../core/search/relevance-ranker.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -296,8 +296,12 @@ export async function handler(args: {
           // — this means the AND pool is filled with Prisma types or DTOs while the
           // correct service method couldn't satisfy all AND terms (e.g. "listing"
           // doesn't appear in ProductsService.create's FTS content).
+          // Also fire when ALL AND results are library code (system/, vendor/, etc.)
+          // — in that case application symbols can only enter via the OR pool.
           const needsOrFallback =
-            symbols.length === 0 || !hasServiceMethodCandidate(symbols);
+            symbols.length === 0 ||
+            !hasServiceMethodCandidate(symbols) ||
+            symbols.every((s) => isLibraryPath(s.filePath));
           if (needsOrFallback) {
             const orQuery = toOrFallbackQuery(ftsQuery);
             if (orQuery !== ftsQuery) {
@@ -411,6 +415,19 @@ function round4(n: number): number {
  * method, we augment with OR results so the ranker can surface the right
  * service method even when it failed some AND terms.
  */
+/**
+ * Return true when the candidate pool contains at least one application-layer
+ * method — i.e. a method on a class that looks like business/data logic rather
+ * than a DTO, config constant, or third-party library type.
+ *
+ * Patterns covered:
+ *   TypeScript: *Service, *Repository, *Manager, *Store
+ *   PHP: *_model, *Model (CodeIgniter / Laravel conventions)
+ *   PHP: *_controller, *Controller
+ *
+ * Used as a quality gate: if no such candidate exists in the AND result pool,
+ * we fire the OR-fallback to widen the search and surface the right symbol.
+ */
 function hasServiceMethodCandidate(symbols: SymbolRecord[]): boolean {
   return symbols.some((s) => {
     if (s.kind !== 'method') return false;
@@ -419,7 +436,18 @@ function hasServiceMethodCandidate(symbols: SymbolRecord[]): boolean {
     const sepIdx = dotIdx >= 0 ? dotIdx : colonIdx;
     if (sepIdx <= 0) return false;
     const cls = s.name.slice(0, sepIdx).toLowerCase();
-    return cls.endsWith('service') || cls.endsWith('repository') ||
-           cls.endsWith('manager') || cls.endsWith('store');
+    return (
+      // TypeScript application-layer naming
+      cls.endsWith('service') ||
+      cls.endsWith('repository') ||
+      cls.endsWith('manager') ||
+      cls.endsWith('store') ||
+      // PHP model conventions (CodeIgniter: *_model; Laravel/generic: *Model)
+      cls.endsWith('_model') ||
+      (cls.endsWith('model') && cls.length > 5) ||
+      // PHP controller conventions
+      cls.endsWith('_controller') ||
+      (cls.endsWith('controller') && cls.length > 10)
+    );
   });
 }

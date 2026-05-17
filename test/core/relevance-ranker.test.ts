@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { rankSymbols } from '../../src/core/search/relevance-ranker.js';
+import { rankSymbols, isLibraryPath } from '../../src/core/search/relevance-ranker.js';
 import type { SymbolRecord } from '../../src/core/types.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -281,14 +281,25 @@ describe('rankSymbols — hyphen splitting in queries', () => {
     expect(results[0].symbol.name).toBe('CIR_FrontController');
   });
 
-  it('hyphen does not appear as a literal token in query words', () => {
-    // "sign-in" → "sign" + "in"(stop) → only "sign" is a query word
-    // The literal "sign-in" should not be a query word (no symbol name has a hyphen)
+  it('hyphen splits into tokens and synonym expansion fires (sign-in finds login symbols)', () => {
+    // "sign-in" → hyphen stripped → "sign" + "in"(stop word) → queryWords include "sign"
+    // "sign" expands to "login" via synonym, so UserLogin (contains "login") gets a word match.
+    // The literal "sign-in" hyphenated token never appears in queryWords.
     const loginFn = sym('UserLogin', { kind: 'class' });
     const signFn = sym('signDocument', { kind: 'function' });
     const results = rankSymbols([loginFn, signFn], 'sign-in form');
-    // "sign" matches "sign" in signDocument's parts; "form" doesn't match either
-    expect(results[0].symbol.name).toBe('signDocument');
+    // "login" from synonym matches UserLogin's "login" part → UserLogin wins
+    expect(results[0].symbol.name).toBe('UserLogin');
+  });
+
+  it('hyphen does not produce a literal "sign-in" token (only "sign" and "in" segments)', () => {
+    // Verify using a non-synonym query: "back-end" → "back" + "end"
+    // Neither "backend" nor "back-end" should be a queryWord; only "back" and "end"
+    const backendSym = sym('BackendService', { kind: 'class' });
+    const frontendSym = sym('FrontendController', { kind: 'class' });
+    const results = rankSymbols([backendSym, frontendSym], 'back-end service');
+    // "back" matches BackendService; "service" matches BackendService
+    expect(results[0].symbol.name).toBe('BackendService');
   });
 });
 
@@ -592,5 +603,211 @@ describe('rankSymbols — method verb bonus', () => {
     const results = rankSymbols([findMethod], 'find user by id', true);
     // "find" is the verb AND "find" is in the query → gets +15
     expect(results[0].debugScore?.methodVerbBonus).toBe(15);
+  });
+});
+
+// ─── isLibraryPath ────────────────────────────────────────────────────────────
+
+describe('isLibraryPath', () => {
+  it('returns true for system/ directory (CodeIgniter)', () => {
+    expect(isLibraryPath('system/libraries/Table.php')).toBe(true);
+  });
+
+  it('returns true for vendor/ directory (Composer)', () => {
+    expect(isLibraryPath('vendor/stripe/stripe-php/lib/Client.php')).toBe(true);
+  });
+
+  it('returns true for third_party/ nested under application/', () => {
+    expect(isLibraryPath('application/third_party/Twig/Template.php')).toBe(true);
+  });
+
+  it('returns true for node_modules/', () => {
+    expect(isLibraryPath('node_modules/lodash/debounce.js')).toBe(true);
+  });
+
+  it('returns true for bower_components/', () => {
+    expect(isLibraryPath('bower_components/jquery/jquery.js')).toBe(true);
+  });
+
+  it('returns false for application/core/ paths', () => {
+    expect(isLibraryPath('application/core/CIR_Model.php')).toBe(false);
+  });
+
+  it('returns false for application/libraries/ (custom app libraries)', () => {
+    expect(isLibraryPath('application/libraries/Twig.php')).toBe(false);
+  });
+
+  it('returns false for src/server/tools/ paths', () => {
+    expect(isLibraryPath('src/server/tools/search-symbols.ts')).toBe(false);
+  });
+
+  it('normalises Windows backslash paths', () => {
+    expect(isLibraryPath('application\\third_party\\Twig\\Template.php')).toBe(true);
+    expect(isLibraryPath('application\\core\\CIR_Model.php')).toBe(false);
+  });
+
+  it('does NOT flag a file named vendor-utils.ts (segment must match exactly)', () => {
+    expect(isLibraryPath('src/vendor-utils.ts')).toBe(false);
+  });
+});
+
+// ─── Library path penalty ────────────────────────────────────────────────────
+
+describe('rankSymbols — library path penalty', () => {
+  it('symbol in system/ directory receives libraryPenalty = -35', () => {
+    const libSym = sym('CI_Table::clear', { kind: 'method', filePath: 'system/libraries/Table.php' });
+    const results = rankSymbols([libSym], 'remove record from table', true);
+    expect(results[0].debugScore?.libraryPenalty).toBe(-35);
+  });
+
+  it('symbol in vendor/ directory receives libraryPenalty = -35', () => {
+    const vendorSym = sym('StripeClient::charge', { kind: 'method', filePath: 'vendor/stripe/stripe-php/lib/StripeClient.php' });
+    const results = rankSymbols([vendorSym], 'charge payment', true);
+    expect(results[0].debugScore?.libraryPenalty).toBe(-35);
+  });
+
+  it('symbol in third_party/ directory receives libraryPenalty = -35', () => {
+    const thirdSym = sym('Twig_Template::render', { kind: 'method', filePath: 'application/third_party/Twig/lib/Twig/Template.php' });
+    const results = rankSymbols([thirdSym], 'render template', true);
+    expect(results[0].debugScore?.libraryPenalty).toBe(-35);
+  });
+
+  it('symbol in node_modules/ receives libraryPenalty = -35', () => {
+    const npmSym = sym('lodash.debounce', { kind: 'function', filePath: 'node_modules/lodash/debounce.js' });
+    const results = rankSymbols([npmSym], 'debounce function', true);
+    expect(results[0].debugScore?.libraryPenalty).toBe(-35);
+  });
+
+  it('symbol in application code receives no library penalty', () => {
+    const appSym = sym('CIR_Model::delete_row', { kind: 'method', filePath: 'application/core/CIR_Model.php' });
+    const results = rankSymbols([appSym], 'remove record from table', true);
+    expect(results[0].debugScore?.libraryPenalty).toBe(0);
+  });
+
+  it('application symbol in libraries/ (not third_party) receives no penalty', () => {
+    const libSym = sym('Twig::render', { kind: 'method', filePath: 'application/libraries/Twig.php' });
+    const results = rankSymbols([libSym], 'render template', true);
+    expect(results[0].debugScore?.libraryPenalty).toBe(0);
+  });
+
+  it('library symbol ranks below application symbol with same word overlap', () => {
+    // Both match "remove record" but library symbol gets -25 penalty
+    const libSym = sym('CI_Table::clear', {
+      kind: 'method',
+      filePath: 'system/libraries/Table.php',
+    });
+    const appSym = sym('CIR_Model::delete_row', {
+      kind: 'method',
+      filePath: 'application/core/CIR_Model.php',
+    });
+    const results = rankSymbols([libSym, appSym], 'remove record from table');
+    expect(results[0].symbol.name).toBe('CIR_Model::delete_row');
+    expect(results[1].symbol.name).toBe('CI_Table::clear');
+  });
+
+  it('application Twig wrapper ranks above third-party Twig library for realistic multi-word query', () => {
+    // Short 3-word query "render twig template" gives a lexical advantage to
+    // Twig_Template::render (all 3 words match its name) vs Twig::render (2 match).
+    // Realistic queries from agents are longer — with 6 words, the per-word
+    // word-overlap advantage shrinks and the library penalty tips the result.
+    const appTwig = sym('Twig::render', {
+      kind: 'method',
+      filePath: 'application/libraries/Twig.php',
+    });
+    const libTwig = sym('Twig_Template::render', {
+      kind: 'method',
+      filePath: 'application/third_party/Twig/lib/Twig/Template.php',
+    });
+    const results = rankSymbols([libTwig, appTwig], 'render twig template and return output as string');
+    expect(results[0].symbol.name).toBe('Twig::render');
+  });
+
+  it('libraryPenalty is 0 for non-library path with similar name (src/vendor-utils.ts)', () => {
+    // "vendor-utils" in filename should not trigger penalty — it must be a PATH SEGMENT
+    const notLibSym = sym('vendorUtils', { filePath: 'src/vendor-utils.ts' });
+    const results = rankSymbols([notLibSym], 'vendor utils', true);
+    expect(results[0].debugScore?.libraryPenalty).toBe(0);
+  });
+
+  it('bower_components/ directory triggers library penalty', () => {
+    const bowerSym = sym('jQuery', { filePath: 'bower_components/jquery/dist/jquery.js' });
+    const results = rankSymbols([bowerSym], 'jquery', true);
+    expect(results[0].debugScore?.libraryPenalty).toBe(-35);
+  });
+
+  it('PHP fetch query: application model method ranks above system DB driver with library penalty', () => {
+    const appSym = sym('CIR_Model::get_value', {
+      kind: 'method',
+      filePath: 'application/core/CIR_Model.php',
+    });
+    const libSym = sym('CI_DB_mssql_result::_fetch_object', {
+      kind: 'method',
+      filePath: 'system/database/drivers/mssql/mssql_result.php',
+    });
+    const results = rankSymbols([libSym, appSym], 'fetch scalar value from database query result');
+    expect(results[0].symbol.name).toBe('CIR_Model::get_value');
+  });
+});
+
+// ─── PHP *_model kindBoost ────────────────────────────────────────────────────
+
+describe('rankSymbols — kindBoost for PHP *_model methods', () => {
+  it('*_model method gets +15 kindBoost', () => {
+    const modelMethod = sym('Homepage_model::update', { kind: 'method' });
+    const results = rankSymbols([modelMethod], 'save updated homepage content', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*_model method with :: notation gets +15 kindBoost', () => {
+    const modelMethod = sym('User_model::get_by_id', { kind: 'method' });
+    const results = rankSymbols([modelMethod], 'get user by id', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*model (no underscore, longer than 5 chars) gets +15 kindBoost', () => {
+    // e.g. "ArticleModel" — endsWith("model") and length > 5
+    const modelMethod = sym('ArticleModel::save', { kind: 'method' });
+    const results = rankSymbols([modelMethod], 'save article data', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('short "model" class name (exactly 5 chars) gets NO kindBoost to avoid false positives', () => {
+    // "model" alone (length = 5) must not match — would match any bare "model." method
+    const modelMethod = sym('model.save', { kind: 'method' });
+    const results = rankSymbols([modelMethod], 'save data', true);
+    expect(results[0].debugScore?.kindBoost).toBe(0);
+  });
+
+  it('PHP *_model method outranks generic helper function for content update query', () => {
+    // Mirrors gt-22 benchmark scenario:
+    // query "save updated homepage content data"
+    // Homepage_model::update (model method, +15 kindBoost)  vs  Mailin::create_update_user
+    const modelMethod = sym('Homepage_model::update', {
+      kind: 'method',
+      filePath: 'application/models/Homepage_model.php',
+      summary: 'Updates homepage content fields in the database.',
+    });
+    const genericMethod = sym('Mailin::create_update_user', {
+      kind: 'method',
+      filePath: 'application/third_party/mailin/Mailin.php',
+      summary: 'Creates or updates a user via Mailin API.',
+    });
+    const results = rankSymbols([genericMethod, modelMethod], 'save updated homepage content data');
+    expect(results[0].symbol.name).toBe('Homepage_model::update');
+  });
+
+  it('PHP *_model method outranks controller for data retrieval query', () => {
+    const modelMethod = sym('Settings_model::get_settings', {
+      kind: 'method',
+      filePath: 'application/models/Settings_model.php',
+      summary: 'Returns all settings from the database.',
+    });
+    const controllerMethod = sym('Settings::get_all', {
+      kind: 'method',
+      filePath: 'application/controllers/Settings.php',
+      summary: 'Returns all settings.',
+    });
+    const results = rankSymbols([controllerMethod, modelMethod], 'get all settings from database');
+    expect(results[0].symbol.name).toBe('Settings_model::get_settings');
   });
 });

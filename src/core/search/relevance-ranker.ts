@@ -13,12 +13,15 @@
  *   30 — all query words match a word-boundary name part (exact or stem)
  *   20 — any query word matches a word-boundary name part (exact or stem)
  *   15 — method verb bonus: first part of method name matches a query word
+ *   30 — kindBoost: method on a *Service class
+ *   15 — kindBoost: method on a *Repository / *Manager / *Store / *_model class
  *   10 — each query word with an exact word-boundary name-part match
  *    8 — each query word with a stem-only word-boundary name-part match
  *    8 — query phrase in signature
  *    2 — any query word in signature (per word)
  *    5 — query phrase in summary
  *    1 — any query word in summary (per word)
+ *  -35 — library path penalty (system/, vendor/, third_party/, node_modules/)
  *
  * Query word extraction:
  *  - Hyphenated tokens split ("front-end" → "front", "end")
@@ -46,6 +49,7 @@ export interface DebugScore {
   signatureMatch: number;
   summaryMatch: number;
   kindBoost: number;
+  libraryPenalty: number;
   recencyBoost: number;
 }
 
@@ -54,6 +58,39 @@ export interface ScoredSymbol {
   score: number;
   matchReason: 'exact_name' | 'prefix_name' | 'name_contains' | 'word_overlap' | 'content_match';
   debugScore?: DebugScore;
+}
+
+// ─── Library path detection ───────────────────────────────────────────────────
+
+/**
+ * Directory names that always indicate third-party library code, regardless of
+ * where they appear in the path.  Symbols under these directories receive a
+ * score penalty so application-level symbols rank above them.
+ *
+ * Covers:
+ *   system/           CodeIgniter framework core
+ *   vendor/           Composer packages (PHP) / generic vendor trees
+ *   third_party/      Generic third-party library directories
+ *   node_modules/     npm packages
+ *   bower_components/ Bower packages
+ */
+const LIBRARY_PATH_SEGMENTS = new Set([
+  'system',
+  'vendor',
+  'third_party',
+  'node_modules',
+  'bower_components',
+]);
+
+/**
+ * Return true when the symbol's file path contains a well-known library
+ * directory segment, indicating third-party / framework code.
+ *
+ * Uses forward-slash normalisation so paths work correctly on Windows and Unix.
+ */
+export function isLibraryPath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  return normalized.split('/').some((seg) => LIBRARY_PATH_SEGMENTS.has(seg));
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -244,6 +281,7 @@ function score(
   // Boost values (additive):
   //   +30 — method on a *Service class  (e.g. AuthService.login)
   //   +15 — method on a *Repository / *Manager / *Store class  (data-access layer)
+  //   +15 — method on a *_model class  (PHP CodeIgniter model convention)
   //
   // The boost is only applied to 'method' kind symbols that use dot ('.') or
   // double-colon ('::') notation, which is how PureContext records class methods.
@@ -260,13 +298,38 @@ function score(
       } else if (
         classPart.endsWith('repository') ||
         classPart.endsWith('manager') ||
-        classPart.endsWith('store')
+        classPart.endsWith('store') ||
+        classPart.endsWith('_model') ||
+        (classPart.endsWith('model') && classPart.length > 5)
       ) {
         kindBoost = 15;
       }
     }
   }
   total += kindBoost;
+
+  // ── Library path penalty ─────────────────────────────────────────────────────
+  //
+  // Symbols from well-known library/framework directories (CodeIgniter system/,
+  // Composer vendor/, npm node_modules/, etc.) are almost never the intended
+  // answer for a natural-language query about application behaviour.  Applying a
+  // fixed penalty pushes them below application symbols that scored similarly on
+  // name and word-overlap rules, without excluding them entirely (they still
+  // appear when no application code matches).
+  //
+  // Penalty: -35 points — enough to overcome a 1-word lexical advantage that a
+  // library class may have over an application wrapper (e.g. Twig_Template::render
+  // matches "template" while the application Twig::render does not, but for
+  // realistic multi-word queries the application symbol still wins).
+  // Set just below the per-word bonus tier (10 × 3 = 30) so that a library
+  // symbol with 4+ extra matching words can still surface for explicit library
+  // lookups (e.g. query "CI_DB_driver execute").
+
+  let libraryPenalty = 0;
+  if (isLibraryPath(symbol.filePath)) {
+    libraryPenalty = -35;
+    total += libraryPenalty;
+  }
 
   const debugScore: DebugScore = {
     total,
@@ -278,6 +341,7 @@ function score(
     signatureMatch,
     summaryMatch,
     kindBoost,
+    libraryPenalty,
     recencyBoost: 0,
   };
 

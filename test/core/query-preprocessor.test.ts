@@ -434,12 +434,22 @@ describe('preprocessQuery — stop word filtering (multi-word)', () => {
   });
 
   it('removes article "the" from multi-word query', () => {
-    expect(preprocessQuery('load the user')).toBe('load user');
+    // "load" now has synonyms (get, find, fetch) so the output is an AND query with an OR group
+    const result = preprocessQuery('load the user');
+    expect(result).toContain('load');
+    expect(result).toContain('user');
+    expect(result).not.toContain('the');
   });
 
   it('removes multiple stop words in one pass', () => {
-    // "and" + "the" removed
-    expect(preprocessQuery('execute query and return the row')).toBe('execute query return row');
+    // "and" + "the" removed; "execute" now has synonyms so output has OR group
+    const result = preprocessQuery('execute query and return the row');
+    expect(result).toContain('execute');
+    expect(result).toContain('query');
+    expect(result).toContain('return');
+    expect(result).toContain('row');
+    expect(result).not.toContain(' the ');
+    expect(result).not.toContain(' and ');
   });
 
   it('removes preposition "for" from multi-word query', () => {
@@ -511,8 +521,18 @@ describe('toOrFallbackQuery — stop word filtering', () => {
     expect(toOrFallbackQuery('render and display')).toBe('render OR display');
   });
 
-  it('removes multiple stop words from OR conversion', () => {
-    expect(toOrFallbackQuery('execute query and return row')).toBe('execute OR query OR return OR row');
+  it('removes multiple stop words from OR conversion (stop words only — no synonym expansion in OR fallback)', () => {
+    // toOrFallbackQuery does NOT expand synonyms — it only flattens existing OR groups.
+    // "execute query and return row" preprocessed → "(execute OR run OR perform) AND query AND return AND row"
+    // OR-fallback of that → "execute OR run OR perform OR query OR return OR row"
+    const preprocessed = preprocessQuery('execute query and return row');
+    const orResult = toOrFallbackQuery(preprocessed);
+    expect(orResult).toContain('execute');
+    expect(orResult).toContain('query');
+    expect(orResult).toContain('return');
+    expect(orResult).toContain('row');
+    expect(orResult).not.toContain(' AND ');
+    expect(orResult).not.toContain(' and ');
   });
 
   it('removes prepositions before OR conversion', () => {
@@ -590,8 +610,10 @@ describe('expandVerbSynonyms — unit', () => {
     expect(expandVerbSynonyms('confirm')).toEqual(['verify']);
   });
 
-  it('verify → confirm (bidirectional)', () => {
-    expect(expandVerbSynonyms('verify')).toEqual(['confirm']);
+  it('verify → confirm + check (Phase 43 addition)', () => {
+    const syns = expandVerbSynonyms('verify');
+    expect(syns).toContain('confirm');
+    expect(syns).toContain('check');
   });
 
   it('authenticate → login', () => {
@@ -828,5 +850,198 @@ describe('expandVerbSynonyms — forgot/reset password flow', () => {
     const result = preprocessQuery('forgot password');
     expect(result).toContain('forgot');
     expect(result).toContain('reset');
+  });
+});
+
+// ─── Phase 43 synonym round 2 ─────────────────────────────────────────────────
+
+describe('expandVerbSynonyms — fetch/execute/run/sign/check round 2', () => {
+  it('"fetch" expands to ["get", "retrieve"]', () => {
+    const syns = expandVerbSynonyms('fetch');
+    expect(syns).toContain('get');
+    expect(syns).toContain('retrieve');
+  });
+
+  it('"execute" expands to ["run", "perform"]', () => {
+    const syns = expandVerbSynonyms('execute');
+    expect(syns).toContain('run');
+    expect(syns).toContain('perform');
+  });
+
+  it('"run" expands to ["execute"]', () => {
+    expect(expandVerbSynonyms('run')).toContain('execute');
+  });
+
+  it('"perform" expands to ["execute", "run"]', () => {
+    const syns = expandVerbSynonyms('perform');
+    expect(syns).toContain('execute');
+    expect(syns).toContain('run');
+  });
+
+  it('"sign" expands to ["login"] (for sign-in hyphen split)', () => {
+    expect(expandVerbSynonyms('sign')).toContain('login');
+  });
+
+  it('"check" expands to ["verify", "confirm"]', () => {
+    const syns = expandVerbSynonyms('check');
+    expect(syns).toContain('verify');
+    expect(syns).toContain('confirm');
+  });
+
+  it('"verify" now also expands to include "check"', () => {
+    expect(expandVerbSynonyms('verify')).toContain('check');
+  });
+
+  it('"resolve" expands to ["verify", "check"]', () => {
+    const syns = expandVerbSynonyms('resolve');
+    expect(syns).toContain('verify');
+    expect(syns).toContain('check');
+  });
+
+  it('"load" expands to ["get", "find", "fetch"]', () => {
+    const syns = expandVerbSynonyms('load');
+    expect(syns).toContain('get');
+    expect(syns).toContain('find');
+    expect(syns).toContain('fetch');
+  });
+
+  it('"lookup" expands to ["find", "get"]', () => {
+    const syns = expandVerbSynonyms('lookup');
+    expect(syns).toContain('find');
+    expect(syns).toContain('get');
+  });
+});
+
+describe('preprocessQuery — PHP benchmark near-miss queries round 2', () => {
+  it('"fetch scalar value from database" includes "get" and "retrieve" synonyms', () => {
+    const result = preprocessQuery('fetch scalar value from database');
+    expect(result).toContain('fetch');
+    expect(result).toContain('get');
+    expect(result).toContain('retrieve');
+  });
+
+  it('"execute parameterized query" includes "run" and "perform" synonyms', () => {
+    const result = preprocessQuery('execute parameterized query');
+    expect(result).toContain('execute');
+    expect(result).toContain('run');
+    expect(result).toContain('perform');
+  });
+
+  it('"controller handling user sign-in form" includes "login" from sign synonym', () => {
+    // "sign-in" → hyphen stripped → "sign" + "in" (stop word) → "sign" expands to "login"
+    const result = preprocessQuery('controller handling user sign-in form submission');
+    expect(result).toContain('sign');
+    expect(result).toContain('login');
+  });
+
+  it('"load and verify admin user access rights" includes check/confirm synonyms', () => {
+    const result = preprocessQuery('load and verify admin user access rights');
+    expect(result).toContain('verify');
+    expect(result).toContain('check');
+    expect(result).toContain('confirm');
+  });
+
+  it('"render twig template" — no synonym confusion, stays clean', () => {
+    const result = preprocessQuery('render twig template');
+    // No synonym for "render" — should remain as-is
+    expect(result).toContain('render');
+    expect(result).toContain('twig');
+    expect(result).toContain('template');
+  });
+});
+
+// ─── Phase 43 synonym round 3 (log → insert/record) ──────────────────────────
+
+describe('expandVerbSynonyms — log synonym (gt-08 fix)', () => {
+  it('"log" expands to ["insert", "record"]', () => {
+    const syns = expandVerbSynonyms('log');
+    expect(syns).toContain('insert');
+    expect(syns).toContain('record');
+  });
+
+  it('"log" synonym is lowercase-normalised', () => {
+    const syns = expandVerbSynonyms('LOG');
+    expect(syns).toContain('insert');
+    expect(syns).toContain('record');
+  });
+});
+
+describe('preprocessQuery — log synonym fixes gt-08 insert regression', () => {
+  it('"log user action" query includes "insert" and "record" from log synonym', () => {
+    const result = preprocessQuery('log user action');
+    // "log" should expand to synonyms "insert" and "record"
+    expect(result).toContain('insert');
+    expect(result).toContain('record');
+    expect(result).toContain('log');
+  });
+
+  it('"log user action on content item with type and description" — full benchmark query', () => {
+    const result = preprocessQuery('log user action on content item with type and description');
+    // "log" synonym words must appear in the OR group or expanded query
+    expect(result).toContain('insert');
+    expect(result).toContain('record');
+    // Stop words should be removed
+    expect(result).not.toContain(' on ');
+    expect(result).not.toContain(' with ');
+  });
+});
+
+// ─── Punctuation stripping (FTS5 safety) ─────────────────────────────────────
+
+describe('preprocessQuery — punctuation stripping', () => {
+  it('strips commas from natural-language queries with commas', () => {
+    const result = preprocessQuery('add a digit, respecting radix, integer mode');
+    expect(result).not.toContain(',');
+    // Remaining meaningful words should be present
+    expect(result).toContain('digit');
+    expect(result).toContain('respecting');
+    expect(result).toContain('radix');
+    expect(result).toContain('integer');
+    expect(result).toContain('mode');
+  });
+
+  it('strips colons, semicolons, and exclamation marks', () => {
+    const result = preprocessQuery('check status: active; not pending!');
+    expect(result).not.toContain(':');
+    expect(result).not.toContain(';');
+    expect(result).not.toContain('!');
+  });
+
+  it('strips question marks', () => {
+    const result = preprocessQuery('is the user authenticated?');
+    expect(result).not.toContain('?');
+  });
+
+  it('returns valid FTS5 query for comma-heavy benchmark query', () => {
+    // Reproduces the calculator benchmark crash (gt-10)
+    const q = 'add a single digit to the current numeric input, respecting radix, integer mode, and word-bit-width limits';
+    const result = preprocessQuery(q);
+    expect(result).not.toContain(',');
+    expect(result).not.toMatch(/[,:;!?]/);
+    // Should contain meaningful words
+    expect(result).toContain('digit');
+    expect(result).toContain('numeric');
+  });
+
+  it('strips periods from queries containing version numbers like 802.11', () => {
+    // Reproduces the airodump benchmark crash (gt-03, gt-15)
+    const q = 'process a captured 802.11 packet and record it';
+    const result = preprocessQuery(q);
+    expect(result).not.toContain('.');
+    expect(result).toContain('802');
+    expect(result).toContain('packet');
+  });
+
+  it('strips periods from DD.MM.YYYY date format strings', () => {
+    const q = 'extract and format date portion as DD.MM.YYYY';
+    const result = preprocessQuery(q);
+    expect(result).not.toContain('.');
+  });
+
+  it('strips forward slashes from I/O and open/closed style queries', () => {
+    // Reproduces tokio gt-20/gt-21 and origamicms-frontend gt-14
+    expect(preprocessQuery('trait for reading bytes from an I/O source')).not.toContain('/');
+    expect(preprocessQuery('store controlling open/closed modal state')).not.toContain('/');
+    expect(preprocessQuery('1D/2D sample generation')).not.toContain('/');
   });
 });
