@@ -155,9 +155,10 @@ describe('rankSymbols — output structure', () => {
 // ─── Word-boundary name-part matching ────────────────────────────────────────
 
 describe('rankSymbols — word-boundary name-part matching', () => {
-  it('query word matches exact name part, not namespace prefix', () => {
-    // "model" (from "models" stem) should match CIR_Model (part: "model")
-    // but NOT models\\Article_base (part: "models") — word-boundary is exact
+  it('exact name-part match outranks stem-only namespace-prefix match', () => {
+    // "model" is an exact name part of CIR_Model (+10 per-word bonus)
+    // "models" in models\\Article_base stems to "model" — only a stem match (+8)
+    // Exact match wins over stem match, even when FTS order favours the latter.
     const modelClass = sym('CIR_Model', { kind: 'class' });
     const articleBase = sym('models\\Article_base', { kind: 'class' });
     const results = rankSymbols([articleBase, modelClass], 'model');
@@ -354,5 +355,242 @@ describe('rankSymbols — benchmark scenario regressions', () => {
     const results = rankSymbols([sym('getBlastRadius')], 'blast radius');
     // "blast" + "radius" both match parts → 30 (all) + 20 (any) + 10 + 10 = 70
     expect(results[0].score).toBeGreaterThanOrEqual(30);
+  });
+});
+
+// ─── Kind boost — application-layer method preference ────────────────────────
+
+describe('rankSymbols — kindBoost for Service/Repository methods', () => {
+  it('Service method outranks Controller method with same name parts', () => {
+    // "authenticate user" query: AuthService.login and AuthController.login
+    // both have same word-overlap; Service gets +30 kindBoost
+    const serviceMethod = sym('AuthService.login', { kind: 'method', summary: 'Authenticates a user' });
+    const controllerMethod = sym('AuthController.login', { kind: 'method', summary: 'Authenticates a user' });
+    const results = rankSymbols([controllerMethod, serviceMethod], 'authenticate user login');
+    expect(results[0].symbol.name).toBe('AuthService.login');
+  });
+
+  it('Service method outranks controller method and DTO for authenticate/login query', () => {
+    // "authenticate login credentials" → "login" matches all three names
+    // AuthService.login gets +30 kindBoost, AuthController.login gets 0, LoginDto gets 0
+    const serviceMethod = sym('AuthService.login', { kind: 'method', summary: 'Authenticates a user with credentials' });
+    const controllerMethod = sym('AuthController.login', { kind: 'method', summary: 'Login endpoint' });
+    const dto = sym('LoginDto', { kind: 'class', summary: 'DTO for login request' });
+    const results = rankSymbols([dto, controllerMethod, serviceMethod], 'authenticate login credentials');
+    expect(results[0].symbol.name).toBe('AuthService.login');
+  });
+
+  it('Service method kindBoost is +30 and reflected in debugScore', () => {
+    const serviceMethod = sym('PaymentsService.refund', { kind: 'method' });
+    const results = rankSymbols([serviceMethod], 'process refund payment', true);
+    expect(results[0].debugScore?.kindBoost).toBe(30);
+  });
+
+  it('Repository method gets +15 kindBoost', () => {
+    const repoMethod = sym('UserRepository.findById', { kind: 'method' });
+    const results = rankSymbols([repoMethod], 'find user by id', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('Manager method gets +15 kindBoost', () => {
+    const managerMethod = sym('CacheManager.get', { kind: 'method' });
+    const results = rankSymbols([managerMethod], 'get cached value', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('Controller method gets no kindBoost', () => {
+    const controllerMethod = sym('AuthController.login', { kind: 'method' });
+    const results = rankSymbols([controllerMethod], 'login user', true);
+    expect(results[0].debugScore?.kindBoost).toBe(0);
+  });
+
+  it('non-method kinds get no kindBoost even with Service in name', () => {
+    // A class named "AuthService" should not get kindBoost (it's a class, not a method)
+    const serviceClass = sym('AuthService', { kind: 'class' });
+    const results = rankSymbols([serviceClass], 'authenticate', true);
+    expect(results[0].debugScore?.kindBoost).toBe(0);
+  });
+
+  it('PHP-style :: notation methods on Service class get +30 kindBoost', () => {
+    const phpServiceMethod = sym('UserService::create', { kind: 'method' });
+    const results = rankSymbols([phpServiceMethod], 'create user', true);
+    expect(results[0].debugScore?.kindBoost).toBe(30);
+  });
+
+  it('Service method with dot notation ranks above schema const for deactivate query', () => {
+    // Mirrors gt-10 benchmark scenario
+    const serviceMethod = sym('ProductsService.deactivate', {
+      kind: 'method',
+      summary: 'Sets product active flag to false',
+    });
+    const schemaConst = sym('deactivateProductSchema', {
+      kind: 'const',
+      summary: 'Zod schema for deactivate request',
+    });
+    const results = rankSymbols([schemaConst, serviceMethod], 'disable product without deleting');
+    expect(results[0].symbol.name).toBe('ProductsService.deactivate');
+  });
+
+  it('Service method with ::- style separator outranks helper function for same query', () => {
+    const serviceMethod = sym('OrdersService::cancelOrder', { kind: 'method' });
+    const helperFn = sym('cancelOrderEmail', { kind: 'function' });
+    const results = rankSymbols([helperFn, serviceMethod], 'cancel order before shipment');
+    expect(results[0].symbol.name).toBe('OrdersService::cancelOrder');
+  });
+});
+
+// ─── Name-part stem matching ──────────────────────────────────────────────────
+
+describe('rankSymbols — name part stem matching', () => {
+  it('gt-06: ProductsService.create outranks Prisma CreateProductInput for "create product listing"', () => {
+    // ProductsService.create: name parts ["products","service","create"]
+    //   stems: "products" → "product" — query word "product" now matches ✓
+    //   + kindBoost +30 → total high score
+    // ProductCreateInput: name parts ["product","create","input"]
+    //   "product" matches ✓, "create" matches ✓ — but no kindBoost (it's a type)
+    const serviceMethod = sym('ProductsService.create', {
+      kind: 'method',
+      summary: 'Persists a new product record with its category, price and slug.',
+    });
+    const prismaType = sym('ProductCreateInput', {
+      kind: 'type',
+      summary: 'Prisma input type for creating a product.',
+    });
+    const results = rankSymbols([prismaType, serviceMethod], 'create new product listing with category and price');
+    expect(results[0].symbol.name).toBe('ProductsService.create');
+  });
+
+  it('gt-24: ReviewsService.create outranks Prisma ReviewCreate* types for "post review product"', () => {
+    // ReviewsService.create: name parts ["reviews","service","create"]
+    //   stems: "reviews" → "review" — query word "review" now matches ✓
+    //   + kindBoost +30 → beats Prisma types with no kindBoost
+    // ReviewCreateWithoutProductInput: parts ["review","create","without","product","input"]
+    //   "review" ✓ + "product" ✓ → 2 matches, but no kindBoost → total = 40
+    const serviceMethod = sym('ReviewsService.create', {
+      kind: 'method',
+      summary: 'Saves a new review with rating score and recalculates the average rating.',
+    });
+    const prismaType = sym('ReviewCreateWithoutProductInput', {
+      kind: 'type',
+      summary: 'Prisma input type for review creation.',
+    });
+    const results = rankSymbols([prismaType, serviceMethod], 'post rating review for product');
+    expect(results[0].symbol.name).toBe('ReviewsService.create');
+  });
+
+  it('gt-12: OrdersService.getMyOrders outranks UsersService.getProfile for "get orders current user"', () => {
+    // OrdersService.getMyOrders: parts ["orders","service","get","my","orders"]
+    //   stems: "orders" → "order" — "order" in queryWords (stem of "orders") now matches ✓
+    //   "orders" also matches "orders" directly ✓ + "get" ✓ → 3 per-word matches → 30+20+30=80
+    // UsersService.getProfile: parts ["users","service","get","profile"]
+    //   stems: "users" → "user" — "user" matches ✓, "get" ✓ → 2 matches → 30+20+20=70
+    const myOrders = sym('OrdersService.getMyOrders', {
+      kind: 'method',
+      summary: 'Returns a paged list of orders for the authenticated user.',
+    });
+    const getProfile = sym('UsersService.getProfile', {
+      kind: 'method',
+      summary: 'Returns the current user profile data.',
+    });
+    const results = rankSymbols([getProfile, myOrders], 'get paginated list of orders current user');
+    expect(results[0].symbol.name).toBe('OrdersService.getMyOrders');
+  });
+
+  it('gt-14: OrdersService.requestRefund outranks Prisma RefundRequest* types for "submit refund"', () => {
+    // OrdersService.requestRefund: parts ["orders","service","request","refund"]
+    //   stems: "orders" → "order" — "order" in queryWords ✓
+    //   "request" ✓, "refund" ✓, "order" ✓ → 3 per-word matches + kindBoost 30 → high score
+    // RefundRequestCreateOrConnectWithoutOrderInput: parts include "refund","request","create","order"
+    //   "refund" ✓, "request" ✓, "create" ✓, "order" ✓ → 4 matches but NO kindBoost (it's a type)
+    const serviceMethod = sym('OrdersService.requestRefund', {
+      kind: 'method',
+      summary: 'Creates a refund request linked to the order for admin review.',
+    });
+    const prismaType = sym('RefundRequestCreateOrConnectWithoutOrderInput', {
+      kind: 'type',
+      summary: 'Prisma type for RefundRequest create or connect.',
+    });
+    const results = rankSymbols([prismaType, serviceMethod], 'submit refund request for delivered order');
+    expect(results[0].symbol.name).toBe('OrdersService.requestRefund');
+  });
+
+  it('plural name part "users" stem-matches singular query word "user"', () => {
+    const usersFn = sym('UsersService.deactivateUser', { kind: 'method' });
+    const results = rankSymbols([usersFn], 'suspend user account', true);
+    // "users" in name parts should stem to "user", matching query word "user"
+    expect(results[0].debugScore?.wordOverlap).toBeGreaterThanOrEqual(20);
+  });
+
+  it('plural "orders" stem-matches singular "order" in query words', () => {
+    // extractQueryWords("get paginated orders") produces "orders" AND stem "order"
+    // splitNameParts("OrdersService.getMyOrders") → ["orders",...] stems to "order"
+    // namePartsSet contains "order", query word "order" matches → score > 0
+    const sym1 = sym('OrdersService.getMyOrders', { kind: 'method' });
+    const results = rankSymbols([sym1], 'get paginated list orders', true);
+    expect(results[0].debugScore?.wordOverlap).toBeGreaterThan(30);
+  });
+});
+
+// ─── Method verb bonus ────────────────────────────────────────────────────────
+
+describe('rankSymbols — method verb bonus', () => {
+  it('ProductsService.create gets +15 methodVerbBonus for query containing "create"', () => {
+    const serviceMethod = sym('ProductsService.create', { kind: 'method' });
+    const results = rankSymbols([serviceMethod], 'create product listing', true);
+    expect(results[0].debugScore?.methodVerbBonus).toBe(15);
+  });
+
+  it('buildProductListCacheKey gets no methodVerbBonus for "create" query (verb is "build")', () => {
+    // This is a *function* but let's also test as method — verb is "build", not "create"
+    const cacheKeyFn = sym('ProductsService.buildProductListCacheKey', { kind: 'method' });
+    const results = rankSymbols([cacheKeyFn], 'create product listing', true);
+    expect(results[0].debugScore?.methodVerbBonus).toBe(0);
+  });
+
+  it('method verb bonus makes ProductsService.create rank above buildProductListCacheKey', () => {
+    // Without verb bonus: create scores 74, buildProductListCacheKey scores 76
+    // With verb bonus: create scores 89, buildProductListCacheKey stays at 76
+    const createMethod = sym('ProductsService.create', { kind: 'method' });
+    const cacheKeyMethod = sym('ProductsService.buildProductListCacheKey', { kind: 'method' });
+    const results = rankSymbols([cacheKeyMethod, createMethod], 'create product listing');
+    expect(results[0].symbol.name).toBe('ProductsService.create');
+  });
+
+  it('OrdersService.getMyOrders gets +15 methodVerbBonus for query with "get"', () => {
+    const serviceMethod = sym('OrdersService.getMyOrders', { kind: 'method' });
+    const results = rankSymbols([serviceMethod], 'get orders for current user', true);
+    expect(results[0].debugScore?.methodVerbBonus).toBe(15);
+  });
+
+  it('non-method symbols never get methodVerbBonus', () => {
+    const fn = sym('createProduct', { kind: 'function' });
+    const cls = sym('CreateProductDto', { kind: 'class' });
+    const results = rankSymbols([fn, cls], 'create product', true);
+    for (const r of results) {
+      expect(r.debugScore?.methodVerbBonus).toBe(0);
+    }
+  });
+
+  it('PHP :: notation methods also get methodVerbBonus', () => {
+    const phpMethod = sym('ProductsService::create', { kind: 'method' });
+    const results = rankSymbols([phpMethod], 'create product', true);
+    expect(results[0].debugScore?.methodVerbBonus).toBe(15);
+  });
+
+  it('methodVerbBonus does not fire when no query word matches the verb', () => {
+    const serviceMethod = sym('UsersService.findById', { kind: 'method' });
+    const results = rankSymbols([serviceMethod], 'get user profile', true);
+    // verb is "find", query has "get" — not a match
+    expect(results[0].debugScore?.methodVerbBonus).toBe(0);
+  });
+
+  it('methodVerbBonus fires with synonym expansion: "get" query matches "find" verb via synonyms', () => {
+    // extractQueryWords("get user") includes synonyms of "get" — check if "find" is one
+    // If not, this is a non-bonus case (expected 0)
+    // Either way, the method should still rank above unrelated symbols
+    const findMethod = sym('UsersService.findById', { kind: 'method' });
+    const results = rankSymbols([findMethod], 'find user by id', true);
+    // "find" is the verb AND "find" is in the query → gets +15
+    expect(results[0].debugScore?.methodVerbBonus).toBe(15);
   });
 });

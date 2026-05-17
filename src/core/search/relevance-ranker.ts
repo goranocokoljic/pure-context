@@ -10,9 +10,11 @@
  *  100 — exact name match (case-insensitive)
  *   60 — name starts with query
  *   40 — name contains query as substring
- *   30 — all query words match a word-boundary name part
- *   20 — any query word matches a word-boundary name part
- *   10 — each query word that matches a word-boundary name part
+ *   30 — all query words match a word-boundary name part (exact or stem)
+ *   20 — any query word matches a word-boundary name part (exact or stem)
+ *   15 — method verb bonus: first part of method name matches a query word
+ *   10 — each query word with an exact word-boundary name-part match
+ *    8 — each query word with a stem-only word-boundary name-part match
  *    8 — query phrase in signature
  *    2 — any query word in signature (per word)
  *    5 — query phrase in summary
@@ -30,7 +32,7 @@
  */
 
 import type { SymbolRecord } from '../types.js';
-import { isStopWord } from './query-preprocessor.js';
+import { isStopWord, expandVerbSynonyms } from './query-preprocessor.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,6 +42,7 @@ export interface DebugScore {
   namePrefix: number;
   nameFuzzy: number;
   wordOverlap: number;
+  methodVerbBonus: number;
   signatureMatch: number;
   summaryMatch: number;
   kindBoost: number;
@@ -113,9 +116,25 @@ function score(
     total += 100;
     matchReason = 'exact_name';
   } else if (nameLower.startsWith(queryLower)) {
-    namePrefix = 60;
-    total += 60;
-    matchReason = 'prefix_name';
+    // Only award the prefix bonus when the character immediately after the
+    // query string in the *original* (cased) symbol name is a word-boundary:
+    // uppercase letter (camelCase), a non-alpha separator (_, \, :, .), or
+    // end of string.  A continuing lowercase letter means the query is merely
+    // a prefix of a longer word inside the name — not a name-level prefix.
+    // e.g. query "model" vs name "models\Article_base" → nextChar="s" (lowercase)
+    //      → treated as substring match, not prefix match.
+    const nextChar = symbol.name[queryLower.length];
+    const isWordBoundary = !nextChar || /[^a-z]/.test(nextChar);
+    if (isWordBoundary) {
+      namePrefix = 60;
+      total += 60;
+      matchReason = 'prefix_name';
+    } else {
+      // The query string is embedded inside a longer word — treat as substring.
+      nameFuzzy = 40;
+      total += 40;
+      matchReason = 'name_contains';
+    }
   } else if (nameLower.includes(queryLower)) {
     nameFuzzy = 40;
     total += 40;
@@ -126,29 +145,83 @@ function score(
   //
   // We split the symbol name into its constituent word-boundary parts
   // (camelCase + snake_case + namespace separators) and check query words
-  // against those parts exactly.  This is more precise than substring
-  // matching: query word "model" matches the "model" part of "CIR_Model" but
-  // NOT the "models" namespace prefix in "models\\Article_base".
+  // against those parts.  Inflectional stem variants of each name part are
+  // also included so that query word "product" matches name part "products",
+  // "order" matches "orders", "review" matches "reviews", etc.
+  //
+  // This is more precise than substring matching: query word "model" matches
+  // the "model" part of "CIR_Model" but scores slightly less against the
+  // "models" namespace prefix in "models\\Article_base" (stem-only match).
 
   let wordOverlap = 0;
 
   if (queryWords.length > 0) {
     const nameParts = splitNameParts(symbol.name);
-    const partExact = (w: string): boolean => nameParts.some((p) => p === w);
+    // Add inflectional stems of each name part so that pluralized name parts
+    // match their singular query-word counterparts and vice-versa.
+    // e.g. "products" → "product", "orders" → "order", "reviews" → "review"
+    const namePartsSet = new Set(nameParts);
+    for (const p of nameParts) {
+      addStemsOf(p, namePartsSet);
+    }
+    // Two levels of matching used to differentiate exact vs stem-based hits:
+    //   partStrict — query word appears verbatim in the split name parts
+    //   partLoose  — query word matches a stem variant of a name part
+    // This prevents a pluralised namespace prefix ("models") from scoring
+    // identically to an exact name-part match ("model" in "CIR_Model").
+    const partStrict = (w: string): boolean => nameParts.some((p) => p === w);
+    const partLoose = (w: string): boolean => namePartsSet.has(w);
 
-    if (queryWords.every(partExact)) {
-      wordOverlap += 30; // all query words match name parts
+    if (queryWords.every(partLoose)) {
+      wordOverlap += 30; // all query words match name parts (exact or stem)
     }
-    if (queryWords.some(partExact)) {
-      wordOverlap += 20; // at least one query word matches a name part
+    if (queryWords.some(partLoose)) {
+      wordOverlap += 20; // at least one query word matches
     }
-    wordOverlap += queryWords.filter(partExact).length * 10; // per-word bonus
+    // Per-word bonus: exact part match earns +10; stem-only match earns +8.
+    for (const w of queryWords) {
+      if (partStrict(w)) wordOverlap += 10;
+      else if (partLoose(w)) wordOverlap += 8;
+    }
 
     if (wordOverlap > 0) {
       total += wordOverlap;
       if (matchReason === 'content_match') matchReason = 'word_overlap';
     }
   }
+
+  // ── Method verb bonus ────────────────────────────────────────────────────────
+  //
+  // For method symbols, give a +15 bonus when a query word exactly matches the
+  // FIRST split part of the method name — the "action verb" (e.g. "create" in
+  // "ProductsService.create", "get" in "OrdersService.getMyOrders").
+  //
+  // This differentiates application methods from helper/utility methods that
+  // happen to share other name parts with the query.  Example:
+  //   query "create product listing"
+  //   ProductsService.create       → verb "create" matches → +15 (total 89)
+  //   buildProductListCacheKey     → verb "build" ≠ "create" → no bonus (total 76)
+  //
+  // The bonus is intentionally limited to exact query-word matches on the first
+  // method part only — we do not use stems here because a stem match on the verb
+  // is too loose (e.g. "builds" → "build" would also match "get").
+
+  let methodVerbBonus = 0;
+  if (symbol.kind === 'method' && queryWords.length > 0) {
+    const dotIdx = symbol.name.indexOf('.');
+    const colonIdx = symbol.name.indexOf('::');
+    const sepIdx = dotIdx >= 0 ? dotIdx : colonIdx;
+    if (sepIdx > 0) {
+      const methodPart = symbol.name.slice(
+        sepIdx + (colonIdx >= 0 && colonIdx === sepIdx ? 2 : 1),
+      );
+      const methodVerbParts = splitNameParts(methodPart);
+      if (methodVerbParts.length > 0 && queryWords.some((w) => w === methodVerbParts[0])) {
+        methodVerbBonus = 15;
+      }
+    }
+  }
+  total += methodVerbBonus;
 
   // ── Content rules (signature + summary) ────────────────────────────────────
 
@@ -162,15 +235,49 @@ function score(
 
   total += signatureMatch + summaryMatch;
 
+  // ── Kind boost for application-layer methods ─────────────────────────────────
+  //
+  // For natural-language "how to do X" queries, a method on a *Service class is
+  // almost always the correct answer — not the DTO, event type, schema const, or
+  // controller delegate that happens to share words with the query.
+  //
+  // Boost values (additive):
+  //   +30 — method on a *Service class  (e.g. AuthService.login)
+  //   +15 — method on a *Repository / *Manager / *Store class  (data-access layer)
+  //
+  // The boost is only applied to 'method' kind symbols that use dot ('.') or
+  // double-colon ('::') notation, which is how PureContext records class methods.
+
+  let kindBoost = 0;
+  if (symbol.kind === 'method') {
+    const dotIdx = symbol.name.indexOf('.');
+    const colonIdx = symbol.name.indexOf('::');
+    const sepIdx = dotIdx >= 0 ? dotIdx : colonIdx;
+    if (sepIdx > 0) {
+      const classPart = symbol.name.slice(0, sepIdx).toLowerCase();
+      if (classPart.endsWith('service')) {
+        kindBoost = 30;
+      } else if (
+        classPart.endsWith('repository') ||
+        classPart.endsWith('manager') ||
+        classPart.endsWith('store')
+      ) {
+        kindBoost = 15;
+      }
+    }
+  }
+  total += kindBoost;
+
   const debugScore: DebugScore = {
     total,
     nameExact,
     namePrefix,
     nameFuzzy,
     wordOverlap,
+    methodVerbBonus,
     signatureMatch,
     summaryMatch,
-    kindBoost: 0,
+    kindBoost,
     recencyBoost: 0,
   };
 
@@ -195,8 +302,8 @@ function score(
  */
 function splitNameParts(name: string): string[] {
   const parts: string[] = [];
-  // Split on namespace/method-call separators (\ and :)
-  for (const segment of name.split(/[\\:]+/)) {
+  // Split on namespace/method-call separators: \ (PHP/Python paths), : (PHP ::), . (TS dot notation)
+  for (const segment of name.split(/[\\:.]+/)) {
     // Split each segment on underscores
     for (const subSeg of segment.split('_').filter(Boolean)) {
       // camelCase / PascalCase split within each snake_case segment
@@ -291,6 +398,12 @@ function extractQueryWords(raw: string): string[] {
     if (lower.length < 2) continue;
     words.add(lower);
     addStemsOf(lower, words);
+    // Synonym expansion: add code-domain synonyms so the ranker rewards symbols
+    // whose names use a synonym of the query word (e.g. "authenticate" → "login").
+    for (const syn of expandVerbSynonyms(lower)) {
+      words.add(syn);
+      addStemsOf(syn, words);
+    }
 
     if (part.includes('_')) {
       // snake_case — split on underscores

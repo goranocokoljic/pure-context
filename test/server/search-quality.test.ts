@@ -94,9 +94,11 @@ describe('search quality — R@5 (expected symbol in top 5)', () => {
 // ─── search_mode and result fields ───────────────────────────────────────────
 
 describe('search quality — response format', () => {
-  it('search_mode is "fts" (FTS index was populated)', async () => {
+  it('search_mode is fts-based (FTS index was populated)', async () => {
     const parsed = await runQuery('orchestrate indexing pipeline');
-    expect(parsed._meta.search_mode).toBe('fts');
+    // Both 'fts' and 'fts_or_fallback' confirm FTS is populated;
+    // 'like_fallback' would mean the FTS index is absent.
+    expect(['fts', 'fts_or_fallback']).toContain(parsed._meta.search_mode);
   });
 
   it('every result has a numeric score field', async () => {

@@ -120,6 +120,17 @@ export interface PureContextConfig {
    */
   allowSymlinks: boolean;
   /**
+   * Symbol extraction settings that control what gets indexed per file type.
+   */
+  indexing: {
+    /**
+     * When true, plain .css files are indexed for CSS custom properties (--variable: value).
+     * SCSS, SASS, and LESS files are always indexed regardless of this flag.
+     * Default: false.
+     */
+    cssVariables: boolean;
+  };
+  /**
    * Which transport(s) to start.
    *   'stdio' — stdin/stdout (default; required for Claude Code)
    *   'http'  — HTTP + Streamable HTTP
@@ -297,6 +308,9 @@ export const DEFAULT_CONFIG: PureContextConfig = {
   },
   maxFileSizeBytes: 524_288,
   allowSymlinks: false,
+  indexing: {
+    cssVariables: false,
+  },
   transport: 'stdio',
   http: {
     port: 3000,
@@ -522,6 +536,17 @@ export function validateConfig(raw: unknown): ValidationResult {
   }
   if ('allowSymlinks' in cfg && typeof cfg['allowSymlinks'] !== 'boolean') {
     errors.push('allowSymlinks must be a boolean');
+  }
+  if ('indexing' in cfg) {
+    const idx = cfg['indexing'];
+    if (typeof idx !== 'object' || idx === null || Array.isArray(idx)) {
+      errors.push('indexing must be an object');
+    } else {
+      const i = idx as Record<string, unknown>;
+      if ('cssVariables' in i && typeof i['cssVariables'] !== 'boolean') {
+        errors.push('indexing.cssVariables must be a boolean');
+      }
+    }
   }
   if ('transport' in cfg) {
     const v = cfg['transport'];

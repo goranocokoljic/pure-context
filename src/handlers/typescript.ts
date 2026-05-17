@@ -11,7 +11,7 @@ const BODY_NODE_TYPES = new Set([
   'statement_block', 'class_body', 'interface_body', 'enum_body',
 ]);
 
-const SKIP_IN_EXPORT = new Set(['export', 'default', ';']);
+const SKIP_IN_EXPORT = new Set(['export', 'default', ';', 'decorator']);
 
 // ─── Symbol ID ────────────────────────────────────────────────────────────────
 

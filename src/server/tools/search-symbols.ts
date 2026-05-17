@@ -277,25 +277,45 @@ export async function handler(args: {
 
       if (ftsAvailable) {
         const ftsQuery = preprocessQuery(args.query);
+        // Fetch more candidates than the requested limit so the relevance ranker
+        // has a large enough pool to surface the best match even when FTS5 BM25
+        // ranking places it slightly outside the bare limit.  The ranker then
+        // re-sorts and the caller receives exactly `limit` results.
+        const ftsLimit = Math.min(limit * 4, 200);
         try {
           symbols = ftsSearchSymbols(db, repo.id, ftsQuery, {
             kind: args.kind as never,
             filePath: args.filePath,
-            limit,
+            limit: ftsLimit,
           });
 
           // OR-fallback: when the AND query returns nothing, retry with terms joined
           // by OR so that natural-language queries match symbols containing only some
           // of the query words (e.g. "parse source file tree-sitter ast" → parseFile).
-          if (symbols.length === 0) {
+          // Also fire when AND results contain no application-layer service/repo methods
+          // — this means the AND pool is filled with Prisma types or DTOs while the
+          // correct service method couldn't satisfy all AND terms (e.g. "listing"
+          // doesn't appear in ProductsService.create's FTS content).
+          const needsOrFallback =
+            symbols.length === 0 || !hasServiceMethodCandidate(symbols);
+          if (needsOrFallback) {
             const orQuery = toOrFallbackQuery(ftsQuery);
             if (orQuery !== ftsQuery) {
-              symbols = ftsSearchSymbols(db, repo.id, orQuery, {
+              const orSymbols = ftsSearchSymbols(db, repo.id, orQuery, {
                 kind: args.kind as never,
                 filePath: args.filePath,
-                limit,
+                limit: ftsLimit,
               });
-              if (symbols.length > 0) {
+              if (symbols.length === 0) {
+                symbols = orSymbols;
+              } else {
+                // Merge: append OR results not already in AND results
+                const seen = new Set(symbols.map((s) => s.id));
+                for (const s of orSymbols) {
+                  if (!seen.has(s.id)) symbols.push(s);
+                }
+              }
+              if (orSymbols.length > 0) {
                 searchMode = 'fts_or_fallback';
               }
             }
@@ -381,4 +401,25 @@ export async function handler(args: {
 
 function round4(n: number): number {
   return Math.round(n * 10000) / 10000;
+}
+
+/**
+ * Return true when the candidate pool contains at least one method on an
+ * application-layer *Service / *Repository / *Manager / *Store class.
+ *
+ * Used as a quality gate for OR-fallback: if AND results contain no such
+ * method, we augment with OR results so the ranker can surface the right
+ * service method even when it failed some AND terms.
+ */
+function hasServiceMethodCandidate(symbols: SymbolRecord[]): boolean {
+  return symbols.some((s) => {
+    if (s.kind !== 'method') return false;
+    const dotIdx = s.name.indexOf('.');
+    const colonIdx = s.name.indexOf('::');
+    const sepIdx = dotIdx >= 0 ? dotIdx : colonIdx;
+    if (sepIdx <= 0) return false;
+    const cls = s.name.slice(0, sepIdx).toLowerCase();
+    return cls.endsWith('service') || cls.endsWith('repository') ||
+           cls.endsWith('manager') || cls.endsWith('store');
+  });
 }

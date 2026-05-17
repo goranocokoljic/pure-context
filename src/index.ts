@@ -51,6 +51,10 @@ import { gdscriptHandler } from './handlers/gdscript.js';
 import { xmlHandler } from './handlers/xml.js';
 import { objectiveCHandler } from './handlers/objective-c.js';
 import { fortranHandler } from './handlers/fortran.js';
+import { scssHandler } from './handlers/scss.js';
+import { lessHandler } from './handlers/less.js';
+import { cssHandler } from './handlers/css.js';
+import { getConfig } from './config/config-loader.js';
 // Framework adapters — imported for side-effect self-registration
 import './adapters/vue.js';
 import './adapters/nuxt.js';
@@ -186,6 +190,14 @@ async function bootstrap(): Promise<void> {
   // Legacy and scientific language handlers
   registerHandler(objectiveCHandler);
   registerHandler(fortranHandler);
+  // Stylesheet handlers — regex-based, no tree-sitter grammar needed
+  registerHandler(scssHandler);
+  registerHandler(lessHandler);
+  // CSS custom properties are opt-in via indexing.cssVariables config flag
+  const cfg = getConfig();
+  if (cfg.indexing.cssVariables) {
+    registerHandler(cssHandler);
+  }
 
   // Initialise tree-sitter (loads WASM runtime + grammars lazily on first use)
   await initParser();

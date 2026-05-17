@@ -148,6 +148,9 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
     },
     maxFileSizeBytes: partial.maxFileSizeBytes ?? DEFAULT_CONFIG.maxFileSizeBytes,
     allowSymlinks: partial.allowSymlinks ?? DEFAULT_CONFIG.allowSymlinks,
+    indexing: {
+      cssVariables: partial.indexing?.cssVariables ?? DEFAULT_CONFIG.indexing.cssVariables,
+    },
     transport: partial.transport ?? DEFAULT_CONFIG.transport,
     http: {
       port: pctxPort ?? partial.http?.port ?? DEFAULT_CONFIG.http.port,

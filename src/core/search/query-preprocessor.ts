@@ -21,8 +21,8 @@
  *
  * Conservative list: only includes words where there is essentially zero risk
  * of a developer using them as a meaningful code identifier search term.
- * Words like "to" (toString), "from" (fromJSON), "new", "all", "not", "or"
- * are intentionally excluded because they do appear in code names.
+ * Words like "not", "or" are intentionally excluded because they do appear in
+ * code names (notFound, orElse).
  */
 const STOP_WORDS: ReadonlySet<string> = new Set([
   // Articles
@@ -39,6 +39,14 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
   'it', 'its', 'that', 'which', 'who', 'whom', 'what', 'when', 'where',
   // Pure prepositions with no code-name meaning
   'of', 'in', 'on', 'at', 'for', 'to', 'from', 'by', 'as', 'into',
+  // Common English connectives / modifiers safe to drop in code queries
+  'with', 'without', 'using', 'via',
+  // Common adjectives with near-zero identifier occurrence
+  'new', 'existing', 'all', 'any', 'some',
+  // Temporal / positional prepositions safe in code search context
+  'before', 'after', 'during', 'already', 'just',
+  // Relative clause words
+  'than', 'then',
 ]);
 
 /**
@@ -64,15 +72,32 @@ export function isStopWord(token: string): boolean {
  */
 const VERB_SYNONYMS: Readonly<Record<string, ReadonlyArray<string>>> = {
   // ↔ bidirectional pairs
-  'remove':     ['delete'],
-  'delete':     ['remove'],
-  'pagination': ['paging'],
-  'paging':     ['pagination'],
+  'remove':       ['delete', 'clear'],
+  'delete':       ['remove'],
+  'clear':        ['remove', 'delete'],
+  'pagination':   ['paging'],
+  'paging':       ['pagination'],
+  'disable':      ['deactivate'],
+  'deactivate':   ['disable'],
+  'confirm':      ['verify'],
+  'verify':       ['confirm'],
+  'suspend':      ['deactivate', 'disable'],
+  'revoke':       ['delete', 'remove'],
+  'forgot':       ['reset'],   // "forgotPassword" ↔ "resetPassword" flow
+  'reset':        ['forgot'],
   // → one-directional expansions
-  'signin':     ['login'],   // "sign-in" has its hyphen stripped → "signin"
-  'retrieve':   ['get', 'fetch'],
-  'expose':     ['register'],
-  'attach':     ['add'],
+  'signin':       ['login'],   // "sign-in" has its hyphen stripped → "signin"
+  'authenticate': ['login'],
+  'retrieve':     ['get', 'fetch'],
+  'expose':       ['register'],
+  'attach':       ['add'],
+  'initiate':     ['create', 'start'],
+  'submit':       ['create', 'send'],
+  'save':         ['create', 'store'],
+  'list':         ['get', 'find'],
+  'show':         ['get', 'find'],
+  'checkout':     ['create', 'place'],
+  'place':        ['create', 'checkout'],
 };
 
 /**
@@ -157,7 +182,9 @@ export function preprocessQuery(raw: string): string {
   // Step 1: strip/replace characters that have special meaning in FTS5 MATCH syntax.
   // Hyphen is replaced with a space because FTS5 interprets "word-word" as a column
   // filter ("column:token") which causes a syntax error for unknown column names.
-  const escaped = raw.replace(/["()\^*+\-]/g, ' ').trim();
+  // Single quote is stripped because FTS5 interprets it as a string-literal delimiter
+  // ("user's" → "users" after collapsing the resulting space).
+  const escaped = raw.replace(/["'()\^*+\-]/g, ' ').replace(/\s+/g, ' ').trim();
 
   if (!escaped) return '';
 
@@ -167,7 +194,8 @@ export function preprocessQuery(raw: string): string {
   // Fall back to the full word list if stripping removes everything.
   const words = escaped.split(/\s+/).filter(Boolean);
   if (words.length > 1) {
-    const meaningful = words.filter((w) => !isStopWord(w));
+    // Filter stop words and single-char tokens (e.g. "s" from stripped apostrophes like "user's")
+    const meaningful = words.filter((w) => w.length >= 2 && !isStopWord(w));
     const active = meaningful.length > 0 ? meaningful : words;
     // For each word, if synonyms exist, produce an FTS5 OR-group: (word OR syn1 OR syn2).
     // This lets the AND query match even when the code uses a synonym of the query word.

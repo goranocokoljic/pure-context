@@ -60,6 +60,22 @@ export class MyRunner {
     expect(syms.find((s) => s.name === 'MyRunner.run')?.kind).toBe('method');
   });
 
+  it('extracts a decorated exported class and its methods (NestJS @Injectable pattern)', async () => {
+    const { tree, buf } = await parse(`
+@Injectable()
+export class AuthService {
+  async register(dto: any): Promise<void> { return; }
+  async login(dto: any): Promise<string> { return ''; }
+}`.trim());
+    const syms = typescriptHandler.extractSymbols(tree, buf, 'src/auth.service.ts');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('AuthService');
+    expect(names).toContain('AuthService.register');
+    expect(names).toContain('AuthService.login');
+    expect(syms.find((s) => s.name === 'AuthService')?.kind).toBe('class');
+    expect(syms.find((s) => s.name === 'AuthService.register')?.kind).toBe('method');
+  });
+
   it('extracts an exported const', async () => {
     const { tree, buf } = await parse(`export const VERSION = '1.0.0';`);
     const syms = typescriptHandler.extractSymbols(tree, buf, 'src/a.ts');

@@ -127,6 +127,21 @@ describe('preprocessQuery — special char escaping', () => {
     expect(result).toContain('parse');
     expect(result).toContain('ast');
   });
+
+  it('strips single quotes to avoid FTS5 string-literal syntax error', () => {
+    // "user's" → "users" after stripping ' and collapsing spaces
+    const result = preprocessQuery("user's cart");
+    expect(result).not.toContain("'");
+    expect(result).toContain('user');
+    expect(result).toContain('cart');
+  });
+
+  it('handles possessive apostrophe in multi-word query without crashing', () => {
+    const result = preprocessQuery("change the logged-in user's password");
+    expect(result).not.toContain("'");
+    expect(result).toContain('user');
+    expect(result).toContain('password');
+  });
 });
 
 // ─── Short token filter ───────────────────────────────────────────────────────
@@ -398,16 +413,16 @@ describe('isStopWord — unit', () => {
     expect(isStopWord('delete')).toBe(false);
   });
 
-  it('"all" is NOT a stop word (appears in findAll, getAll)', () => {
-    expect(isStopWord('all')).toBe(false);
+  it('"all" IS a stop word (common English quantifier, near-zero identifier use)', () => {
+    expect(isStopWord('all')).toBe(true);
   });
 
   it('"not" is NOT a stop word (appears in isNotNull, notFound)', () => {
     expect(isStopWord('not')).toBe(false);
   });
 
-  it('"new" is NOT a stop word (appears in createNew, newUser)', () => {
-    expect(isStopWord('new')).toBe(false);
+  it('"new" IS a stop word (common English adjective, near-zero identifier use in multi-word NL queries)', () => {
+    expect(isStopWord('new')).toBe(true);
   });
 });
 
@@ -435,9 +450,9 @@ describe('preprocessQuery — stop word filtering (multi-word)', () => {
     expect(preprocessQuery('function to be called from twig')).toBe('function called twig');
   });
 
-  it('preserves meaningful words like "get", "set", "new", "all"', () => {
-    expect(preprocessQuery('get new user from all')).toBe('get new user all');
-    // "from" filtered, "get"/"new"/"user"/"all" preserved
+  it('preserves meaningful verbs like "get", "set" but filters "new", "all"', () => {
+    // "from", "new", "all" are stop words; "get" and "user" are preserved
+    expect(preprocessQuery('get new user from all')).toBe('get user');
   });
 
   it('falls back to original words when ALL tokens are stop words', () => {
@@ -456,6 +471,36 @@ describe('preprocessQuery — stop word filtering (multi-word)', () => {
     const result = preprocessQuery('parseFile');
     expect(result).toContain('parse');
     expect(result).toContain('file');
+  });
+
+  // Phase 39 additions
+  it('filters "with" as a stop word', () => {
+    expect(preprocessQuery('authenticate user with credentials')).not.toContain('with');
+  });
+
+  it('filters "without" as a stop word', () => {
+    expect(preprocessQuery('disable product without deleting')).not.toContain('without');
+  });
+
+  it('filters "using" as a stop word', () => {
+    expect(preprocessQuery('confirm email using verification token')).not.toContain('using');
+  });
+
+  it('filters "before" as a stop word', () => {
+    expect(preprocessQuery('cancel order before ships')).not.toContain('before');
+  });
+
+  it('filters "existing" as a stop word', () => {
+    expect(preprocessQuery('cancel existing order')).not.toContain('existing');
+  });
+
+  it('filters single-char tokens from multi-word queries (apostrophe-stripped "s")', () => {
+    // "user's" → "user s" after apostrophe strip; "s" (length 1) must be dropped
+    const result = preprocessQuery("change the user's password");
+    expect(result).not.toMatch(/\bs\b/);
+    expect(result).toContain('change');
+    expect(result).toContain('user');
+    expect(result).toContain('password');
   });
 });
 
@@ -492,8 +537,8 @@ describe('toOrFallbackQuery — stop word filtering', () => {
 // ─── Task 220: expandVerbSynonyms — unit ─────────────────────────────────────
 
 describe('expandVerbSynonyms — unit', () => {
-  it('remove → delete', () => {
-    expect(expandVerbSynonyms('remove')).toEqual(['delete']);
+  it('remove → delete and clear (bidirectional with clear)', () => {
+    expect(expandVerbSynonyms('remove')).toEqual(['delete', 'clear']);
   });
 
   it('delete → remove (bidirectional)', () => {
@@ -525,7 +570,7 @@ describe('expandVerbSynonyms — unit', () => {
   });
 
   it('lookup is case-insensitive — REMOVE maps like remove', () => {
-    expect(expandVerbSynonyms('REMOVE')).toEqual(['delete']);
+    expect(expandVerbSynonyms('REMOVE')).toEqual(['delete', 'clear']);
   });
 
   it('unknown token returns empty array', () => {
@@ -539,14 +584,51 @@ describe('expandVerbSynonyms — unit', () => {
   it('login has no synonym (signin→login is one-directional)', () => {
     expect(expandVerbSynonyms('login')).toEqual([]);
   });
+
+  // Phase 39 new synonyms
+  it('confirm → verify', () => {
+    expect(expandVerbSynonyms('confirm')).toEqual(['verify']);
+  });
+
+  it('verify → confirm (bidirectional)', () => {
+    expect(expandVerbSynonyms('verify')).toEqual(['confirm']);
+  });
+
+  it('authenticate → login', () => {
+    expect(expandVerbSynonyms('authenticate')).toEqual(['login']);
+  });
+
+  it('disable → deactivate', () => {
+    expect(expandVerbSynonyms('disable')).toEqual(['deactivate']);
+  });
+
+  it('deactivate → disable (bidirectional)', () => {
+    expect(expandVerbSynonyms('deactivate')).toEqual(['disable']);
+  });
+
+  it('suspend → deactivate and disable', () => {
+    expect(expandVerbSynonyms('suspend')).toEqual(['deactivate', 'disable']);
+  });
+
+  it('clear → remove and delete', () => {
+    expect(expandVerbSynonyms('clear')).toEqual(['remove', 'delete']);
+  });
+
+  it('initiate → create and start', () => {
+    expect(expandVerbSynonyms('initiate')).toEqual(['create', 'start']);
+  });
+
+  it('save → create and store', () => {
+    expect(expandVerbSynonyms('save')).toEqual(['create', 'store']);
+  });
 });
 
 // ─── Task 220: verb synonym expansion in preprocessQuery (multi-word) ─────────
 
 describe('preprocessQuery — verb synonym expansion (multi-word)', () => {
-  it('remove → wraps as (remove OR delete) in AND query', () => {
+  it('remove → wraps as (remove OR delete OR clear) in AND query', () => {
     const result = preprocessQuery('remove unused imports');
-    expect(result).toContain('(remove OR delete)');
+    expect(result).toContain('(remove OR delete OR clear)');
     expect(result).toContain('unused');
     expect(result).toContain('imports');
   });
@@ -604,7 +686,7 @@ describe('preprocessQuery — verb synonym expansion (multi-word)', () => {
   it('stop words are filtered before synonym expansion', () => {
     // "for" is a stop word and is removed; "remove" gets synonym expansion
     const result = preprocessQuery('remove entry for user');
-    expect(result).toContain('(remove OR delete)');
+    expect(result).toContain('(remove OR delete OR clear)');
     expect(result).toContain('entry');
     expect(result).toContain('user');
     expect(result).not.toContain('for');
@@ -661,10 +743,10 @@ describe('toOrFallbackQuery — verb synonym expansion', () => {
 
 describe('preprocessQuery — explicit AND with synonym groups', () => {
   it('uses explicit AND when any part is a synonym group', () => {
-    // "(remove OR delete)" is a group — must use AND not implicit space so FTS5
+    // "(remove OR delete OR clear)" is a group — must use AND not implicit space so FTS5
     // does not throw "syntax error near <next token>"
     const result = preprocessQuery('remove record from table by id');
-    expect(result).toBe('(remove OR delete) AND record AND table AND id');
+    expect(result).toBe('(remove OR delete OR clear) AND record AND table AND id');
   });
 
   it('still uses spaces (implicit AND) when no synonyms are present', () => {
@@ -680,7 +762,7 @@ describe('preprocessQuery — explicit AND with synonym groups', () => {
   it('explicit AND separates every token when middle token has synonyms', () => {
     const result = preprocessQuery('get and remove item');
     // "and" is a stop word → removed; "remove" gets synonym group
-    expect(result).toBe('get AND (remove OR delete) AND item');
+    expect(result).toBe('get AND (remove OR delete OR clear) AND item');
   });
 });
 
@@ -720,5 +802,31 @@ describe('toOrFallbackQuery — synonym group flattening', () => {
     expect(result).toContain('add');
     expect(result).toContain('name');
     expect(result).not.toContain(' AND ');
+  });
+});
+
+// ─── forgot ↔ reset synonym (gt-03 regression) ───────────────────────────────
+
+describe('expandVerbSynonyms — forgot/reset password flow', () => {
+  it('"forgot" expands to ["reset"]', () => {
+    expect(expandVerbSynonyms('forgot')).toContain('reset');
+  });
+
+  it('"reset" expands to ["forgot"]', () => {
+    expect(expandVerbSynonyms('reset')).toContain('forgot');
+  });
+
+  it('multi-word query "send password reset link" includes forgot synonym group in FTS', () => {
+    // "reset" → synonym "forgot", so FTS output should have OR group for "reset"
+    const result = preprocessQuery('send password reset link');
+    // Both "reset" and "forgot" should appear (either as OR group or inline)
+    expect(result).toContain('reset');
+    expect(result).toContain('forgot');
+  });
+
+  it('multi-word query "forgot password" includes reset synonym group', () => {
+    const result = preprocessQuery('forgot password');
+    expect(result).toContain('forgot');
+    expect(result).toContain('reset');
   });
 });
