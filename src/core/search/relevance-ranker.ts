@@ -55,6 +55,7 @@ export interface DebugScore {
   kindHintBoost: number;
   libraryPenalty: number;
   recencyBoost: number;
+  ftsBm25Bonus: number;
 }
 
 export interface ScoredSymbol {
@@ -142,17 +143,47 @@ function classFromSignature(name: string, signature: string): string {
  *
  * When `debug` is true, each result includes a `debugScore` breakdown.
  */
-export function rankSymbols(symbols: SymbolRecord[], query: string, debug = false): ScoredSymbol[] {
+export function rankSymbols(symbols: SymbolRecord[], query: string, debug = false, domain?: string): ScoredSymbol[] {
   if (symbols.length === 0) return [];
 
   const queryLower = query.trim().toLowerCase();
-  const queryWords = extractQueryWords(query.trim());
+  const queryWords = extractQueryWords(query.trim(), domain);
 
-  const scored = symbols.map((symbol, originalIndex) => ({
-    ...score(symbol, queryLower, queryWords),
-    symbol,
-    originalIndex,
-  }));
+  // ── FTS5 BM25 normalization ──────────────────────────────────────────────────
+  //
+  // BM25 scores are negative (more negative = better match). We normalize the
+  // candidate set's BM25 scores to a [0, 50] bonus so summary-only matches
+  // (e.g. a function whose name is unrelated to the query but whose docstring
+  // describes it perfectly) rise above generic name-noise matches.
+  //
+  // Normalization formula:
+  //   bonus_i = (score_i - worst) / (best - worst) * 50
+  // where best = min(bm25 values) and worst = max(bm25 values).
+  // When all scores are equal (range = 0), every symbol gets 25.
+  const bm25Values = symbols.map((s) => s.ftsBm25 ?? 0).filter((v) => v !== 0);
+  let bm25Bonuses: number[] = symbols.map(() => 0);
+  if (bm25Values.length > 0) {
+    const best = Math.min(...bm25Values);   // most negative = best match
+    const worst = Math.max(...bm25Values);  // least negative = worst match
+    const range = best - worst;             // always <= 0
+    bm25Bonuses = symbols.map((s) => {
+      if (s.ftsBm25 === undefined) return 0;
+      return range !== 0 ? Math.max(0, ((s.ftsBm25 - worst) / range) * 50) : 25;
+    });
+  }
+
+  const scored = symbols.map((symbol, originalIndex) => {
+    const baseScore = score(symbol, queryLower, queryWords);
+    const ftsBm25Bonus = bm25Bonuses[originalIndex]!;
+    baseScore.debugScore.ftsBm25Bonus = ftsBm25Bonus;
+    baseScore.debugScore.total += ftsBm25Bonus;
+    return {
+      ...baseScore,
+      score: baseScore.score + ftsBm25Bonus,
+      symbol,
+      originalIndex,
+    };
+  });
 
   scored.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
@@ -480,6 +511,7 @@ function score(
     kindHintBoost,
     libraryPenalty,
     recencyBoost: 0,
+    ftsBm25Bonus: 0,
   };
 
   return { score: total, matchReason, debugScore };
@@ -586,7 +618,7 @@ function addStemsOf(word: string, set: Set<string>): void {
  *   'updated homepage'     → ['updated', 'update', 'updat', 'homepage']
  *   'front-end controller' → ['front', 'end', 'controller']
  */
-function extractQueryWords(raw: string): string[] {
+function extractQueryWords(raw: string, domain?: string): string[] {
   const words = new Set<string>();
 
   // Split on both whitespace and hyphens so "front-end" → ["front", "end"]
@@ -601,7 +633,7 @@ function extractQueryWords(raw: string): string[] {
     addStemsOf(lower, words);
     // Synonym expansion: add code-domain synonyms so the ranker rewards symbols
     // whose names use a synonym of the query word (e.g. "authenticate" → "login").
-    for (const syn of expandVerbSynonyms(lower)) {
+    for (const syn of expandVerbSynonyms(lower, domain)) {
       words.add(syn);
       addStemsOf(syn, words);
     }

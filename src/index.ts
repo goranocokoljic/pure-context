@@ -91,6 +91,7 @@ import { startServer } from './server/mcp-server.js';
 import { cmdInit, cmdCheck, cmdShow, cmdHealth, cmdExport, cmdImport, cmdFetch, cmdListPublic, cmdIndexFolder, cmdAnalyzeDiff, cmdDetectAntipatterns } from './config/cli.js';
 import { runKeysCommand } from './config/keys-cli.js';
 import { runWorkspacesCommand } from './config/workspaces-cli.js';
+import { runHooksCommand } from './cli/hooks.js';
 import { VERSION } from './version.js';
 import { PureContextError, formatErrorBox } from './core/errors.js';
 
@@ -132,6 +133,8 @@ Usage:
   purecontext-mcp index-folder [--path <dir>]   Index a folder (defaults to cwd)
   purecontext-mcp analyze-diff --diff-file <f>  Analyze PR diff, print JSON impact report
   purecontext-mcp detect-antipatterns [--fail-on-critical]  Scan for anti-patterns
+  purecontext-mcp hooks --install         Install Claude Code hooks into ~/.claude/hooks/
+  purecontext-mcp hooks --list            Show hook installation state
   purecontext-mcp --version               Print version
   purecontext-mcp --help                  Print this help
 
@@ -235,6 +238,12 @@ async function main(): Promise<void> {
   // ── workspaces sub-command ────────────────────────────────────────────────
   if (args[0] === 'workspaces') {
     runWorkspacesCommand(args.slice(1));
+    return;
+  }
+
+  // ── hooks sub-command ────────────────────────────────────────────────────
+  if (args[0] === 'hooks') {
+    runHooksCommand(args.slice(1));
     return;
   }
 

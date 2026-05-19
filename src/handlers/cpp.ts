@@ -234,8 +234,7 @@ function extractDocstring(node: SyntaxNode): string | null {
   }
   if (lineComments.length > 0) {
     const joined = lineComments.join(' ');
-    const match = joined.match(/^([^.!?]*[.!?]?)/);
-    return (match ? match[1]!.trim() : joined) || null;
+    return joined.slice(0, 400) || null;
   }
 
   // Block comment /* ... */ or /** ... */
@@ -250,8 +249,7 @@ function extractDocstring(node: SyntaxNode): string | null {
         .filter(Boolean)
         .join(' ');
       if (!inner) return null;
-      const match = inner.match(/^([^.!?]*[.!?]?)/);
-      return (match ? match[1]!.trim() : inner) || null;
+      return inner.slice(0, 400) || null;
     }
   }
 

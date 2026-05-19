@@ -66,6 +66,11 @@ export interface SymbolRecord {
    * Used only to enrich FTS content so natural-language queries can match body words.
    */
   bodySnippet?: string;
+  /**
+   * FTS5 BM25 score from the FTS search that produced this symbol.
+   * Negative (more negative = better match). Only set when symbol comes from ftsSearchSymbols.
+   */
+  ftsBm25?: number;
 }
 
 export interface ImportRecord {

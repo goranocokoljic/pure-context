@@ -304,6 +304,141 @@ describe('Kotlin handler — extractImports', () => {
   });
 });
 
+// ─── Task 272: Extension functions ────────────────────────────────────────────
+
+describe('Kotlin handler — extension functions', () => {
+  it('extracts a simple extension function with receiver type as kind method', async () => {
+    const { tree, buf } = await parse(`fun String.greet(name: String): String = "Hello"\n`);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Ext.kt');
+    const fn = syms.find((s) => s.name === 'String.greet');
+    expect(fn).toBeDefined();
+    expect(fn!.kind).toBe('method');
+    expect(fn!.signature).toContain('fun String.greet');
+  });
+
+  it('strips generic type parameters from extension receiver type', async () => {
+    const { tree, buf } = await parse(`fun List<Int>.sumAll(): Int = fold(0) { a, b -> a + b }\n`);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Ext.kt');
+    const fn = syms.find((s) => s.name === 'List.sumAll');
+    expect(fn).toBeDefined();
+    expect(fn!.kind).toBe('method');
+  });
+
+  it('extracts extension function on nested type (Companion)', async () => {
+    const src = `fun CartesianChartModel.Companion.empty(): String = ""\n`;
+    const { tree, buf } = await parse(src);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Ext.kt');
+    const fn = syms.find((s) => s.name === 'CartesianChartModel.Companion.empty');
+    expect(fn).toBeDefined();
+    expect(fn!.kind).toBe('method');
+  });
+
+  it('does not confuse regular function with extension function', async () => {
+    const { tree, buf } = await parse(`fun regularFun(name: String): String = name\n`);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Reg.kt');
+    const fn = syms.find((s) => s.name === 'regularFun');
+    expect(fn).toBeDefined();
+    expect(fn!.kind).toBe('function');
+  });
+
+  it('extension function does not appear with bare short name', async () => {
+    const { tree, buf } = await parse(`fun CartesianChart.draw(): Unit {}\n`);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Ext.kt');
+    expect(syms.find((s) => s.name === 'draw')).toBeUndefined();
+    expect(syms.find((s) => s.name === 'CartesianChart.draw')).toBeDefined();
+  });
+
+  it('does not extract private extension function', async () => {
+    const { tree, buf } = await parse(`private fun String.secret(): String = this\n`);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Ext.kt');
+    expect(syms.find((s) => s.name.endsWith('.secret'))).toBeUndefined();
+  });
+});
+
+// ─── Task 272: Data class primary constructor properties ──────────────────────
+
+describe('Kotlin handler — data class primary constructor properties', () => {
+  it('extracts val constructor properties as kind property', async () => {
+    const src = `data class User(val name: String, val email: String)\n`;
+    const { tree, buf } = await parse(src);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'User.kt');
+    expect(syms.find((s) => s.name === 'User.name' && s.kind === 'property')).toBeDefined();
+    expect(syms.find((s) => s.name === 'User.email' && s.kind === 'property')).toBeDefined();
+  });
+
+  it('extracts var constructor properties as kind property', async () => {
+    const src = `data class MutableModel(var count: Int = 0, var label: String = "")\n`;
+    const { tree, buf } = await parse(src);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Model.kt');
+    expect(syms.find((s) => s.name === 'MutableModel.count' && s.kind === 'property')).toBeDefined();
+    expect(syms.find((s) => s.name === 'MutableModel.label' && s.kind === 'property')).toBeDefined();
+  });
+
+  it('does not extract private constructor properties', async () => {
+    const src = `data class Secure(val name: String, private val secret: String)\n`;
+    const { tree, buf } = await parse(src);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Secure.kt');
+    expect(syms.find((s) => s.name === 'Secure.name')).toBeDefined();
+    expect(syms.find((s) => s.name === 'Secure.secret')).toBeUndefined();
+  });
+
+  it('does not extract constructor parameters without val/var', async () => {
+    const src = `class NotDataClass(name: String, count: Int)\n`;
+    const { tree, buf } = await parse(src);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Plain.kt');
+    expect(syms.filter((s) => s.kind === 'property')).toHaveLength(0);
+  });
+
+  it('property signature contains the parameter declaration', async () => {
+    const src = `data class Entry(val x: Float, val y: Float)\n`;
+    const { tree, buf } = await parse(src);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Entry.kt');
+    const xProp = syms.find((s) => s.name === 'Entry.x');
+    expect(xProp).toBeDefined();
+    expect(xProp!.signature).toContain('val x');
+  });
+
+  it('extracts properties from a class with both primary constructor and body methods', async () => {
+    const src = `data class Order(val id: Long, val total: Double) {\n  fun isValid(): Boolean = total > 0\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Order.kt');
+    expect(syms.find((s) => s.name === 'Order.id' && s.kind === 'property')).toBeDefined();
+    expect(syms.find((s) => s.name === 'Order.total' && s.kind === 'property')).toBeDefined();
+    expect(syms.find((s) => s.name === 'Order.isValid' && s.kind === 'method')).toBeDefined();
+  });
+});
+
+// ─── Task 272: Interface method stubs ─────────────────────────────────────────
+
+describe('Kotlin handler — interface method stubs', () => {
+  it('extracts interface method declarations as kind method', async () => {
+    const src = `interface CartesianLayer {\n  fun draw(canvas: String)\n  fun update()\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Layer.kt');
+    expect(syms.find((s) => s.name === 'CartesianLayer.draw' && s.kind === 'method')).toBeDefined();
+    expect(syms.find((s) => s.name === 'CartesianLayer.update' && s.kind === 'method')).toBeDefined();
+  });
+
+  it('interface itself is extracted as kind interface', async () => {
+    const src = `interface Repository {\n  fun findById(id: Long): String?\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Repo.kt');
+    const iface = syms.find((s) => s.name === 'Repository');
+    expect(iface!.kind).toBe('interface');
+    const method = syms.find((s) => s.name === 'Repository.findById');
+    expect(method).toBeDefined();
+    expect(method!.kind).toBe('method');
+  });
+
+  it('multiple interface methods are all extracted', async () => {
+    const src = `interface Chart {\n  fun draw()\n  fun update(model: String)\n  fun clear()\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = kotlinHandler.extractSymbols(tree, buf, 'Chart.kt');
+    const methods = syms.filter((s) => s.kind === 'method');
+    expect(methods.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
 // ─── Handler metadata ─────────────────────────────────────────────────────────
 
 describe('Kotlin handler — metadata', () => {

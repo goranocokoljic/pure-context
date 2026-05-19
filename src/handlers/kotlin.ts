@@ -133,8 +133,28 @@ function walkNode(
       const name = simpleName(node, src);
       if (!name) break;
 
-      const qualName = ctx.className ? `${ctx.className}.${name}` : name;
-      const kind: SymbolKind = ctx.className ? 'method' : 'function';
+      // Detect extension functions: a user_type or nullable_type child appears
+      // before a "." anonymous node before the simple_identifier (function name).
+      let receiverText: string | null = null;
+      if (ctx.className === null) {
+        const dotIdx = node.children.findIndex(
+          (c) => !c.isNamed && c.type === '.',
+        );
+        if (dotIdx > 0) {
+          const beforeDot = node.children[dotIdx - 1];
+          if (beforeDot && (beforeDot.type === 'user_type' || beforeDot.type === 'nullable_type')) {
+            // Strip generic type parameters for a clean symbol name
+            receiverText = nodeText(beforeDot, src).replace(/<[^>]*>/g, '').trim();
+          }
+        }
+      }
+
+      const qualName = ctx.className
+        ? `${ctx.className}.${name}`
+        : receiverText
+          ? `${receiverText}.${name}`
+          : name;
+      const kind: SymbolKind = (ctx.className || receiverText) ? 'method' : 'function';
       const sig = buildFunctionSignature(node, src);
       symbols.push({
         id: makeId(filePath, qualName, kind),
@@ -144,7 +164,7 @@ function walkNode(
         startByte: node.startIndex,
         endByte: node.endIndex,
         signature: sig,
-        summary: ctx.className
+        summary: (ctx.className || receiverText)
           ? `Kotlin method: ${qualName}`
           : `Kotlin function: ${qualName}`,
       });
@@ -170,6 +190,31 @@ function walkNode(
         signature: sig,
         summary: `Kotlin ${kind}: ${name}`,
       });
+
+      // Extract primary constructor properties (val/var class_parameter nodes)
+      const primaryCtor = node.children.find((c) => c.type === 'primary_constructor');
+      if (primaryCtor) {
+        for (const param of primaryCtor.children) {
+          if (param.type !== 'class_parameter') continue;
+          const bindingKind = childText(param, src, 'binding_pattern_kind');
+          if (bindingKind !== 'val' && bindingKind !== 'var') continue;
+          if (isPrivateOrInternal(param, src)) continue;
+          const propName = simpleName(param, src);
+          if (!propName) continue;
+          const qualPropName = `${name}.${propName}`;
+          const sig = nodeText(param, src).replace(/\s+/g, ' ').trim().slice(0, 120);
+          symbols.push({
+            id: makeId(filePath, qualPropName, 'property'),
+            name: qualPropName,
+            kind: 'property',
+            filePath,
+            startByte: param.startIndex,
+            endByte: param.endIndex,
+            signature: sig,
+            summary: `Kotlin property: ${qualPropName}`,
+          });
+        }
+      }
 
       // Recurse into class body
       const body = node.children.find(

@@ -123,9 +123,12 @@ dev-docs/          # Phase task files, benchmark notes (gitignored, not public)
 
 ## Current Phase
 
-**Phase 48 — Claude Code Hooks + Negative Evidence + Benchmark Regressions**
+**Phase 49 — COMPLETE** (Benchmark gap closure: docstrings, BM25, Nuxt synonyms, Kotlin depth)
 
-Tasks 263–268. See `dev-docs/PHASE48_TASKS.md` for full detail.
+Tasks 269–273 complete. PC now wins 16/19 P@1 (was 12/19). See `dev-docs/PHASE49_TASKS.md` for detail.
+
+**Phase 50 — Next** (TBD)
+
 Full phase history: `dev-docs/PHASE*_TASKS.md` files.
 
 ---
@@ -136,11 +139,11 @@ Recent significant decisions:
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
+| 2026-05-19 | Phase 48: Rendering synonyms scoped via RENDERING_ONLY_SYNONYMS | Added set of rendering-only synonym tokens; expandVerbSynonyms/preprocessQuery/toOrFallbackQuery/rankSymbols accept optional `domain` param; search-symbols.ts detects rendering repos by name pattern (mitsuba, render, shader, etc.). Fixes nuxt/airodump/origamicms-frontend regressions. |
 | 2026-05-19 | Phase 48: Claude Code hooks in Node.js | Cross-platform (Windows/Linux/macOS) without bash/PS1 split — Node is already a hard dependency. Three hooks: PostToolUse index hook, PreCompact snapshot, Edit Guard (soft, never blocks). |
-| 2026-05-19 | Negative evidence in `search_symbols` | When 0 results after all fallbacks, return `verdict: "no_match"` to stop agents from re-searching with variant queries. |
+| 2026-05-19 | Phase 48: Negative evidence in `search_symbols` | When 0 results after all fallbacks, return `verdict: "no_match"` to stop agents from re-searching with variant queries. |
 | 2026-05-19 | `AGENT_REFERENCE.md` in project root | Full tool reference, navigation patterns, known limitations moved out of global CLAUDE.md. Always-on instructions trimmed to ~80 lines; reference loaded on demand. |
 | 2026-05-18 | Phase 47: Java bare method names + C++ template class extraction | fleetdirect-android 0%: Java methods used qualified names. mitsuba3 0%: tree-sitter-cpp misparsed `class MI_EXPORT_LIB ClassName` as `function_definition`. Fix: detect misparse pattern, emit class symbol, walk body. |
-| 2026-05-18 | Phase 47: Rendering domain synonyms scoped to rendering repos | light↔emitter, camera↔sensor, glass↔dielectric etc. caused regressions in nuxt/airodump/origamicms-frontend when applied globally. Phase 48 Task 268 scopes them to rendering-domain repos only. |
 | 2026-05-18 | Phase 46: Go/Rust bare method names + identity-exact boost | PC stored receiver-qualified names (`Manager.PushCampaignMessage`) but ground truth uses bare names. Identity-exact +40 boost mirrors JC's Identity channel (weight=2.0). |
 | 2026-05-17 | Stylesheet handler: regex-only (no WASM) | SCSS/LESS/CSS handlers use regex extraction — no tree-sitter grammars available. Only named reusable constructs indexed (mixins, variables, functions); plain selectors excluded. |
 

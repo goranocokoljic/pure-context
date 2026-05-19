@@ -520,44 +520,53 @@ describe('preprocessQuery — C/C++ abbreviation expansion', () => {
 // ─── Task 250: rendering verb synonyms ───────────────────────────────────────
 
 describe('expandVerbSynonyms — C/C++ rendering synonyms', () => {
-  it('"render" expands to draw, display, paint', () => {
-    expect(expandVerbSynonyms('render')).toEqual(['draw', 'display', 'paint']);
+  it('"render" expands to draw, display, paint (rendering domain)', () => {
+    expect(expandVerbSynonyms('render', 'rendering')).toEqual(['draw', 'display', 'paint']);
   });
 
-  it('"draw" expands to render, display', () => {
-    expect(expandVerbSynonyms('draw')).toEqual(['render', 'display']);
+  it('"render" returns [] without rendering domain (Task 268 scoping)', () => {
+    expect(expandVerbSynonyms('render')).toEqual([]);
   });
 
-  it('"integrate" expands to compute, evaluate, sample', () => {
-    expect(expandVerbSynonyms('integrate')).toEqual(['compute', 'evaluate', 'sample']);
+  it('"draw" expands to render, display (rendering domain)', () => {
+    expect(expandVerbSynonyms('draw', 'rendering')).toEqual(['render', 'display']);
   });
 
-  it('"sample" expands to integrate, evaluate', () => {
-    expect(expandVerbSynonyms('sample')).toEqual(['integrate', 'evaluate']);
+  it('"integrate" expands to compute, evaluate, sample (rendering domain)', () => {
+    expect(expandVerbSynonyms('integrate', 'rendering')).toEqual(['compute', 'evaluate', 'sample']);
   });
 
-  it('"trace" expands to ray, intersect', () => {
-    expect(expandVerbSynonyms('trace')).toEqual(['ray', 'intersect']);
+  it('"sample" expands to integrate, evaluate (rendering domain)', () => {
+    expect(expandVerbSynonyms('sample', 'rendering')).toEqual(['integrate', 'evaluate']);
   });
 
-  it('"intersect" expands to trace, collide', () => {
-    expect(expandVerbSynonyms('intersect')).toEqual(['trace', 'collide']);
+  it('"trace" expands to ray, intersect (rendering domain)', () => {
+    expect(expandVerbSynonyms('trace', 'rendering')).toEqual(['ray', 'intersect']);
   });
 
-  it('"emit" expands to send, dispatch, fire', () => {
-    expect(expandVerbSynonyms('emit')).toEqual(['send', 'dispatch', 'fire']);
+  it('"intersect" expands to trace, collide (rendering domain)', () => {
+    expect(expandVerbSynonyms('intersect', 'rendering')).toEqual(['trace', 'collide']);
   });
 
-  it('"dispatch" expands to emit, send, route', () => {
-    expect(expandVerbSynonyms('dispatch')).toEqual(['emit', 'send', 'route']);
+  it('"emit" expands to send, dispatch, fire (rendering domain)', () => {
+    expect(expandVerbSynonyms('emit', 'rendering')).toEqual(['send', 'dispatch', 'fire']);
   });
 
-  it('multi-word query with "render" synonym activates', () => {
-    const result = preprocessQuery('render scene depth');
-    // render should expand to (render OR draw OR display OR paint)
+  it('"dispatch" expands to emit, send, route (rendering domain)', () => {
+    expect(expandVerbSynonyms('dispatch', 'rendering')).toEqual(['emit', 'send', 'route']);
+  });
+
+  it('multi-word query with "render" synonym activates (rendering domain)', () => {
+    const result = preprocessQuery('render scene depth', 'rendering');
     expect(result).toContain('render');
     expect(result).toContain('draw');
     expect(result).toContain('display');
+  });
+
+  it('multi-word query with "render" does NOT expand synonyms without domain', () => {
+    const result = preprocessQuery('render scene depth');
+    expect(result).not.toContain('draw');
+    expect(result).not.toContain('display');
   });
 });
 
@@ -736,10 +745,10 @@ describe('isStopWord — unit', () => {
 
 describe('preprocessQuery — stop word filtering (multi-word)', () => {
   it('removes conjunction "and" from multi-word query', () => {
-    // 'render' and 'display' now have synonyms, so they each produce OR groups
-    const result = preprocessQuery('render and display');
-    expect(result).toContain('render');
-    expect(result).toContain('display');
+    // 'remove' and 'list' have synonyms, so they each produce OR groups
+    const result = preprocessQuery('remove and list');
+    expect(result).toContain('remove');
+    expect(result).toContain('list');
     // The synonym groups should be joined with AND
     expect(result).toContain('AND');
   });
@@ -1545,115 +1554,128 @@ describe('Symfony and Doctrine verb synonym expansion', () => {
 // ─── Task 260: rendering domain synonyms (mitsuba3 / PBR vocabulary) ─────────
 
 describe('expandVerbSynonyms — rendering domain (PBR / mitsuba3)', () => {
-  it('"light" expands to emitter', () => {
-    expect(expandVerbSynonyms('light')).toEqual(['emitter']);
+  it('"light" expands to emitter (rendering domain)', () => {
+    expect(expandVerbSynonyms('light', 'rendering')).toEqual(['emitter']);
   });
 
-  it('"emitter" expands to light', () => {
-    expect(expandVerbSynonyms('emitter')).toEqual(['light']);
+  it('"light" returns [] without rendering domain (Task 268 regression fix)', () => {
+    expect(expandVerbSynonyms('light')).toEqual([]);
   });
 
-  it('"camera" expands to sensor', () => {
-    expect(expandVerbSynonyms('camera')).toEqual(['sensor']);
+  it('"emitter" expands to light (rendering domain)', () => {
+    expect(expandVerbSynonyms('emitter', 'rendering')).toEqual(['light']);
   });
 
-  it('"sensor" expands to camera', () => {
-    expect(expandVerbSynonyms('sensor')).toEqual(['camera']);
+  it('"camera" expands to sensor (rendering domain)', () => {
+    expect(expandVerbSynonyms('camera', 'rendering')).toEqual(['sensor']);
   });
 
-  it('"material" expands to bsdf, shader', () => {
-    expect(expandVerbSynonyms('material')).toEqual(['bsdf', 'shader']);
+  it('"sensor" expands to camera (rendering domain)', () => {
+    expect(expandVerbSynonyms('sensor', 'rendering')).toEqual(['camera']);
   });
 
-  it('"bsdf" expands to material, shader', () => {
-    expect(expandVerbSynonyms('bsdf')).toEqual(['material', 'shader']);
+  it('"material" expands to bsdf, shader (rendering domain)', () => {
+    expect(expandVerbSynonyms('material', 'rendering')).toEqual(['bsdf', 'shader']);
   });
 
-  it('"glass" expands to dielectric', () => {
-    expect(expandVerbSynonyms('glass')).toEqual(['dielectric']);
+  it('"bsdf" expands to material, shader (rendering domain)', () => {
+    expect(expandVerbSynonyms('bsdf', 'rendering')).toEqual(['material', 'shader']);
   });
 
-  it('"dielectric" expands to glass', () => {
-    expect(expandVerbSynonyms('dielectric')).toEqual(['glass']);
+  it('"glass" expands to dielectric (rendering domain)', () => {
+    expect(expandVerbSynonyms('glass', 'rendering')).toEqual(['dielectric']);
   });
 
-  it('"metal" expands to conductor', () => {
-    expect(expandVerbSynonyms('metal')).toEqual(['conductor']);
+  it('"dielectric" expands to glass (rendering domain)', () => {
+    expect(expandVerbSynonyms('dielectric', 'rendering')).toEqual(['glass']);
   });
 
-  it('"conductor" expands to metal', () => {
-    expect(expandVerbSynonyms('conductor')).toEqual(['metal']);
+  it('"metal" expands to conductor (rendering domain)', () => {
+    expect(expandVerbSynonyms('metal', 'rendering')).toEqual(['conductor']);
   });
 
-  it('"film" expands to buffer, image', () => {
-    expect(expandVerbSynonyms('film')).toEqual(['buffer', 'image']);
+  it('"conductor" expands to metal (rendering domain)', () => {
+    expect(expandVerbSynonyms('conductor', 'rendering')).toEqual(['metal']);
   });
 
-  it('"acceleration" expands to kdtree, bvh', () => {
-    expect(expandVerbSynonyms('acceleration')).toEqual(['kdtree', 'bvh']);
+  it('"film" expands to buffer, image (rendering domain)', () => {
+    expect(expandVerbSynonyms('film', 'rendering')).toEqual(['buffer', 'image']);
   });
 
-  it('"bidirectional" expands to bsdf', () => {
-    expect(expandVerbSynonyms('bidirectional')).toEqual(['bsdf']);
+  it('"acceleration" expands to kdtree, bvh (rendering domain)', () => {
+    expect(expandVerbSynonyms('acceleration', 'rendering')).toEqual(['kdtree', 'bvh']);
   });
 
-  it('"lambertian" expands to diffuse, smooth', () => {
-    expect(expandVerbSynonyms('lambertian')).toEqual(['diffuse', 'smooth']);
+  it('"bidirectional" expands to bsdf (rendering domain)', () => {
+    expect(expandVerbSynonyms('bidirectional', 'rendering')).toEqual(['bsdf']);
   });
 
-  // Multi-word query activation tests
-  it('preprocessQuery "abstract base class for all light sources" adds emitter to OR group', () => {
-    const result = preprocessQuery('abstract base class for all light sources');
+  it('"lambertian" expands to diffuse, smooth (rendering domain)', () => {
+    expect(expandVerbSynonyms('lambertian', 'rendering')).toEqual(['diffuse', 'smooth']);
+  });
+
+  // Multi-word query activation tests — require rendering domain
+  it('preprocessQuery "abstract base class for all light sources" adds emitter to OR group (rendering domain)', () => {
+    const result = preprocessQuery('abstract base class for all light sources', 'rendering');
     expect(result).toContain('light');
     expect(result).toContain('emitter');
   });
 
-  it('preprocessQuery "abstract base camera class" adds sensor to OR group', () => {
-    const result = preprocessQuery('abstract base camera class');
+  it('preprocessQuery "abstract base camera class" adds sensor to OR group (rendering domain)', () => {
+    const result = preprocessQuery('abstract base camera class', 'rendering');
     expect(result).toContain('camera');
     expect(result).toContain('sensor');
   });
 
-  it('preprocessQuery "Lambertian diffuse material" adds bsdf and smooth to result', () => {
-    const result = preprocessQuery('Lambertian diffuse material');
+  it('preprocessQuery "Lambertian diffuse material" adds bsdf and smooth to result (rendering domain)', () => {
+    const result = preprocessQuery('Lambertian diffuse material', 'rendering');
     const lower = result.toLowerCase();
     expect(lower).toContain('material');
     expect(lower).toContain('bsdf');
     expect(lower).toContain('lambertian');
   });
 
-  it('preprocessQuery "ideal glass material" adds dielectric to OR group', () => {
-    const result = preprocessQuery('ideal glass material');
+  it('preprocessQuery "ideal glass material" adds dielectric to OR group (rendering domain)', () => {
+    const result = preprocessQuery('ideal glass material', 'rendering');
     expect(result).toContain('glass');
     expect(result).toContain('dielectric');
   });
 
-  it('preprocessQuery "rough metal material" adds conductor to OR group', () => {
-    const result = preprocessQuery('rough metal material');
+  it('preprocessQuery "rough metal material" adds conductor to OR group (rendering domain)', () => {
+    const result = preprocessQuery('rough metal material', 'rendering');
     expect(result).toContain('metal');
     expect(result).toContain('conductor');
   });
 
-  it('preprocessQuery "KD-tree acceleration structure" adds kdtree and bvh', () => {
-    const result = preprocessQuery('KD-tree acceleration structure');
+  it('preprocessQuery "KD-tree acceleration structure" adds kdtree and bvh (rendering domain)', () => {
+    const result = preprocessQuery('KD-tree acceleration structure', 'rendering');
     expect(result).toContain('acceleration');
     expect(result).toContain('kdtree');
     expect(result).toContain('bvh');
   });
 
-  it('preprocessQuery "bidirectional scattering distribution functions" adds bsdf', () => {
-    const result = preprocessQuery('bidirectional scattering distribution functions');
+  it('preprocessQuery "bidirectional scattering distribution functions" adds bsdf (rendering domain)', () => {
+    const result = preprocessQuery('bidirectional scattering distribution functions', 'rendering');
     expect(result).toContain('bidirectional');
     expect(result).toContain('bsdf');
   });
 
-  it('preprocessQuery "camera ray sampling film attachment" adds buffer and image for film', () => {
-    // gt-22: "abstract base camera class providing ray sampling, film attachment..."
-    // "film" → buffer + image so agents querying about the render film find the Film class
-    const result = preprocessQuery('camera ray sampling film attachment');
+  it('preprocessQuery "camera ray sampling film attachment" adds buffer and image for film (rendering domain)', () => {
+    const result = preprocessQuery('camera ray sampling film attachment', 'rendering');
     expect(result).toContain('film');
     expect(result).toContain('buffer');
     expect(result).toContain('image');
+  });
+
+  // Non-rendering repos should NOT get rendering synonym expansion
+  it('preprocessQuery "abstract base camera class" does NOT add sensor without rendering domain', () => {
+    const result = preprocessQuery('abstract base camera class');
+    expect(result).not.toContain('sensor');
+  });
+
+  it('preprocessQuery "ideal glass material" does NOT add dielectric without rendering domain', () => {
+    const result = preprocessQuery('ideal glass material');
+    expect(result).not.toContain('dielectric');
   });
 });
 
@@ -1694,5 +1716,72 @@ describe('expandToken — rendering abbreviations (ABBREV_TO_FULL)', () => {
     expect(result).toContain('ggx');
     expect(result).toContain('microfacet');
     expect(result).toContain('roughness');
+  });
+});
+
+// ─── Task 271: Vue/Nuxt vocabulary synonyms ───────────────────────────────────
+
+describe('expandVerbSynonyms — Vue/Nuxt vocabulary', () => {
+  it('"initialise" expands to include "initialize", "create", "setup", "init"', () => {
+    const result = expandVerbSynonyms('initialise');
+    expect(result).toContain('initialize');
+    expect(result).toContain('create');
+    expect(result).toContain('setup');
+    expect(result).toContain('init');
+  });
+
+  it('"initialize" expands to include "initialise", "create", "setup", "init"', () => {
+    const result = expandVerbSynonyms('initialize');
+    expect(result).toContain('initialise');
+    expect(result).toContain('create');
+    expect(result).toContain('setup');
+    expect(result).toContain('init');
+  });
+
+  it('"trigger" expands to include "build" and "run"', () => {
+    const result = expandVerbSynonyms('trigger');
+    expect(result).toContain('build');
+    expect(result).toContain('run');
+  });
+
+  it('"append" expands to include "add"', () => {
+    const result = expandVerbSynonyms('append');
+    expect(result).toContain('add');
+  });
+
+  it('"composable" expands to "use"', () => {
+    const result = expandVerbSynonyms('composable');
+    expect(result).toContain('use');
+  });
+
+  it('"initialise a Nuxt instance" AND query includes initialise synonyms', () => {
+    const result = preprocessQuery('initialise a nuxt instance');
+    expect(result).toContain('initialise');
+    expect(result).toContain('initialize');
+    expect(result).toContain('create');
+  });
+
+  it('"trigger the build pipeline" AND query includes "build"', () => {
+    const result = preprocessQuery('trigger the build pipeline');
+    expect(result).toContain('trigger');
+    expect(result).toContain('build');
+  });
+
+  it('"append a Vite plugin" AND query includes "add"', () => {
+    const result = preprocessQuery('append a vite plugin');
+    expect(result).toContain('append');
+    expect(result).toContain('add');
+  });
+
+  it('"composable for data fetching" AND query includes "use"', () => {
+    const result = preprocessQuery('composable for data fetching');
+    expect(result).toContain('composable');
+    expect(result).toContain('use');
+  });
+
+  it('"composable for reading and writing cookies" AND query includes "use"', () => {
+    const result = preprocessQuery('composable for reading and writing cookies');
+    expect(result).toContain('composable');
+    expect(result).toContain('use');
   });
 });

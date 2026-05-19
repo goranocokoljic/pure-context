@@ -157,23 +157,50 @@ const VERB_SYNONYMS: Readonly<Record<string, ReadonlyArray<string>>> = {
   'acceleration':   ['kdtree', 'bvh'],              // "acceleration structure" → KDTree/BVH
   'bidirectional':  ['bsdf'],                        // "bidirectional scattering distribution" → BSDF
   'lambertian':     ['diffuse', 'smooth'],           // Lambertian reflectance → SmoothDiffuse
+  // Vue / Nuxt framework vocabulary
+  'initialise':     ['initialize', 'create', 'setup', 'init'],  // British spelling → American + create
+  'initialize':     ['initialise', 'create', 'setup', 'init'],  // American spelling → British + create
+  'trigger':        ['run', 'start', 'build', 'execute'],       // "trigger build pipeline" → buildNuxt
+  'append':         ['add', 'push', 'register'],                // "append plugin" → addVitePlugin
+  'composable':     ['use'],                                     // Vue composables all start with "use"
 };
+
+// Synonyms that are only relevant in rendering/graphics/PBR codebases.
+// Applying these globally causes false-positive matches in unrelated repos.
+const RENDERING_ONLY_SYNONYMS: ReadonlySet<string> = new Set([
+  'render', 'draw', 'display',
+  'integrate', 'sample', 'evaluate',
+  'trace', 'intersect', 'collide',
+  'emit', 'dispatch',
+  'light', 'emitter', 'camera', 'sensor',
+  'material', 'bsdf', 'glass', 'dielectric',
+  'metal', 'conductor', 'film',
+  'acceleration', 'bidirectional', 'lambertian',
+]);
 
 /**
  * Return synonym alternatives for a single lowercase token, or an empty array
  * when no mapping is defined.
  *
+ * Pass `domain: 'rendering'` to include rendering/graphics synonyms.
+ * By default, rendering-only synonyms are suppressed to avoid false positives
+ * in unrelated codebases.
+ *
  * Lookup is case-insensitive.
  *
  * Examples:
- *   expandVerbSynonyms('remove')   → ['delete']
- *   expandVerbSynonyms('delete')   → ['remove']
- *   expandVerbSynonyms('retrieve') → ['get', 'fetch']
- *   expandVerbSynonyms('expose')   → ['register']
- *   expandVerbSynonyms('unknown')  → []
+ *   expandVerbSynonyms('remove')                        → ['delete']
+ *   expandVerbSynonyms('render')                        → []  (not a rendering domain)
+ *   expandVerbSynonyms('render', 'rendering')           → ['draw', 'display', 'paint']
+ *   expandVerbSynonyms('unknown')                       → []
  */
-export function expandVerbSynonyms(token: string): ReadonlyArray<string> {
-  return VERB_SYNONYMS[token.toLowerCase()] ?? [];
+export function expandVerbSynonyms(
+  token: string,
+  domain?: string,
+): ReadonlyArray<string> {
+  const lower = token.toLowerCase();
+  if (RENDERING_ONLY_SYNONYMS.has(lower) && domain !== 'rendering') return [];
+  return VERB_SYNONYMS[lower] ?? [];
 }
 
 // ─── Abbreviation dictionaries ────────────────────────────────────────────────
@@ -292,7 +319,7 @@ export function expandToken(token: string): ReadonlyArray<string> | null {
  *   preprocessQuery('database')              → 'database OR db'
  *   preprocessQuery('getDbRow')              → 'getDbRow OR get OR db OR row OR database'
  */
-export function preprocessQuery(raw: string): string {
+export function preprocessQuery(raw: string, domain?: string): string {
   // Step 1: strip/replace characters that have special meaning in FTS5 MATCH syntax.
   // Hyphen is replaced with a space because FTS5 interprets "word-word" as a column
   // filter ("column:token") which causes a syntax error for unknown column names.
@@ -314,7 +341,7 @@ export function preprocessQuery(raw: string): string {
     // For each word, if synonyms exist, produce an FTS5 OR-group: (word OR syn1 OR syn2).
     // This lets the AND query match even when the code uses a synonym of the query word.
     const parts = active.map((w) => {
-      const syns = expandVerbSynonyms(w);
+      const syns = expandVerbSynonyms(w, domain);
       if (syns.length === 0) return w;
       return `(${[w, ...syns].join(' OR ')})`;
     });
@@ -389,7 +416,7 @@ export function preprocessQuery(raw: string): string {
  *   toOrFallbackQuery('parseFile')                            → 'parseFile'  (unchanged)
  *   toOrFallbackQuery('(remove OR delete) AND record AND id') → 'remove OR delete OR record OR id'
  */
-export function toOrFallbackQuery(query: string): string {
+export function toOrFallbackQuery(query: string, domain?: string): string {
   if (!query) return query;
   // Already in OR mode at the top level — nothing to change.
   // Uses hasTopLevelOr rather than a simple includes(' OR ') check so that
@@ -417,7 +444,7 @@ export function toOrFallbackQuery(query: string): string {
   const seen = new Set(active.map((w) => w.toLowerCase()));
   const withSyns: string[] = [...active];
   for (const w of active) {
-    for (const syn of expandVerbSynonyms(w)) {
+    for (const syn of expandVerbSynonyms(w, domain)) {
       if (!seen.has(syn.toLowerCase())) {
         withSyns.push(syn);
         seen.add(syn.toLowerCase());

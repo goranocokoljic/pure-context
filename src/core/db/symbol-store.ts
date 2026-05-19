@@ -24,6 +24,10 @@ interface DbSymbolRow {
   nesting_depth: number | null;
 }
 
+interface DbSymbolRowFts extends DbSymbolRow {
+  fts_bm25: number;
+}
+
 export interface SearchOptions {
   kind?: SymbolKind;
   filePath?: string;
@@ -430,7 +434,7 @@ export function ftsSearchSymbols(
   params.push(limit);
 
   const sql = `
-    SELECT s.*
+    SELECT s.*, bm25(fts_symbols) AS fts_bm25
     FROM symbols s
     JOIN fts_symbols f ON f.symbol_id = s.id AND f.repo_id = s.repo_id
     WHERE ${parts.join(' AND ')}
@@ -438,7 +442,11 @@ export function ftsSearchSymbols(
     LIMIT ?
   `;
 
-  return db.prepare<unknown[], DbSymbolRow>(sql).all(...params).map(rowToSymbol);
+  return db.prepare<unknown[], DbSymbolRowFts>(sql).all(...params).map((row) => {
+    const sym = rowToSymbol(row);
+    sym.ftsBm25 = row.fts_bm25;
+    return sym;
+  });
 }
 
 /**

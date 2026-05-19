@@ -650,6 +650,29 @@ bool validate() { return true; }
     const fn = syms.find((s) => s.name === 'validate');
     expect(fn!.summary).toContain('Validates');
   });
+
+  it('extracts multi-line /// Doxygen comment as full paragraph', async () => {
+    const { tree, buf } = await parse(`
+/// Tensor is the core n-dimensional array.
+/// It stores numerical data with a type and shape.
+class Tensor {};
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'tensor.cpp');
+    const cls = syms.find((s) => s.name === 'Tensor');
+    expect(cls!.summary).toContain('Tensor is the core n-dimensional array');
+    expect(cls!.summary).toContain('It stores numerical data with a type and shape');
+  });
+
+  it('extracts multi-sentence /** block comment as full paragraph', async () => {
+    const { tree, buf } = await parse(`
+/** Computes weighted reciprocal rank fusion. Merges multiple scoring channels into one list. */
+int fuse(int a, int b) { return 0; }
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'rank.cpp');
+    const fn = syms.find((s) => s.name === 'fuse');
+    expect(fn!.summary).toContain('Computes weighted reciprocal rank fusion');
+    expect(fn!.summary).toContain('Merges multiple scoring channels');
+  });
 });
 
 // ─── C-style typedef struct / enum (for .h files) ────────────────────────────

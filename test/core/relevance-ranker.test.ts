@@ -1331,3 +1331,38 @@ describe('rankSymbols — kindBoost from signature for bare method names', () =>
     expect(results[0].debugScore?.kindBoost).toBe(0);
   });
 });
+
+// ─── FTS BM25 bonus ──────────────────────────────────────────────────────────
+
+describe('rankSymbols — FTS BM25 bonus', () => {
+  function symFts(name: string, summary: string, bm25: number): SymbolRecord {
+    return { ...sym(name, { summary }), ftsBm25: bm25 };
+  }
+
+  it('FTS BM25 bonus lifts a summary-only match above a weak name match', () => {
+    // "nameHelper" has no overlap with query but a strong BM25 score (best in set)
+    // "unrelated" has a weaker BM25 score and no name overlap
+    const summaryMatch = symFts('unrelated', 'weighted reciprocal rank fusion merges scoring', -4.5);
+    const nameMismatch = symFts('nameHelper', 'does something', -0.5);
+    const results = rankSymbols([nameMismatch, summaryMatch], 'weighted reciprocal rank fusion', true);
+    // summaryMatch has best BM25 → gets max ftsBm25Bonus; nameMismatch has worst BM25 → gets 0
+    expect(results[0].symbol.name).toBe('unrelated');
+    expect(results[0].debugScore?.ftsBm25Bonus).toBe(50);
+    expect(results[1].debugScore?.ftsBm25Bonus).toBe(0);
+  });
+
+  it('FTS BM25 bonus does not override a strong identity-exact match', () => {
+    // queryWord matches nameExact symbol perfectly
+    const exactMatch = symFts('fuse', 'fuse results', -0.5); // worst BM25 in set
+    const summaryOnly = symFts('unrelated', 'weighted reciprocal rank fusion', -4.5); // best BM25
+    const results = rankSymbols([exactMatch, summaryOnly], 'fuse');
+    // exactMatch gets nameExact=100; summaryOnly gets ftsBm25Bonus=50 but no name match
+    expect(results[0].symbol.name).toBe('fuse');
+  });
+
+  it('symbols without ftsBm25 (non-FTS path) get zero bonus', () => {
+    const noFts = sym('doSomething', { summary: 'does something useful' });
+    const results = rankSymbols([noFts], 'something useful', true);
+    expect(results[0].debugScore?.ftsBm25Bonus).toBe(0);
+  });
+});

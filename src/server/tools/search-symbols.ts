@@ -125,6 +125,15 @@ export async function handler(args: {
 
   const reposSearched = repos.map((r) => r.id);
 
+  // ── Detect rendering domain (scopes rendering synonyms) ───────────────────
+  // Only enable rendering synonyms when the repo name suggests a rendering /
+  // graphics / PBR codebase — prevents synonym noise in unrelated repos
+  // (e.g. nuxt, airodump, origamicms-frontend regressed in Phase 47).
+  const RENDERING_REPO_PATTERN = /render|shader|scene|material|graphic|mitsuba|pbr|tracer|opengl|vulkan|cuda|opencl/i;
+  const domain = repos.some((r) => RENDERING_REPO_PATTERN.test(r.name))
+    ? 'rendering'
+    : undefined;
+
   // ── Determine effective mode using first repo with a semantic index ─────────
   let effectiveMode = args.mode;
   if (!effectiveMode) {
@@ -276,7 +285,7 @@ export async function handler(args: {
       const ftsAvailable = hasFtsIndex(db, repo.id);
 
       if (ftsAvailable) {
-        const ftsQuery = preprocessQuery(args.query);
+        const ftsQuery = preprocessQuery(args.query, domain);
         // Fetch more candidates than the requested limit so the relevance ranker
         // has a large enough pool to surface the best match even when FTS5 BM25
         // ranking places it slightly outside the bare limit.  The ranker then
@@ -303,7 +312,7 @@ export async function handler(args: {
             !hasServiceMethodCandidate(symbols) ||
             symbols.every((s) => isLibraryPath(s.filePath));
           if (needsOrFallback) {
-            const orQuery = toOrFallbackQuery(ftsQuery);
+            const orQuery = toOrFallbackQuery(ftsQuery, domain);
             if (orQuery !== ftsQuery) {
               const orSymbols = ftsSearchSymbols(db, repo.id, orQuery, {
                 kind: args.kind as never,
@@ -342,7 +351,7 @@ export async function handler(args: {
         searchMode = 'like_fallback';
       }
 
-      const ranked: ScoredSymbol[] = rankSymbols(symbols, args.query, args.debug);
+      const ranked: ScoredSymbol[] = rankSymbols(symbols, args.query, args.debug, domain);
 
       const uniqueFiles = [...new Set(ranked.map((r) => r.symbol.filePath))];
       const fileSizes = getFileSizesBatch(db, repo.id, uniqueFiles);
@@ -368,12 +377,25 @@ export async function handler(args: {
   allKeywordResults.sort((a, b) => b.score - a.score);
   const top = allKeywordResults.slice(0, limit);
 
+  const negativeEvidence =
+    top.length === 0
+      ? {
+          verdict: 'no_match',
+          query: args.query,
+          searched_kinds: args.kind ? [args.kind] : [],
+          searched_repos: reposSearched,
+          suggestion:
+            'The symbol does not appear to exist. Consider search_text for string/comment lookups or get_repo_outline to survey the codebase.',
+        }
+      : undefined;
+
   return {
     content: [{
       type: 'text',
       text: JSON.stringify(
         {
           count: top.length,
+          ...(negativeEvidence ? { negative_evidence: negativeEvidence } : {}),
           symbols: top.map((r) => ({
             id: r.symbol.id,
             name: r.symbol.name,

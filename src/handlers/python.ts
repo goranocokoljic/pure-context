@@ -90,9 +90,7 @@ function extractDocstring(node: SyntaxNode): string | null {
     .filter(Boolean)
     .join(' ');
 
-  // Return up to the first sentence-ending punctuation
-  const match = collapsed.match(/^([^.!?]*[.!?]?)/);
-  return ((match ? match[1].trim() : collapsed).slice(0, 200)) || null;
+  return collapsed.slice(0, 400) || null;
 }
 
 // ─── Name helpers ─────────────────────────────────────────────────────────────

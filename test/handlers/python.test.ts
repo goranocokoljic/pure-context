@@ -175,7 +175,7 @@ class Foo:
 // ─── extractDocstring ─────────────────────────────────────────────────────────
 
 describe('Python handler — extractDocstring', () => {
-  it('extracts a triple-double-quoted docstring', async () => {
+  it('extracts a triple-double-quoted docstring (full text)', async () => {
     const src = `
 def foo():
     """This is the docstring. More details here."""
@@ -185,7 +185,7 @@ def foo():
     const fnNode = tree.rootNode.children[0];
     expect(fnNode.type).toBe('function_definition');
     const doc = pythonHandler.extractDocstring(fnNode);
-    expect(doc).toBe('This is the docstring.');
+    expect(doc).toBe('This is the docstring. More details here.');
   });
 
   it('extracts a triple-single-quoted docstring', async () => {
@@ -199,7 +199,7 @@ def bar():
     expect(doc).toBe('Single quoted docstring.');
   });
 
-  it('extracts only the first sentence of a multi-line docstring', async () => {
+  it('extracts full first paragraph of a multi-sentence docstring', async () => {
     const src = `
 def baz():
     """First sentence. Second sentence. Third sentence."""
@@ -207,7 +207,37 @@ def baz():
 `.trimStart();
     const { tree } = await parse(src);
     const doc = pythonHandler.extractDocstring(tree.rootNode.children[0]);
-    expect(doc).toBe('First sentence.');
+    expect(doc).toBe('First sentence. Second sentence. Third sentence.');
+  });
+
+  it('extracts full first paragraph stopping at blank line', async () => {
+    const src = `
+def fuse(results_list, weights):
+    """Weighted Reciprocal Rank Fusion.
+
+    Merges multiple independent scoring channels into one ranked list.
+    This is the second paragraph.
+    """
+    pass
+`.trimStart();
+    const { tree } = await parse(src);
+    const doc = pythonHandler.extractDocstring(tree.rootNode.children[0]);
+    expect(doc).toBe('Weighted Reciprocal Rank Fusion.');
+    // Second paragraph is discarded; first paragraph is just one sentence here
+  });
+
+  it('extracts multi-sentence first paragraph with blank-line boundary', async () => {
+    const src = `
+def assemble(a, b):
+    """Assembles the context bundle. Merges multiple independent scoring channels.
+
+    This paragraph should not appear.
+    """
+    pass
+`.trimStart();
+    const { tree } = await parse(src);
+    const doc = pythonHandler.extractDocstring(tree.rootNode.children[0]);
+    expect(doc).toBe('Assembles the context bundle. Merges multiple independent scoring channels.');
   });
 
   it('returns null when there is no docstring', async () => {
