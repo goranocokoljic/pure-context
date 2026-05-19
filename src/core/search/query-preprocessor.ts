@@ -108,6 +108,55 @@ const VERB_SYNONYMS: Readonly<Record<string, ReadonlyArray<string>>> = {
   'show':         ['get', 'find'],
   'checkout':     ['create', 'place'],
   'place':        ['create', 'checkout'],
+  // Python-specific synonyms
+  'index':          ['store', 'catalog', 'register'],  // "index a symbol" → finds store_symbol, catalog_file
+  'catalog':        ['index', 'store'],                // bidirectional with index
+  'parse':          ['analyze', 'extract'],             // "parse AST" → finds analyze_tree, extract_symbols
+  'analyze':        ['parse', 'inspect'],               // "analyze code" → finds parse_source
+  'inspect':        ['analyze', 'scan'],                // "inspect file" → finds scan_directory
+  // Rust-specific synonyms
+  'serializable':   ['serialize', 'serde'],    // "serializable type" → finds Serialize trait
+  'deserializable': ['deserialize', 'serde'],  // "deserializable" → finds Deserialize trait
+  'serialize':      ['serializable', 'serde'], // bidirectional with serializable
+  'deserialize':    ['deserializable', 'serde'], // bidirectional with deserializable
+  'spawn':          ['async', 'tokio', 'task'],  // tokio queries about spawning async tasks
+  'concurrent':     ['async', 'parallel'],       // concurrency vocabulary
+  'future':         ['async', 'poll'],           // Rust Future trait queries
+  // C/C++ rendering & graphics synonyms
+  'render':         ['draw', 'display', 'paint'],   // "render scene" → findsDraw/display functions
+  'draw':           ['render', 'display'],           // bidirectional with render
+  'display':        ['render', 'draw'],              // bidirectional with render
+  'integrate':      ['compute', 'evaluate', 'sample'], // numerical integration vocabulary
+  'sample':         ['integrate', 'evaluate'],       // bidirectional with integrate
+  'evaluate':       ['compute', 'sample'],           // numerical methods vocabulary
+  'trace':          ['ray', 'intersect'],            // ray-tracing vocabulary
+  'intersect':      ['trace', 'collide'],            // geometry/collision vocabulary
+  'collide':        ['intersect'],                   // physics vocabulary
+  'emit':           ['send', 'dispatch', 'fire'],    // event/particle emission
+  'dispatch':       ['emit', 'send', 'route'],       // event dispatching (also Go channels)
+  // Symfony / Doctrine / event-driven PHP synonyms
+  'register':       ['subscribe', 'listen'],         // "register event handler" → finds EventSubscriber.onKernelRequest
+  'subscribe':      ['register', 'listen'],          // bidirectional with register
+  'listen':         ['subscribe', 'handle'],         // "listen for events" → subscriber methods
+  'validate':       ['check', 'verify', 'assert'],   // form validation queries
+  'persist':        ['save', 'store', 'create'],     // Doctrine persist calls
+  'flush':          ['save', 'commit'],              // "flush to database" → Doctrine flush
+  'hydrate':        ['populate', 'fill', 'map'],     // ORM hydration queries
+  // Rendering / physically-based rendering domain synonyms (mitsuba3)
+  'light':          ['emitter'],                     // "light sources" → Emitter base class
+  'emitter':        ['light'],                       // bidirectional with light
+  'camera':         ['sensor'],                      // mitsuba3 names the camera base "Sensor"
+  'sensor':         ['camera'],                      // bidirectional with camera
+  'material':       ['bsdf', 'shader'],              // "material" → BSDF in PBR renderers
+  'bsdf':           ['material', 'shader'],          // bidirectional with material
+  'glass':          ['dielectric'],                  // "ideal glass" → Dielectric class
+  'dielectric':     ['glass'],                       // bidirectional with glass
+  'metal':          ['conductor'],                   // "metal material" → Conductor classes
+  'conductor':      ['metal'],                       // bidirectional with metal
+  'film':           ['buffer', 'image'],             // render film = image accumulation buffer
+  'acceleration':   ['kdtree', 'bvh'],              // "acceleration structure" → KDTree/BVH
+  'bidirectional':  ['bsdf'],                        // "bidirectional scattering distribution" → BSDF
+  'lambertian':     ['diffuse', 'smooth'],           // Lambertian reflectance → SmoothDiffuse
 };
 
 /**
@@ -130,50 +179,105 @@ export function expandVerbSynonyms(token: string): ReadonlyArray<string> {
 // ─── Abbreviation dictionaries ────────────────────────────────────────────────
 
 /**
- * Common code-domain abbreviations and their full forms.
- * Lookup is bidirectional: searching an abbreviation also finds the full form
+ * Common code-domain abbreviations mapped to one or more full forms.
+ * Lookup is bidirectional: searching an abbreviation also finds the full form(s)
  * and vice-versa.
+ *
+ * Single-element arrays: one canonical expansion (e.g. db → database).
+ * Multi-element arrays: several semantically related full forms where a developer
+ * might use any of them (e.g. calc → calculate | calculator | calculation).
  */
-const ABBREV_TO_FULL: Readonly<Record<string, string>> = {
-  db:     'database',
-  auth:   'authentication',
-  cfg:    'config',
-  msg:    'message',
-  req:    'request',
-  res:    'response',
-  err:    'error',
-  str:    'string',
-  num:    'number',
-  buf:    'buffer',
-  dir:    'directory',
-  env:    'environment',
-  ctx:    'context',
-  param:  'parameter',
-  val:    'value',
-  fn:     'function',
-  obj:    'object',
-  arr:    'array',
+const ABBREV_TO_FULL: Readonly<Record<string, ReadonlyArray<string>>> = {
+  // ── General programming abbreviations ────────────────────────────────────
+  db:     ['database'],
+  auth:   ['authentication'],
+  cfg:    ['config', 'configuration'],
+  msg:    ['message'],
+  req:    ['request'],
+  res:    ['response', 'result', 'resource'],
+  err:    ['error'],
+  str:    ['string'],
+  num:    ['number', 'count'],
+  buf:    ['buffer'],
+  dir:    ['directory'],
+  env:    ['environment'],
+  ctx:    ['context'],
+  param:  ['parameter'],
+  val:    ['value'],
+  fn:     ['function'],
+  obj:    ['object'],
+  arr:    ['array'],
+  // ── C/C++ naming conventions ──────────────────────────────────────────────
+  calc:   ['calculate', 'calculator', 'calculation'],
+  mgr:    ['manager'],
+  ctrl:   ['controller'],
+  ctl:    ['controller'],
+  ptr:    ['pointer'],
+  init:   ['initialize', 'initialization'],
+  proc:   ['process', 'processor'],
+  alloc:  ['allocate', 'allocation'],
+  dealloc: ['deallocate', 'deallocation'],
+  impl:   ['implementation'],
+  iter:   ['iterator', 'iterate'],
+  len:    ['length'],
+  idx:    ['index'],
+  pos:    ['position'],
+  dim:    ['dimension'],
+  vec:    ['vector'],
+  mat:    ['matrix'],
+  img:    ['image'],
+  tex:    ['texture'],
+  vert:   ['vertex'],
+  frag:   ['fragment'],
+  geom:   ['geometry'],
+  cam:    ['camera'],
+  cls:    ['class'],
+  attr:   ['attribute'],
+  args:   ['arguments'],
+  ret:    ['return', 'result'],
+  src:    ['source'],
+  dst:    ['destination'],
+  tmp:    ['temporary'],
+  prev:   ['previous'],
+  curr:   ['current'],
+  max:    ['maximum'],
+  min:    ['minimum'],
+  // ── Rendering / PBR acronyms ──────────────────────────────────────────────
+  bsdf:   ['bidirectional', 'scattering'],  // Bidirectional Scattering Distribution Function
+  ggx:    ['microfacet', 'roughness'],      // GGX / Trowbridge-Reitz microfacet distribution
 };
 
+/**
+ * Reverse map: each full form → its abbreviation.
+ * When a single abbreviation expands to multiple full forms, each form maps back
+ * to the same abbreviation (e.g. 'calculate' → 'calc', 'calculator' → 'calc').
+ */
 const FULL_TO_ABBREV: Readonly<Record<string, string>> = Object.fromEntries(
-  Object.entries(ABBREV_TO_FULL).map(([abbr, full]) => [full, abbr]),
+  Object.entries(ABBREV_TO_FULL).flatMap(([abbr, fulls]) =>
+    fulls.map((full) => [full, abbr]),
+  ),
 );
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Return the abbreviation counterpart for a token, if one is known.
+ * Return the expansion(s) for a token, if one is known.
  * Lookup is case-insensitive and bidirectional:
- *   'db'       → 'database'
- *   'database' → 'db'
- *   'auth'     → 'authentication'
- *   'parseFile'→ null  (no known mapping)
+ *   'db'          → ['database']
+ *   'database'    → ['db']
+ *   'calc'        → ['calculate', 'calculator', 'calculation']
+ *   'calculate'   → ['calc']
+ *   'cfg'         → ['config', 'configuration']
+ *   'auth'        → ['authentication']
+ *   'parseFile'   → null  (no known mapping)
  *
  * Returns null when no expansion is known.
  */
-export function expandToken(token: string): string | null {
+export function expandToken(token: string): ReadonlyArray<string> | null {
   const lower = token.toLowerCase();
-  return ABBREV_TO_FULL[lower] ?? FULL_TO_ABBREV[lower] ?? null;
+  if (ABBREV_TO_FULL[lower]) return ABBREV_TO_FULL[lower];
+  const abbr = FULL_TO_ABBREV[lower];
+  return abbr ? [abbr] : null;
 }
 
 /**
@@ -246,14 +350,18 @@ export function preprocessQuery(raw: string): string {
   }
 
   // Step 4: abbreviation expansion — for every term already in the list, add
-  // its known counterpart (abbrev↔full) so both forms are searched.
+  // its known counterpart(s) (abbrev↔full) so both forms are searched.
   const seen = new Set(terms.map((t) => t.toLowerCase()));
   const toAdd: string[] = [];
   for (const t of terms) {
-    const expansion = expandToken(t);
-    if (expansion && !seen.has(expansion.toLowerCase())) {
-      toAdd.push(expansion);
-      seen.add(expansion.toLowerCase());
+    const expansions = expandToken(t);
+    if (expansions) {
+      for (const exp of expansions) {
+        if (!seen.has(exp.toLowerCase())) {
+          toAdd.push(exp);
+          seen.add(exp.toLowerCase());
+        }
+      }
     }
   }
   terms.push(...toAdd);

@@ -59,13 +59,32 @@ describe('Java handler — extractSymbols', () => {
     expect(sym.kind).toBe('enum');
   });
 
-  it('extracts public methods as ClassName.methodName', async () => {
+  it('extracts public methods with bare name (ClassName context in signature)', async () => {
     const src = `public class AuthService {\n    public boolean authenticate(String u) {\n        return true;\n    }\n    private void cleanup() {}\n}\n`;
     const { tree, buf } = await parse(src);
     const syms = javaHandler.extractSymbols(tree, buf, 'AuthService.java');
     const names = syms.map((s) => s.name);
-    expect(names).toContain('AuthService.authenticate');
-    expect(names).not.toContain('AuthService.cleanup');
+    // name field is bare method name for search matching
+    expect(names).toContain('authenticate');
+    expect(names).not.toContain('cleanup');
+    // signature carries the class context
+    const method = syms.find((s) => s.name === 'authenticate');
+    expect(method!.signature).toContain('AuthService.authenticate:');
+  });
+
+  it('two same-named methods in different classes get different IDs (qualified hash)', async () => {
+    // Both classes have a `process` method — the IDs must differ because the
+    // qualified name (ClassName.process) is used for the hash, not the bare name.
+    const src = `public class OrderService {\n    public void process() {}\n}\npublic class PaymentService {\n    public void process() {}\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = javaHandler.extractSymbols(tree, buf, 'Services.java');
+    const methods = syms.filter((s) => s.name === 'process');
+    expect(methods).toHaveLength(2);
+    expect(methods[0].id).not.toBe(methods[1].id);
+    // Each signature carries its own class context
+    const sigs = methods.map((s) => s.signature);
+    expect(sigs.some((sig) => sig.includes('OrderService.process:'))).toBe(true);
+    expect(sigs.some((sig) => sig.includes('PaymentService.process:'))).toBe(true);
   });
 
   it('private methods are NOT indexed', async () => {
@@ -73,19 +92,22 @@ describe('Java handler — extractSymbols', () => {
     const { tree, buf } = await parse(src);
     const syms = javaHandler.extractSymbols(tree, buf, 'Svc.java');
     const names = syms.map((s) => s.name);
-    expect(names).toContain('Svc.pub');
-    expect(names).toContain('Svc.prot');
-    expect(names).not.toContain('Svc.priv');
+    expect(names).toContain('pub');
+    expect(names).toContain('prot');
+    expect(names).not.toContain('priv');
   });
 
-  it('extracts constructor as ClassName.ClassName', async () => {
+  it('extracts constructor with bare class name (qualified in signature)', async () => {
     const src = `public class User {\n    public User(long id, String name) {}\n}\n`;
     const { tree, buf } = await parse(src);
     const syms = javaHandler.extractSymbols(tree, buf, 'User.java');
     const names = syms.map((s) => s.name);
-    expect(names).toContain('User.User');
-    const ctor = syms.find((s) => s.name === 'User.User');
+    // Constructor bare name is the class name — "User" not "User.User"
+    expect(names).toContain('User');
+    const ctor = syms.find((s) => s.kind === 'method');
     expect(ctor!.kind).toBe('method');
+    // Signature carries the qualified context
+    expect(ctor!.signature).toContain('User.User:');
   });
 
   it('extracts public static final field as kind=const', async () => {
@@ -113,6 +135,113 @@ describe('Java handler — extractSymbols', () => {
     if (method) {
       expect(method.signature.length).toBeLessThanOrEqual(120);
     }
+  });
+});
+
+// ─── Task 244: inner class + package-private fixes ────────────────────────────
+
+describe('Java handler — non-static inner classes', () => {
+  it('extracts a public non-static inner class with qualified name', async () => {
+    const src = `public class RecyclerAdapter {\n    public class ViewHolder {\n        public void bind(String item) {}\n    }\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = javaHandler.extractSymbols(tree, buf, 'RecyclerAdapter.java');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('RecyclerAdapter.ViewHolder');
+  });
+
+  it('extracts methods of a non-static inner class with bare name', async () => {
+    const src = `public class RecyclerAdapter {\n    public class ViewHolder {\n        public void bind(String item) {}\n    }\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = javaHandler.extractSymbols(tree, buf, 'RecyclerAdapter.java');
+    const names = syms.map((s) => s.name);
+    // Inner class method uses bare name; qualified path lives in the signature
+    expect(names).toContain('bind');
+    const method = syms.find((s) => s.name === 'bind');
+    expect(method!.signature).toContain('RecyclerAdapter.ViewHolder.bind:');
+  });
+
+  it('extracts a static nested class (still works after removing isStatic guard)', async () => {
+    const src = `public class Config {\n    public static class Builder {\n        public Config build() { return null; }\n    }\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = javaHandler.extractSymbols(tree, buf, 'Config.java');
+    const names = syms.map((s) => s.name);
+    // Inner class symbol keeps its qualified name
+    expect(names).toContain('Config.Builder');
+    // Inner class method uses bare name
+    expect(names).toContain('build');
+    const method = syms.find((s) => s.name === 'build');
+    expect(method!.signature).toContain('Config.Builder.build:');
+  });
+
+  it('does NOT extract private inner class', async () => {
+    const src = `public class Outer {\n    private class Hidden {\n        public void method() {}\n    }\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = javaHandler.extractSymbols(tree, buf, 'Outer.java');
+    const names = syms.map((s) => s.name);
+    expect(names).not.toContain('Outer.Hidden');
+    expect(names).not.toContain('Outer.Hidden.method');
+  });
+
+  it('recursive inner class extraction: ViewHolder inside Adapter', async () => {
+    const src = `public class MyAdapter {\n    public class ViewHolder {\n        public void bind(Object data) {}\n        public void clear() {}\n    }\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = javaHandler.extractSymbols(tree, buf, 'MyAdapter.java');
+    const names = syms.map((s) => s.name);
+    // Inner class symbol keeps qualified name
+    expect(names).toContain('MyAdapter.ViewHolder');
+    // Inner class methods use bare names
+    expect(names).toContain('bind');
+    expect(names).toContain('clear');
+  });
+});
+
+describe('Java handler — package-private method visibility', () => {
+  it('extracts a package-private method (no access modifier) with bare name', async () => {
+    const src = `public class MainActivity {\n    void onCreate() {}\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = javaHandler.extractSymbols(tree, buf, 'MainActivity.java');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('onCreate');
+    const method = syms.find((s) => s.name === 'onCreate');
+    expect(method!.signature).toContain('MainActivity.onCreate:');
+  });
+
+  it('does NOT extract a private method', async () => {
+    const src = `public class MainActivity {\n    private void helper() {}\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = javaHandler.extractSymbols(tree, buf, 'MainActivity.java');
+    const names = syms.map((s) => s.name);
+    expect(names).not.toContain('helper');
+  });
+
+  it('extracts public and package-private but not private methods', async () => {
+    const src = `public class Fragment {\n    public void onCreateView() {}\n    void onViewCreated() {}\n    private void setupViews() {}\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = javaHandler.extractSymbols(tree, buf, 'Fragment.java');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('onCreateView');
+    expect(names).toContain('onViewCreated');
+    expect(names).not.toContain('setupViews');
+  });
+
+  it('still excludes private methods explicitly (regression guard)', async () => {
+    const src = `public class Svc {\n    public void pub() {}\n    private void priv() {}\n    protected void prot() {}\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = javaHandler.extractSymbols(tree, buf, 'Svc.java');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('pub');
+    expect(names).toContain('prot');
+    expect(names).not.toContain('priv');
+  });
+
+  it('package-private method inside non-static inner class is extracted with bare name', async () => {
+    const src = `public class Activity {\n    public class ViewHolder {\n        void bind(Object item) {}\n    }\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = javaHandler.extractSymbols(tree, buf, 'Activity.java');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('bind');
+    const method = syms.find((s) => s.name === 'bind');
+    expect(method!.signature).toContain('Activity.ViewHolder.bind:');
   });
 });
 
@@ -194,11 +323,15 @@ describe('Java handler — fixture files', () => {
 
     const names = syms.map((s) => s.name);
     expect(names).toContain('AuthService');
-    expect(names).toContain('AuthService.authenticate');
-    expect(names).toContain('AuthService.startSession');
-    expect(names).toContain('AuthService.isActive');
-    expect(names).toContain('AuthService.endSession');
-    expect(names).not.toContain('AuthService.cleanup');
+    // Methods use bare names; class context is in the signature
+    expect(names).toContain('authenticate');
+    expect(names).toContain('startSession');
+    expect(names).toContain('isActive');
+    expect(names).toContain('endSession');
+    expect(names).not.toContain('cleanup');
+    // Signature carries the qualified class.method path
+    const authMethod = syms.find((s) => s.name === 'authenticate');
+    expect(authMethod!.signature).toContain('AuthService.authenticate:');
 
     // Javadoc captured (first sentence of the Javadoc)
     const cls = syms.find((s) => s.name === 'AuthService');

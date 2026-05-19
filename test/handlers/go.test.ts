@@ -45,29 +45,47 @@ describe('Go handler — extractSymbols', () => {
     expect(names).not.toContain('unexported');
   });
 
-  it('extracts a method with pointer receiver and qualifies the name', async () => {
+  it('extracts a method with pointer receiver using bare name', async () => {
     const src = `package main\nfunc (s *AuthService) Login(u string) error {\n\treturn nil\n}\n`;
     const { tree, buf } = await parse(src);
     const syms = goHandler.extractSymbols(tree, buf, 'a.go');
     expect(syms).toHaveLength(1);
-    expect(syms[0].name).toBe('AuthService.Login');
+    expect(syms[0].name).toBe('Login');        // bare name, not 'AuthService.Login'
     expect(syms[0].kind).toBe('method');
   });
 
-  it('extracts a method with value receiver', async () => {
+  it('extracts a method with value receiver using bare name', async () => {
     const src = `package main\nfunc (s AuthService) String() string {\n\treturn ""\n}\n`;
     const { tree, buf } = await parse(src);
     const sym = goHandler.extractSymbols(tree, buf, 'a.go')[0];
-    expect(sym.name).toBe('AuthService.String');
+    expect(sym.name).toBe('String');           // bare name, not 'AuthService.String'
     expect(sym.kind).toBe('method');
+  });
+
+  it('keeps receiver type in method signature', async () => {
+    const src = `package main\nfunc (s *AuthService) Login(u string) error {\n\treturn nil\n}\n`;
+    const { tree, buf } = await parse(src);
+    const sym = goHandler.extractSymbols(tree, buf, 'a.go')[0];
+    expect(sym.signature).toContain('(s *AuthService)');
+    expect(sym.signature).toContain('Login');
   });
 
   it('does NOT extract unexported methods', async () => {
     const src = `package main\nfunc (s *Svc) Public() {}\nfunc (s *Svc) private() {}\n`;
     const { tree, buf } = await parse(src);
     const names = goHandler.extractSymbols(tree, buf, 'a.go').map((s) => s.name);
-    expect(names).toContain('Svc.Public');
-    expect(names).not.toContain('Svc.private');
+    expect(names).toContain('Public');
+    expect(names).not.toContain('private');
+  });
+
+  it('two methods with same bare name on different receivers have distinct IDs', async () => {
+    const src = `package main\nfunc (a *Alpha) Run() {}\nfunc (b *Beta) Run() {}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    expect(syms).toHaveLength(2);
+    expect(syms[0].name).toBe('Run');
+    expect(syms[1].name).toBe('Run');
+    expect(syms[0].id).not.toBe(syms[1].id);  // qualified names used for ID hash
   });
 
   it('extracts a struct type as kind=class', async () => {
@@ -142,6 +160,160 @@ describe('Go handler — extractSymbols', () => {
     expect(sym.signature).toContain('func (s *AuthService)');
     expect(sym.signature).toContain('Login');
     expect(sym.signature).not.toContain('{');
+  });
+});
+
+// ─── interface method extraction ─────────────────────────────────────────────
+
+describe('Go handler — interface method extraction', () => {
+  it('extracts two exported methods from a simple interface using bare names', async () => {
+    const src = `package main\ntype Handler interface {\n\tServeHTTP(w http.ResponseWriter, r *http.Request)\n\tClose() error\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('Handler');    // the interface itself
+    expect(names).toContain('ServeHTTP'); // bare name, not 'Handler.ServeHTTP'
+    expect(names).toContain('Close');     // bare name, not 'Handler.Close'
+  });
+
+  it('uses method kind for extracted interface methods', async () => {
+    const src = `package main\ntype Handler interface {\n\tServeHTTP(w http.ResponseWriter, r *http.Request)\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    const method = syms.find((s) => s.name === 'ServeHTTP');
+    expect(method?.kind).toBe('method');
+  });
+
+  it('does NOT extract unexported interface methods', async () => {
+    const src = `package main\ntype Service interface {\n\tPublic() error\n\tprivate() string\n}\n`;
+    const { tree, buf } = await parse(src);
+    const names = goHandler.extractSymbols(tree, buf, 'a.go').map((s) => s.name);
+    expect(names).toContain('Public');
+    expect(names).not.toContain('private');
+  });
+
+  it('emits no method symbols for an empty interface', async () => {
+    const src = `package main\ntype Any interface{}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    // Only the interface type itself — no method specs
+    expect(syms).toHaveLength(1);
+    expect(syms[0].name).toBe('Any');
+    expect(syms[0].kind).toBe('interface');
+  });
+
+  it('does NOT emit a method symbol for embedded interface types', async () => {
+    const src = `package main\ntype ReadWriter interface {\n\tio.Reader\n\tWrite(p []byte) (int, error)\n}\n`;
+    const { tree, buf } = await parse(src);
+    const names = goHandler.extractSymbols(tree, buf, 'a.go').map((s) => s.name);
+    // Embedded io.Reader is a type_name, not a method_spec — must not appear
+    expect(names).not.toContain('io.Reader');
+    expect(names).not.toContain('Reader');
+    expect(names).toContain('Write');   // bare name, not 'ReadWriter.Write'
+  });
+
+  it('includes parameter and return types in the method signature', async () => {
+    const src = `package main\ntype Store interface {\n\tFind(id string) (Item, error)\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    const method = syms.find((s) => s.name === 'Find');
+    expect(method?.signature).toContain('id string');
+    expect(method?.signature).toContain('Item');
+    expect(method?.signature).toContain('error');
+  });
+
+  it('uses bare name for interface methods (interface name in signature)', async () => {
+    const src = `package main\ntype HttpHandler interface {\n\tHandle(path string) error\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('Handle');             // bare name in name field
+    expect(names).not.toContain('HttpHandler.Handle');
+    // interface name is in the signature for disambiguation
+    const method = syms.find((s) => s.name === 'Handle');
+    expect(method?.signature).toContain('HttpHandler');
+  });
+
+  it('interface itself is still extracted as kind=interface', async () => {
+    const src = `package main\ntype Stringer interface {\n\tString() string\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    const iface = syms.find((s) => s.name === 'Stringer');
+    expect(iface?.kind).toBe('interface');
+    const method = syms.find((s) => s.name === 'String');  // bare name
+    expect(method?.kind).toBe('method');
+  });
+
+  it('extracts methods from an interface with multiple exported and unexported methods', async () => {
+    const src = `package main\ntype Repo interface {\n\tFindByID(id int) (*User, error)\n\tSave(u *User) error\n\tinternalValidate() bool\n}\n`;
+    const { tree, buf } = await parse(src);
+    const names = goHandler.extractSymbols(tree, buf, 'a.go').map((s) => s.name);
+    expect(names).toContain('FindByID');   // bare names
+    expect(names).toContain('Save');
+    expect(names).not.toContain('internalValidate');
+  });
+
+  it('two interface methods with same bare name on different interfaces have distinct IDs', async () => {
+    const src = `package main\ntype Alpha interface {\n\tProcess() error\n}\ntype Beta interface {\n\tProcess() error\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    const methods = syms.filter((s) => s.name === 'Process');
+    expect(methods).toHaveLength(2);
+    expect(methods[0].id).not.toBe(methods[1].id);  // qualified names used for ID hash
+  });
+});
+
+// ─── var_declaration extraction ──────────────────────────────────────────────
+
+describe('Go handler — var_declaration extraction', () => {
+  it('extracts an exported single var as kind=const', async () => {
+    const src = `package main\nvar ErrNotFound = errors.New("not found")\n`;
+    const { tree, buf } = await parse(src);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    expect(syms).toHaveLength(1);
+    expect(syms[0].name).toBe('ErrNotFound');
+    expect(syms[0].kind).toBe('const');
+  });
+
+  it('does NOT extract unexported vars', async () => {
+    const src = `package main\nvar unexported = 42\n`;
+    const { tree, buf } = await parse(src);
+    expect(goHandler.extractSymbols(tree, buf, 'a.go')).toHaveLength(0);
+  });
+
+  it('extracts only exported from a grouped var block with mixed visibility', async () => {
+    const src = `package main\nvar (\n\tMaxConns = 100\n\tDefaultName = "app"\n\tinternal = "hidden"\n)\n`;
+    const { tree, buf } = await parse(src);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('MaxConns');
+    expect(names).toContain('DefaultName');
+    expect(names).not.toContain('internal');
+  });
+
+  it('includes type annotation in the signature when present', async () => {
+    const src = `package main\nvar DefaultTimeout time.Duration = 30 * time.Second\n`;
+    const { tree, buf } = await parse(src);
+    const sym = goHandler.extractSymbols(tree, buf, 'a.go')[0];
+    expect(sym.signature).toContain('DefaultTimeout');
+    expect(sym.signature).toContain('time.Duration');
+    expect(sym.signature).toMatch(/^var /);
+  });
+
+  it('includes initializer expression in the signature when present', async () => {
+    const src = `package main\nvar GlobalRegistry = NewRegistry()\n`;
+    const { tree, buf } = await parse(src);
+    const sym = goHandler.extractSymbols(tree, buf, 'a.go')[0];
+    expect(sym.signature).toContain('GlobalRegistry');
+    expect(sym.signature).toContain('NewRegistry');
+  });
+
+  it('generates a deterministic 16-char hex id for a var symbol', async () => {
+    const src = `package main\nvar ErrTimeout = errors.New("timeout")\n`;
+    const { tree, buf } = await parse(src);
+    const sym = goHandler.extractSymbols(tree, buf, 'a.go')[0];
+    expect(sym.id).toHaveLength(16);
+    expect(sym.id).toMatch(/^[0-9a-f]+$/);
   });
 });
 

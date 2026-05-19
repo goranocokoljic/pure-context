@@ -424,18 +424,42 @@ function round4(n: number): number {
  *   TypeScript: *Service, *Repository, *Manager, *Store
  *   PHP: *_model, *Model (CodeIgniter / Laravel conventions)
  *   PHP: *_controller, *Controller
+ *   Python: *Processor, *Indexer, *Parser
  *
  * Used as a quality gate: if no such candidate exists in the AND result pool,
  * we fire the OR-fallback to widen the search and surface the right symbol.
  */
+/**
+ * For methods stored with bare names (Java/Rust), extract the class name from
+ * the signature prefix ("ClassName.method: ..." or "TypeName::method: ...").
+ */
+function classFromSignatureForMethod(name: string, signature: string): string {
+  if (!signature) return '';
+  const dotPat = '.' + name + ':';
+  const di = signature.indexOf(dotPat);
+  if (di > 0) {
+    const c = signature.slice(0, di);
+    if (!c.includes('.') && !c.includes(':')) return c.toLowerCase();
+  }
+  const colonPat = '::' + name;
+  const ci = signature.indexOf(colonPat);
+  if (ci > 0) {
+    const c = signature.slice(0, ci);
+    if (!c.includes('.') && !c.includes(':')) return c.toLowerCase();
+  }
+  return '';
+}
+
 function hasServiceMethodCandidate(symbols: SymbolRecord[]): boolean {
   return symbols.some((s) => {
     if (s.kind !== 'method') return false;
     const dotIdx = s.name.indexOf('.');
     const colonIdx = s.name.indexOf('::');
     const sepIdx = dotIdx >= 0 ? dotIdx : colonIdx;
-    if (sepIdx <= 0) return false;
-    const cls = s.name.slice(0, sepIdx).toLowerCase();
+    const cls = sepIdx > 0
+      ? s.name.slice(0, sepIdx).toLowerCase()
+      : classFromSignatureForMethod(s.name, s.signature ?? '');
+    if (!cls) return false;
     return (
       // TypeScript application-layer naming
       cls.endsWith('service') ||
@@ -447,7 +471,24 @@ function hasServiceMethodCandidate(symbols: SymbolRecord[]): boolean {
       (cls.endsWith('model') && cls.length > 5) ||
       // PHP controller conventions
       cls.endsWith('_controller') ||
-      (cls.endsWith('controller') && cls.length > 10)
+      (cls.endsWith('controller') && cls.length > 10) ||
+      // Go HTTP handlers, database layers, and API clients
+      cls.endsWith('handler') ||
+      cls.endsWith('db') ||
+      cls.endsWith('client') ||
+      // Android framework classes (lifecycle methods, adapters)
+      cls.endsWith('activity') ||
+      cls.endsWith('fragment') ||
+      cls.endsWith('adapter') ||
+      cls.endsWith('viewmodel') ||
+      // Python application-layer class patterns
+      cls.endsWith('processor') ||
+      cls.endsWith('indexer') ||
+      cls.endsWith('parser') ||
+      // Symfony event-driven and form patterns
+      cls.endsWith('eventsubscriber') ||
+      cls.endsWith('listener') ||
+      cls.endsWith('formtype')
     );
   });
 }

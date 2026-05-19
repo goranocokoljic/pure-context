@@ -95,30 +95,44 @@ describe('Rust handler — extractSymbols', () => {
     expect(typeSym!.name).toBe('Config');
   });
 
-  it('extracts impl methods with TypeName.method_name format', async () => {
+  it('extracts impl methods with bare method name (type context in signature)', async () => {
     const src = `pub struct AuthService {}\nimpl AuthService {\n    pub fn new() -> Self { AuthService {} }\n    pub fn login(&self) -> bool { true }\n}\n`;
     const { tree, buf } = await parse(src);
     const syms = rustHandler.extractSymbols(tree, buf, 'src/a.rs');
     const methods = syms.filter((s) => s.kind === 'method');
     const names = methods.map((s) => s.name);
-    expect(names).toContain('AuthService.new');
-    expect(names).toContain('AuthService.login');
+    // Phase 46: bare method names — search matches on bare name, type in signature
+    expect(names).toContain('new');
+    expect(names).toContain('login');
+    expect(names).not.toContain('AuthService.new');
+    expect(names).not.toContain('AuthService.login');
   });
 
-  it('extracts impl methods even without pub on method (impl block exception)', async () => {
+  it('signature includes TypeName:: prefix for impl methods', async () => {
+    const src = `pub struct AuthService {}\nimpl AuthService {\n    pub fn login(&self) -> bool { true }\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = rustHandler.extractSymbols(tree, buf, 'src/a.rs');
+    const login = syms.find((s) => s.name === 'login' && s.kind === 'method');
+    expect(login).toBeDefined();
+    expect(login!.signature).toMatch(/^AuthService::/);
+    expect(login!.signature).toContain('login');
+  });
+
+  it('does NOT extract private impl methods (no pub)', async () => {
     const src = `pub struct MyType {}\nimpl MyType {\n    fn internal_method(&self) {}\n}\n`;
     const { tree, buf } = await parse(src);
     const syms = rustHandler.extractSymbols(tree, buf, 'src/a.rs');
     const methods = syms.filter((s) => s.kind === 'method');
-    expect(methods.some((m) => m.name === 'MyType.internal_method')).toBe(true);
+    expect(methods.some((m) => m.name === 'internal_method')).toBe(false);
   });
 
-  it('extracts trait impl methods with TypeName.method_name', async () => {
-    const src = `pub trait Validator { fn validate(&self) -> bool; }\npub struct User {}\nimpl Validator for User {\n    fn validate(&self) -> bool { true }\n}\n`;
+  it('extracts pub trait impl methods with bare method name', async () => {
+    const src = `pub trait Validator { fn validate(&self) -> bool; }\npub struct User {}\nimpl Validator for User {\n    pub fn validate(&self) -> bool { true }\n}\n`;
     const { tree, buf } = await parse(src);
     const syms = rustHandler.extractSymbols(tree, buf, 'src/a.rs');
     const implMethods = syms.filter((s) => s.kind === 'method');
-    expect(implMethods.some((m) => m.name === 'User.validate')).toBe(true);
+    expect(implMethods.some((m) => m.name === 'validate')).toBe(true);
+    expect(implMethods.some((m) => m.name === 'User.validate')).toBe(false);
   });
 
   it('builds signature capped at 120 chars', async () => {
@@ -126,6 +140,106 @@ describe('Rust handler — extractSymbols', () => {
     const { tree, buf } = await parse(src);
     const sym = rustHandler.extractSymbols(tree, buf, 'src/a.rs')[0];
     expect(sym.signature.length).toBeLessThanOrEqual(120);
+  });
+});
+
+// ─── impl_item visibility filtering ──────────────────────────────────────────
+
+describe('Rust handler — impl_item visibility filtering', () => {
+  it('pub fn in impl → extracted with bare name', async () => {
+    const src = `pub struct Svc {}\nimpl Svc {\n    pub fn fetch(&self) -> String { String::new() }\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = rustHandler.extractSymbols(tree, buf, 'src/a.rs');
+    expect(syms.some((s) => s.name === 'fetch' && s.kind === 'method')).toBe(true);
+    expect(syms.some((s) => s.name === 'Svc.fetch')).toBe(false);
+  });
+
+  it('private fn in impl → NOT extracted', async () => {
+    const src = `pub struct Svc {}\nimpl Svc {\n    fn helper(&self) {}\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = rustHandler.extractSymbols(tree, buf, 'src/a.rs');
+    expect(syms.some((s) => s.name === 'helper')).toBe(false);
+  });
+
+  it('pub(crate) fn in impl → extracted with bare name (starts with pub)', async () => {
+    const src = `pub struct Svc {}\nimpl Svc {\n    pub(crate) fn internal_api(&self) {}\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = rustHandler.extractSymbols(tree, buf, 'src/a.rs');
+    expect(syms.some((s) => s.name === 'internal_api' && s.kind === 'method')).toBe(true);
+    expect(syms.some((s) => s.name === 'Svc.internal_api')).toBe(false);
+  });
+
+  it('mix of pub and private in one impl → only pub extracted with bare names', async () => {
+    const src = [
+      'pub struct Cache {}',
+      'impl Cache {',
+      '    pub fn get(&self, key: &str) -> Option<String> { None }',
+      '    fn evict(&self) {}',
+      '    pub fn set(&mut self, key: String, val: String) {}',
+      '    fn hash_key(&self, key: &str) -> u64 { 0 }',
+      '}',
+    ].join('\n');
+    const { tree, buf } = await parse(src);
+    const methods = rustHandler.extractSymbols(tree, buf, 'src/a.rs').filter((s) => s.kind === 'method');
+    const names = methods.map((m) => m.name);
+    expect(names).toContain('get');
+    expect(names).toContain('set');
+    expect(names).not.toContain('evict');
+    expect(names).not.toContain('hash_key');
+    // Qualified names should not appear
+    expect(names).not.toContain('Cache.get');
+    expect(names).not.toContain('Cache.set');
+  });
+
+  it('trait impl (impl Trait for Type) — pub methods extracted with bare names, private skipped', async () => {
+    const src = [
+      'pub trait Writer { fn write(&self, data: &str); fn flush(&self); }',
+      'pub struct FileWriter {}',
+      'impl Writer for FileWriter {',
+      '    pub fn write(&self, data: &str) {}',
+      '    fn flush(&self) {}',
+      '}',
+    ].join('\n');
+    const { tree, buf } = await parse(src);
+    const methods = rustHandler.extractSymbols(tree, buf, 'src/a.rs').filter((s) => s.kind === 'method');
+    const names = methods.map((m) => m.name);
+    expect(names).toContain('write');
+    expect(names).not.toContain('flush');
+    expect(names).not.toContain('FileWriter.write');
+  });
+
+  it('impl with only private methods → no methods extracted', async () => {
+    const src = `pub struct Builder {}\nimpl Builder {\n    fn init(&self) {}\n    fn validate(&self) -> bool { true }\n}\n`;
+    const { tree, buf } = await parse(src);
+    const methods = rustHandler.extractSymbols(tree, buf, 'src/a.rs').filter((s) => s.kind === 'method');
+    expect(methods).toHaveLength(0);
+  });
+
+  it('bare name uses TypeName from impl, not trait name', async () => {
+    const src = [
+      'pub trait Serialize { fn serialize(&self) -> String; }',
+      'pub struct Config {}',
+      'impl Serialize for Config {',
+      '    pub fn serialize(&self) -> String { String::new() }',
+      '}',
+    ].join('\n');
+    const { tree, buf } = await parse(src);
+    const methods = rustHandler.extractSymbols(tree, buf, 'src/a.rs').filter((s) => s.kind === 'method');
+    // Bare name is 'serialize'; signature should have 'Config::' prefix
+    expect(methods.some((m) => m.name === 'serialize')).toBe(true);
+    const serializeMethod = methods.find((m) => m.name === 'serialize');
+    expect(serializeMethod!.signature).toMatch(/^Config::/);
+  });
+
+  it('pub fn with return type → signature contains TypeName:: prefix and return type', async () => {
+    const src = `pub struct Repo {}\nimpl Repo {\n    pub fn find_by_id(&self, id: u64) -> Option<String> { None }\n}\n`;
+    const { tree, buf } = await parse(src);
+    const methods = rustHandler.extractSymbols(tree, buf, 'src/a.rs').filter((s) => s.kind === 'method');
+    expect(methods).toHaveLength(1);
+    expect(methods[0].name).toBe('find_by_id');
+    expect(methods[0].signature).toMatch(/^Repo::/);
+    expect(methods[0].signature).toContain('find_by_id');
+    expect(methods[0].signature).toContain('Option<String>');
   });
 });
 
@@ -213,9 +327,11 @@ describe('Rust handler — fixture files', () => {
     expect(names).toContain('Config');
     expect(names).toContain('MAX_RETRIES');
     expect(names).toContain('authenticate');
-    // Impl methods
-    expect(names).toContain('User.new');
-    expect(names).toContain('User.email');
+    // Impl methods — bare names (Phase 46)
+    expect(names).toContain('new');
+    expect(names).toContain('email');
+    expect(names).not.toContain('User.new');
+    expect(names).not.toContain('User.email');
     // Private function should NOT be present
     expect(names).not.toContain('private_helper');
   });
@@ -231,9 +347,12 @@ describe('Rust handler — fixture files', () => {
 
     const names = syms.map((s) => s.name);
     expect(names).toContain('AuthService');
-    expect(names).toContain('AuthService.new');
-    expect(names).toContain('AuthService.start_session');
-    expect(names).toContain('AuthService.is_active');
-    expect(names).toContain('AuthService.end_session');
+    // Bare method names — Phase 46
+    expect(names).toContain('new');
+    expect(names).toContain('start_session');
+    expect(names).toContain('is_active');
+    expect(names).toContain('end_session');
+    expect(names).not.toContain('AuthService.new');
+    expect(names).not.toContain('AuthService.start_session');
   });
 });

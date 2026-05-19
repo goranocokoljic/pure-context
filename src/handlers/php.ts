@@ -61,6 +61,9 @@ function extractDocstring(node: SyntaxNode): string | null {
  * Uses sourceStr (the UTF-8 decoded string) with character-based slice because
  * web-tree-sitter's callback mode reports node.startIndex / endIndex as
  * JavaScript character indices, not raw byte offsets.
+ *
+ * PHP 8 compatibility: leading `attribute_list` children (#[Route(...)]) are
+ * skipped so signatures stay clean and don't include attribute noise.
  */
 function buildSignature(node: SyntaxNode, sourceStr: string): string {
   const body = node.childForFieldName?.('body') ??
@@ -70,8 +73,12 @@ function buildSignature(node: SyntaxNode, sourceStr: string): string {
       c.type === 'enum_declaration_list',
     );
   const endChar = body ? body.startIndex : node.endIndex;
+  // Skip any leading attribute_list nodes (PHP 8 #[...] attributes) so they
+  // do not pollute the signature string.
+  const firstNonAttr = node.children.find((c) => c.type !== 'attribute_list');
+  const startChar = firstNonAttr ? firstNonAttr.startIndex : node.startIndex;
   return sourceStr
-    .slice(node.startIndex, endChar)
+    .slice(startChar, endChar)
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120);

@@ -49,6 +49,19 @@ function isPublicOrProtected(node: SyntaxNode): boolean {
 }
 
 /**
+ * Returns true if the method is visible (public, protected, or package-private).
+ * Package-private methods have no modifiers at all. Private methods are excluded.
+ * Used for method_declaration only — class/field extraction stays stricter.
+ */
+function isVisibleMethod(node: SyntaxNode): boolean {
+  const modifiers = node.children.find((c) => c.type === 'modifiers');
+  if (!modifiers) return true; // no modifiers = package-private = accept
+  return modifiers.children.some(
+    (c) => c.type === 'public' || c.type === 'protected',
+  );
+}
+
+/**
  * Returns true if the modifiers include both `static` and `final`.
  */
 function isStaticFinal(node: SyntaxNode): boolean {
@@ -134,18 +147,22 @@ function extractClassMembers(
   for (const member of body.children) {
     // ── method_declaration ────────────────────────────────────────────────
     if (member.type === 'method_declaration') {
-      if (!isPublicOrProtected(member)) continue;
-      const name = childText(member, sourceStr, 'identifier');
-      if (!name) continue;
-      const qualifiedName = `${className}.${name}`;
+      if (!isVisibleMethod(member)) continue;
+      const methodName = childText(member, sourceStr, 'identifier');
+      if (!methodName) continue;
+      // Use qualified name for ID hashing to guarantee uniqueness within a file
+      // (two different classes in the same file can have a method with the same bare name).
+      // The name field stores only the bare method name for search matching.
+      const qualifiedName = `${className}.${methodName}`;
+      const rawSig = buildSignature(member, sourceStr);
       symbols.push({
         id: makeId(filePath, qualifiedName, 'method'),
-        name: qualifiedName,
+        name: methodName,      // bare name — search matches on this
         kind: 'method',
         filePath,
         startByte: member.startIndex,
         endByte: member.endIndex,
-        signature: buildSignature(member, sourceStr),
+        signature: `${qualifiedName}: ${rawSig}`.slice(0, 120),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
       });
       continue;
@@ -154,17 +171,20 @@ function extractClassMembers(
     // ── constructor_declaration ───────────────────────────────────────────
     if (member.type === 'constructor_declaration') {
       if (!isPublicOrProtected(member)) continue;
-      const name = childText(member, sourceStr, 'identifier');
-      if (!name) continue;
-      const qualifiedName = `${className}.${name}`;
+      const ctorName = childText(member, sourceStr, 'identifier');
+      if (!ctorName) continue;
+      // Constructors are named after the class — use bare class name for search
+      // and the qualified "ClassName.ClassName" for ID uniqueness.
+      const qualifiedName = `${className}.${ctorName}`;
+      const rawSig = buildSignature(member, sourceStr);
       symbols.push({
         id: makeId(filePath, qualifiedName, 'method'),
-        name: qualifiedName,
+        name: ctorName,        // bare class name — e.g. "User" not "User.User"
         kind: 'method',
         filePath,
         startByte: member.startIndex,
         endByte: member.endIndex,
-        signature: buildSignature(member, sourceStr),
+        signature: `${qualifiedName}: ${rawSig}`.slice(0, 120),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
       });
       continue;
@@ -197,12 +217,10 @@ function extractClassMembers(
       continue;
     }
 
-    // ── public static inner class ─────────────────────────────────────────
+    // ── public inner class (static or non-static) ────────────────────────
     if (member.type === 'class_declaration') {
       if (!isPublicOrProtected(member)) continue;
-      const modifiers = member.children.find((c) => c.type === 'modifiers');
-      const isStatic = modifiers?.children.some((c) => c.type === 'static') ?? false;
-      if (!isStatic) continue;
+      // Non-static inner classes are valid navigable symbols (ViewHolder, Builder, etc.)
       const name = childText(member, sourceStr, 'identifier');
       if (!name) continue;
       const innerClassName = `${className}.${name}`;
@@ -216,6 +234,8 @@ function extractClassMembers(
         signature: buildSignature(member, sourceStr),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
       });
+      // Recurse to extract methods of the inner class
+      extractClassMembers(member, innerClassName, sourceStr, filePath, symbols);
     }
   }
 }

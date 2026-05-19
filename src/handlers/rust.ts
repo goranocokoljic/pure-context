@@ -293,17 +293,23 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
 
       for (const member of body.children) {
         if (member.type !== 'function_item') continue;
+        if (!isPublic(member, sourceStr)) continue;
         const methodName = childText(member, sourceStr, 'identifier');
         if (!methodName) continue;
+        // Use qualified name for ID hashing to guarantee uniqueness within a file
+        // (two different impl types can have a method with the same bare name).
+        // The name field stores only the bare method name for search matching.
         const qualifiedName = `${typeName}.${methodName}`;
+        const methodSig = buildSignature(member, sourceStr);
+        const sigWithContext = `${typeName}::${methodSig}`.slice(0, 120);
         symbols.push({
           id: makeId(filePath, qualifiedName, 'method'),
-          name: qualifiedName,
+          name: methodName,     // bare name — search matches on this
           kind: 'method',
           filePath,
           startByte: member.startIndex,
           endByte: member.endIndex,
-          signature: buildSignature(member, sourceStr),
+          signature: sigWithContext,
           summary: extractDocstringWithSource(member, sourceStr) ?? '',
         });
       }

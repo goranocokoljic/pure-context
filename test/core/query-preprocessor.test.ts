@@ -187,63 +187,193 @@ describe('preprocessQuery — edge cases', () => {
   });
 });
 
-// ─── Task 216: expandToken ────────────────────────────────────────────────────
+// ─── Task 216 / Task 250: expandToken ────────────────────────────────────────
 
 describe('expandToken — unit', () => {
-  it('expands "db" to "database"', () => {
-    expect(expandToken('db')).toBe('database');
+  // Single-expansion abbreviations (array with one element)
+  it('expands "db" to ["database"]', () => {
+    expect(expandToken('db')).toEqual(['database']);
   });
 
-  it('expands "DB" (uppercase) to "database" (case-insensitive)', () => {
-    expect(expandToken('DB')).toBe('database');
+  it('expands "DB" (uppercase) to ["database"] (case-insensitive)', () => {
+    expect(expandToken('DB')).toEqual(['database']);
   });
 
-  it('expands "database" to "db" (reverse direction)', () => {
-    expect(expandToken('database')).toBe('db');
+  it('expands "database" to ["db"] (reverse direction)', () => {
+    expect(expandToken('database')).toEqual(['db']);
   });
 
-  it('expands "auth" to "authentication"', () => {
-    expect(expandToken('auth')).toBe('authentication');
+  it('expands "auth" to ["authentication"]', () => {
+    expect(expandToken('auth')).toEqual(['authentication']);
   });
 
-  it('expands "authentication" to "auth"', () => {
-    expect(expandToken('authentication')).toBe('auth');
+  it('expands "authentication" to ["auth"]', () => {
+    expect(expandToken('authentication')).toEqual(['auth']);
   });
 
-  it('expands "cfg" to "config"', () => {
-    expect(expandToken('cfg')).toBe('config');
+  it('expands "cfg" to ["config", "configuration"]', () => {
+    expect(expandToken('cfg')).toEqual(['config', 'configuration']);
   });
 
-  it('expands "config" to "cfg"', () => {
-    expect(expandToken('config')).toBe('cfg');
+  it('expands "config" to ["cfg"] (reverse)', () => {
+    expect(expandToken('config')).toEqual(['cfg']);
   });
 
-  it('expands "msg" to "message"', () => {
-    expect(expandToken('msg')).toBe('message');
+  it('expands "configuration" to ["cfg"] (reverse)', () => {
+    expect(expandToken('configuration')).toEqual(['cfg']);
   });
 
-  it('expands "req" to "request"', () => {
-    expect(expandToken('req')).toBe('request');
+  it('expands "msg" to ["message"]', () => {
+    expect(expandToken('msg')).toEqual(['message']);
   });
 
-  it('expands "res" to "response"', () => {
-    expect(expandToken('res')).toBe('response');
+  it('expands "req" to ["request"]', () => {
+    expect(expandToken('req')).toEqual(['request']);
   });
 
-  it('expands "err" to "error"', () => {
-    expect(expandToken('err')).toBe('error');
+  it('expands "res" to ["response", "result", "resource"]', () => {
+    expect(expandToken('res')).toEqual(['response', 'result', 'resource']);
   });
 
-  it('expands "ctx" to "context"', () => {
-    expect(expandToken('ctx')).toBe('context');
+  it('expands "response" to ["res"] (reverse)', () => {
+    expect(expandToken('response')).toEqual(['res']);
   });
 
-  it('expands "fn" to "function"', () => {
-    expect(expandToken('fn')).toBe('function');
+  it('expands "err" to ["error"]', () => {
+    expect(expandToken('err')).toEqual(['error']);
   });
 
-  it('expands "dir" to "directory"', () => {
-    expect(expandToken('dir')).toBe('directory');
+  it('expands "ctx" to ["context"]', () => {
+    expect(expandToken('ctx')).toEqual(['context']);
+  });
+
+  it('expands "fn" to ["function"]', () => {
+    expect(expandToken('fn')).toEqual(['function']);
+  });
+
+  it('expands "dir" to ["directory"]', () => {
+    expect(expandToken('dir')).toEqual(['directory']);
+  });
+
+  it('expands "num" to ["number", "count"]', () => {
+    expect(expandToken('num')).toEqual(['number', 'count']);
+  });
+
+  it('expands "number" to ["num"] (reverse)', () => {
+    expect(expandToken('number')).toEqual(['num']);
+  });
+
+  // C/C++ multi-expansion abbreviations
+  it('expands "calc" to ["calculate", "calculator", "calculation"]', () => {
+    expect(expandToken('calc')).toEqual(['calculate', 'calculator', 'calculation']);
+  });
+
+  it('expands "calculate" to ["calc"] (reverse)', () => {
+    expect(expandToken('calculate')).toEqual(['calc']);
+  });
+
+  it('expands "calculator" to ["calc"] (reverse)', () => {
+    expect(expandToken('calculator')).toEqual(['calc']);
+  });
+
+  it('expands "mgr" to ["manager"]', () => {
+    expect(expandToken('mgr')).toEqual(['manager']);
+  });
+
+  it('expands "ctrl" to ["controller"]', () => {
+    expect(expandToken('ctrl')).toEqual(['controller']);
+  });
+
+  it('expands "ctl" to ["controller"]', () => {
+    expect(expandToken('ctl')).toEqual(['controller']);
+  });
+
+  it('expands "ptr" to ["pointer"]', () => {
+    expect(expandToken('ptr')).toEqual(['pointer']);
+  });
+
+  it('expands "init" to ["initialize", "initialization"]', () => {
+    expect(expandToken('init')).toEqual(['initialize', 'initialization']);
+  });
+
+  it('expands "initialize" to ["init"] (reverse)', () => {
+    expect(expandToken('initialize')).toEqual(['init']);
+  });
+
+  it('expands "proc" to ["process", "processor"]', () => {
+    expect(expandToken('proc')).toEqual(['process', 'processor']);
+  });
+
+  it('expands "alloc" to ["allocate", "allocation"]', () => {
+    expect(expandToken('alloc')).toEqual(['allocate', 'allocation']);
+  });
+
+  it('expands "dealloc" to ["deallocate", "deallocation"]', () => {
+    expect(expandToken('dealloc')).toEqual(['deallocate', 'deallocation']);
+  });
+
+  it('expands "impl" to ["implementation"]', () => {
+    expect(expandToken('impl')).toEqual(['implementation']);
+  });
+
+  it('expands "iter" to ["iterator", "iterate"]', () => {
+    expect(expandToken('iter')).toEqual(['iterator', 'iterate']);
+  });
+
+  it('expands "idx" to ["index"]', () => {
+    expect(expandToken('idx')).toEqual(['index']);
+  });
+
+  it('expands "src" to ["source"]', () => {
+    expect(expandToken('src')).toEqual(['source']);
+  });
+
+  it('expands "dst" to ["destination"]', () => {
+    expect(expandToken('dst')).toEqual(['destination']);
+  });
+
+  it('expands "vec" to ["vector"]', () => {
+    expect(expandToken('vec')).toEqual(['vector']);
+  });
+
+  it('expands "mat" to ["matrix"]', () => {
+    expect(expandToken('mat')).toEqual(['matrix']);
+  });
+
+  it('expands "img" to ["image"]', () => {
+    expect(expandToken('img')).toEqual(['image']);
+  });
+
+  it('expands "tex" to ["texture"]', () => {
+    expect(expandToken('tex')).toEqual(['texture']);
+  });
+
+  it('expands "vert" to ["vertex"]', () => {
+    expect(expandToken('vert')).toEqual(['vertex']);
+  });
+
+  it('expands "frag" to ["fragment"]', () => {
+    expect(expandToken('frag')).toEqual(['fragment']);
+  });
+
+  it('expands "geom" to ["geometry"]', () => {
+    expect(expandToken('geom')).toEqual(['geometry']);
+  });
+
+  it('expands "ret" to ["return", "result"]', () => {
+    expect(expandToken('ret')).toEqual(['return', 'result']);
+  });
+
+  it('expands "tmp" to ["temporary"]', () => {
+    expect(expandToken('tmp')).toEqual(['temporary']);
+  });
+
+  it('expands "max" to ["maximum"]', () => {
+    expect(expandToken('max')).toEqual(['maximum']);
+  });
+
+  it('expands "min" to ["minimum"]', () => {
+    expect(expandToken('min')).toEqual(['minimum']);
   });
 
   it('returns null for unknown token', () => {
@@ -252,6 +382,182 @@ describe('expandToken — unit', () => {
 
   it('returns null for an unrecognised short word', () => {
     expect(expandToken('foo')).toBeNull();
+  });
+});
+
+// ─── Task 250: C/C++ abbreviation expansion in preprocessQuery ───────────────
+
+describe('preprocessQuery — C/C++ abbreviation expansion', () => {
+  it('"calc" expands to include "calculate", "calculator", "calculation"', () => {
+    const result = preprocessQuery('calc');
+    expect(result).toContain('calc');
+    expect(result).toContain('calculate');
+    expect(result).toContain('calculator');
+    expect(result).toContain('calculation');
+  });
+
+  it('"calculate" expands to include "calc" (reverse)', () => {
+    const result = preprocessQuery('calculate');
+    expect(result).toContain('calculate');
+    expect(result).toContain('calc');
+  });
+
+  it('"mgr" expands to include "manager"', () => {
+    const result = preprocessQuery('mgr');
+    expect(result).toContain('mgr');
+    expect(result).toContain('manager');
+  });
+
+  it('"ctrl" expands to include "controller"', () => {
+    const result = preprocessQuery('ctrl');
+    expect(result).toContain('ctrl');
+    expect(result).toContain('controller');
+  });
+
+  it('"ptr" expands to include "pointer"', () => {
+    const result = preprocessQuery('ptr');
+    expect(result).toContain('ptr');
+    expect(result).toContain('pointer');
+  });
+
+  it('"init" expands to include "initialize" and "initialization"', () => {
+    const result = preprocessQuery('init');
+    expect(result).toContain('init');
+    expect(result).toContain('initialize');
+    expect(result).toContain('initialization');
+  });
+
+  it('"iter" expands to include "iterator" and "iterate"', () => {
+    const result = preprocessQuery('iter');
+    expect(result).toContain('iter');
+    expect(result).toContain('iterator');
+    expect(result).toContain('iterate');
+  });
+
+  it('"alloc" expands to include "allocate" and "allocation"', () => {
+    const result = preprocessQuery('alloc');
+    expect(result).toContain('alloc');
+    expect(result).toContain('allocate');
+    expect(result).toContain('allocation');
+  });
+
+  it('"vec" expands to include "vector"', () => {
+    const result = preprocessQuery('vec');
+    expect(result).toContain('vec');
+    expect(result).toContain('vector');
+  });
+
+  it('"mat" expands to include "matrix"', () => {
+    const result = preprocessQuery('mat');
+    expect(result).toContain('mat');
+    expect(result).toContain('matrix');
+  });
+
+  it('"img" expands to include "image"', () => {
+    const result = preprocessQuery('img');
+    expect(result).toContain('img');
+    expect(result).toContain('image');
+  });
+
+  it('"src" expands to include "source"', () => {
+    const result = preprocessQuery('src');
+    expect(result).toContain('src');
+    expect(result).toContain('source');
+  });
+
+  it('"cfg" expands to include "config" and "configuration"', () => {
+    const result = preprocessQuery('cfg');
+    expect(result).toContain('cfg');
+    expect(result).toContain('config');
+    expect(result).toContain('configuration');
+  });
+
+  it('"res" expands to include "response", "result", "resource"', () => {
+    const result = preprocessQuery('res');
+    expect(result).toContain('res');
+    expect(result).toContain('response');
+    expect(result).toContain('result');
+    expect(result).toContain('resource');
+  });
+
+  it('"num" expands to include "number" and "count"', () => {
+    const result = preprocessQuery('num');
+    expect(result).toContain('num');
+    expect(result).toContain('number');
+    expect(result).toContain('count');
+  });
+
+  it('camelCase with embedded "calc" — "calcDistance" includes "calculate"', () => {
+    const result = preprocessQuery('calcDistance');
+    expect(result).toContain('calcDistance');
+    expect(result).toContain('calculate');
+    expect(result).toContain('distance');
+  });
+
+  it('camelCase with embedded "mgr" — "renderMgr" includes "manager"', () => {
+    const result = preprocessQuery('renderMgr');
+    expect(result).toContain('renderMgr');
+    expect(result).toContain('render');
+    expect(result).toContain('manager');
+  });
+
+  it('camelCase with embedded "ptr" — "vertPtr" includes "vertex" and "pointer"', () => {
+    const result = preprocessQuery('vertPtr');
+    expect(result).toContain('vertPtr');
+    expect(result).toContain('vertex');
+    expect(result).toContain('pointer');
+  });
+
+  it('multi-word query with "calc" — "calc shader intensity" includes "calculate"', () => {
+    const result = preprocessQuery('calc shader intensity');
+    expect(result).toContain('calc');
+    expect(result).toContain('shader');
+    expect(result).toContain('intensity');
+    // Multi-word path uses verb synonyms only, not abbrev expansion
+  });
+});
+
+// ─── Task 250: rendering verb synonyms ───────────────────────────────────────
+
+describe('expandVerbSynonyms — C/C++ rendering synonyms', () => {
+  it('"render" expands to draw, display, paint', () => {
+    expect(expandVerbSynonyms('render')).toEqual(['draw', 'display', 'paint']);
+  });
+
+  it('"draw" expands to render, display', () => {
+    expect(expandVerbSynonyms('draw')).toEqual(['render', 'display']);
+  });
+
+  it('"integrate" expands to compute, evaluate, sample', () => {
+    expect(expandVerbSynonyms('integrate')).toEqual(['compute', 'evaluate', 'sample']);
+  });
+
+  it('"sample" expands to integrate, evaluate', () => {
+    expect(expandVerbSynonyms('sample')).toEqual(['integrate', 'evaluate']);
+  });
+
+  it('"trace" expands to ray, intersect', () => {
+    expect(expandVerbSynonyms('trace')).toEqual(['ray', 'intersect']);
+  });
+
+  it('"intersect" expands to trace, collide', () => {
+    expect(expandVerbSynonyms('intersect')).toEqual(['trace', 'collide']);
+  });
+
+  it('"emit" expands to send, dispatch, fire', () => {
+    expect(expandVerbSynonyms('emit')).toEqual(['send', 'dispatch', 'fire']);
+  });
+
+  it('"dispatch" expands to emit, send, route', () => {
+    expect(expandVerbSynonyms('dispatch')).toEqual(['emit', 'send', 'route']);
+  });
+
+  it('multi-word query with "render" synonym activates', () => {
+    const result = preprocessQuery('render scene depth');
+    // render should expand to (render OR draw OR display OR paint)
+    expect(result).toContain('render');
+    expect(result).toContain('draw');
+    expect(result).toContain('display');
   });
 });
 
@@ -430,7 +736,12 @@ describe('isStopWord — unit', () => {
 
 describe('preprocessQuery — stop word filtering (multi-word)', () => {
   it('removes conjunction "and" from multi-word query', () => {
-    expect(preprocessQuery('render and display')).toBe('render display');
+    // 'render' and 'display' now have synonyms, so they each produce OR groups
+    const result = preprocessQuery('render and display');
+    expect(result).toContain('render');
+    expect(result).toContain('display');
+    // The synonym groups should be joined with AND
+    expect(result).toContain('AND');
   });
 
   it('removes article "the" from multi-word query', () => {
@@ -518,7 +829,13 @@ describe('preprocessQuery — stop word filtering (multi-word)', () => {
 
 describe('toOrFallbackQuery — stop word filtering', () => {
   it('removes stop words before joining with OR', () => {
-    expect(toOrFallbackQuery('render and display')).toBe('render OR display');
+    // 'render' and 'display' now have synonyms; OR fallback adds them too
+    const result = toOrFallbackQuery('render and display');
+    expect(result).toContain('render');
+    expect(result).toContain('display');
+    // Should be a flat OR list
+    expect(result).not.toContain('AND');
+    expect(result).toContain(' OR ');
   });
 
   it('removes multiple stop words from OR conversion (stop words only — no synonym expansion in OR fallback)', () => {
@@ -1043,5 +1360,339 @@ describe('preprocessQuery — punctuation stripping', () => {
     expect(preprocessQuery('trait for reading bytes from an I/O source')).not.toContain('/');
     expect(preprocessQuery('store controlling open/closed modal state')).not.toContain('/');
     expect(preprocessQuery('1D/2D sample generation')).not.toContain('/');
+  });
+});
+
+// ─── Task 247: Rust-specific synonyms ────────────────────────────────────────
+
+describe('expandVerbSynonyms — Rust synonyms', () => {
+  it('serializable → serialize and serde', () => {
+    expect(expandVerbSynonyms('serializable')).toEqual(['serialize', 'serde']);
+  });
+
+  it('deserializable → deserialize and serde', () => {
+    expect(expandVerbSynonyms('deserializable')).toEqual(['deserialize', 'serde']);
+  });
+
+  it('serialize → serializable and serde (bidirectional)', () => {
+    expect(expandVerbSynonyms('serialize')).toEqual(['serializable', 'serde']);
+  });
+
+  it('deserialize → deserializable and serde (bidirectional)', () => {
+    expect(expandVerbSynonyms('deserialize')).toEqual(['deserializable', 'serde']);
+  });
+
+  it('spawn → async, tokio, and task', () => {
+    expect(expandVerbSynonyms('spawn')).toEqual(['async', 'tokio', 'task']);
+  });
+
+  it('concurrent → async and parallel', () => {
+    expect(expandVerbSynonyms('concurrent')).toEqual(['async', 'parallel']);
+  });
+
+  it('future → async and poll', () => {
+    expect(expandVerbSynonyms('future')).toEqual(['async', 'poll']);
+  });
+
+  it('preprocessQuery includes serde in AND query for "serializable type"', () => {
+    // "serializable" → syns include "serialize" and "serde"
+    // These are joined as FTS5 OR-group: "(serializable OR serialize OR serde)"
+    const result = preprocessQuery('serializable type');
+    expect(result).toContain('serializable');
+    expect(result).toContain('serialize');
+    expect(result).toContain('serde');
+  });
+
+  it('preprocessQuery includes tokio in AND query for "spawn async task"', () => {
+    // "spawn" → syns include "async", "tokio", "task"
+    const result = preprocessQuery('spawn async task');
+    expect(result).toContain('spawn');
+    expect(result).toContain('tokio');
+  });
+});
+
+// ─── Task 248: Python-specific synonyms ──────────────────────────────────────
+
+describe('expandVerbSynonyms — Python synonyms', () => {
+  it('index → store, catalog, register', () => {
+    expect(expandVerbSynonyms('index')).toEqual(['store', 'catalog', 'register']);
+  });
+
+  it('catalog → index and store (bidirectional with index)', () => {
+    expect(expandVerbSynonyms('catalog')).toEqual(['index', 'store']);
+  });
+
+  it('parse → analyze and extract', () => {
+    expect(expandVerbSynonyms('parse')).toEqual(['analyze', 'extract']);
+  });
+
+  it('analyze → parse and inspect (bidirectional with parse)', () => {
+    expect(expandVerbSynonyms('analyze')).toEqual(['parse', 'inspect']);
+  });
+
+  it('inspect → analyze and scan', () => {
+    expect(expandVerbSynonyms('inspect')).toEqual(['analyze', 'scan']);
+  });
+
+  it('preprocessQuery includes store and catalog in AND query for "index symbol"', () => {
+    // "index" → syns include "store", "catalog", "register"
+    // Joined as FTS5 OR-group: "(index OR store OR catalog OR register)"
+    const result = preprocessQuery('index symbol');
+    expect(result).toContain('index');
+    expect(result).toContain('store');
+    expect(result).toContain('catalog');
+  });
+
+  it('preprocessQuery includes analyze and extract in AND query for "parse source code"', () => {
+    // "parse" → syns include "analyze", "extract"
+    const result = preprocessQuery('parse source code');
+    expect(result).toContain('parse');
+    expect(result).toContain('analyze');
+    expect(result).toContain('extract');
+  });
+
+  it('preprocessQuery includes parse and scan for "inspect file"', () => {
+    // "inspect" → syns include "analyze", "scan"
+    // "analyze" (synonym of inspect) itself expands to "parse", "inspect"
+    const result = preprocessQuery('inspect file');
+    expect(result).toContain('inspect');
+    expect(result).toContain('analyze');
+    expect(result).toContain('scan');
+  });
+
+  it('toOrFallbackQuery includes Python synonyms in OR expansion', () => {
+    // "index" in AND query should expand to include "store", "catalog", "register"
+    const andQuery = preprocessQuery('index symbol file');
+    const orQuery = toOrFallbackQuery(andQuery);
+    expect(orQuery).toContain('store');
+    expect(orQuery).toContain('catalog');
+  });
+
+  it('expandVerbSynonyms returns empty array for non-Python tokens', () => {
+    // Existing tokens should be unaffected
+    expect(expandVerbSynonyms('unknowntoken')).toEqual([]);
+  });
+});
+
+// ─── Symfony / Doctrine verb synonyms ────────────────────────────────────────
+
+describe('Symfony and Doctrine verb synonym expansion', () => {
+  it('expandVerbSynonyms("register") includes "subscribe" and "listen"', () => {
+    const result = expandVerbSynonyms('register');
+    expect(result).toContain('subscribe');
+    expect(result).toContain('listen');
+  });
+
+  it('expandVerbSynonyms("subscribe") includes "register" and "listen"', () => {
+    const result = expandVerbSynonyms('subscribe');
+    expect(result).toContain('register');
+    expect(result).toContain('listen');
+  });
+
+  it('expandVerbSynonyms("listen") includes "subscribe" and "handle"', () => {
+    const result = expandVerbSynonyms('listen');
+    expect(result).toContain('subscribe');
+    expect(result).toContain('handle');
+  });
+
+  it('expandVerbSynonyms("validate") includes "check", "verify", and "assert"', () => {
+    const result = expandVerbSynonyms('validate');
+    expect(result).toContain('check');
+    expect(result).toContain('verify');
+    expect(result).toContain('assert');
+  });
+
+  it('expandVerbSynonyms("persist") includes "save", "store", and "create"', () => {
+    const result = expandVerbSynonyms('persist');
+    expect(result).toContain('save');
+    expect(result).toContain('store');
+    expect(result).toContain('create');
+  });
+
+  it('expandVerbSynonyms("flush") includes "save" and "commit"', () => {
+    const result = expandVerbSynonyms('flush');
+    expect(result).toContain('save');
+    expect(result).toContain('commit');
+  });
+
+  it('expandVerbSynonyms("hydrate") includes "populate", "fill", and "map"', () => {
+    const result = expandVerbSynonyms('hydrate');
+    expect(result).toContain('populate');
+    expect(result).toContain('fill');
+    expect(result).toContain('map');
+  });
+
+  it('preprocessQuery includes subscribe/listen synonyms for "register event handler"', () => {
+    const result = preprocessQuery('register event handler');
+    expect(result).toContain('subscribe');
+    expect(result).toContain('listen');
+  });
+
+  it('preprocessQuery includes save/commit for "flush entity to database"', () => {
+    const result = preprocessQuery('flush entity');
+    expect(result).toContain('save');
+    expect(result).toContain('commit');
+  });
+
+  it('toOrFallbackQuery includes Symfony synonyms in OR expansion for "persist entity"', () => {
+    const andQuery = preprocessQuery('persist entity');
+    const orQuery = toOrFallbackQuery(andQuery);
+    expect(orQuery).toContain('save');
+    expect(orQuery).toContain('store');
+  });
+});
+
+// ─── Task 260: rendering domain synonyms (mitsuba3 / PBR vocabulary) ─────────
+
+describe('expandVerbSynonyms — rendering domain (PBR / mitsuba3)', () => {
+  it('"light" expands to emitter', () => {
+    expect(expandVerbSynonyms('light')).toEqual(['emitter']);
+  });
+
+  it('"emitter" expands to light', () => {
+    expect(expandVerbSynonyms('emitter')).toEqual(['light']);
+  });
+
+  it('"camera" expands to sensor', () => {
+    expect(expandVerbSynonyms('camera')).toEqual(['sensor']);
+  });
+
+  it('"sensor" expands to camera', () => {
+    expect(expandVerbSynonyms('sensor')).toEqual(['camera']);
+  });
+
+  it('"material" expands to bsdf, shader', () => {
+    expect(expandVerbSynonyms('material')).toEqual(['bsdf', 'shader']);
+  });
+
+  it('"bsdf" expands to material, shader', () => {
+    expect(expandVerbSynonyms('bsdf')).toEqual(['material', 'shader']);
+  });
+
+  it('"glass" expands to dielectric', () => {
+    expect(expandVerbSynonyms('glass')).toEqual(['dielectric']);
+  });
+
+  it('"dielectric" expands to glass', () => {
+    expect(expandVerbSynonyms('dielectric')).toEqual(['glass']);
+  });
+
+  it('"metal" expands to conductor', () => {
+    expect(expandVerbSynonyms('metal')).toEqual(['conductor']);
+  });
+
+  it('"conductor" expands to metal', () => {
+    expect(expandVerbSynonyms('conductor')).toEqual(['metal']);
+  });
+
+  it('"film" expands to buffer, image', () => {
+    expect(expandVerbSynonyms('film')).toEqual(['buffer', 'image']);
+  });
+
+  it('"acceleration" expands to kdtree, bvh', () => {
+    expect(expandVerbSynonyms('acceleration')).toEqual(['kdtree', 'bvh']);
+  });
+
+  it('"bidirectional" expands to bsdf', () => {
+    expect(expandVerbSynonyms('bidirectional')).toEqual(['bsdf']);
+  });
+
+  it('"lambertian" expands to diffuse, smooth', () => {
+    expect(expandVerbSynonyms('lambertian')).toEqual(['diffuse', 'smooth']);
+  });
+
+  // Multi-word query activation tests
+  it('preprocessQuery "abstract base class for all light sources" adds emitter to OR group', () => {
+    const result = preprocessQuery('abstract base class for all light sources');
+    expect(result).toContain('light');
+    expect(result).toContain('emitter');
+  });
+
+  it('preprocessQuery "abstract base camera class" adds sensor to OR group', () => {
+    const result = preprocessQuery('abstract base camera class');
+    expect(result).toContain('camera');
+    expect(result).toContain('sensor');
+  });
+
+  it('preprocessQuery "Lambertian diffuse material" adds bsdf and smooth to result', () => {
+    const result = preprocessQuery('Lambertian diffuse material');
+    const lower = result.toLowerCase();
+    expect(lower).toContain('material');
+    expect(lower).toContain('bsdf');
+    expect(lower).toContain('lambertian');
+  });
+
+  it('preprocessQuery "ideal glass material" adds dielectric to OR group', () => {
+    const result = preprocessQuery('ideal glass material');
+    expect(result).toContain('glass');
+    expect(result).toContain('dielectric');
+  });
+
+  it('preprocessQuery "rough metal material" adds conductor to OR group', () => {
+    const result = preprocessQuery('rough metal material');
+    expect(result).toContain('metal');
+    expect(result).toContain('conductor');
+  });
+
+  it('preprocessQuery "KD-tree acceleration structure" adds kdtree and bvh', () => {
+    const result = preprocessQuery('KD-tree acceleration structure');
+    expect(result).toContain('acceleration');
+    expect(result).toContain('kdtree');
+    expect(result).toContain('bvh');
+  });
+
+  it('preprocessQuery "bidirectional scattering distribution functions" adds bsdf', () => {
+    const result = preprocessQuery('bidirectional scattering distribution functions');
+    expect(result).toContain('bidirectional');
+    expect(result).toContain('bsdf');
+  });
+
+  it('preprocessQuery "camera ray sampling film attachment" adds buffer and image for film', () => {
+    // gt-22: "abstract base camera class providing ray sampling, film attachment..."
+    // "film" → buffer + image so agents querying about the render film find the Film class
+    const result = preprocessQuery('camera ray sampling film attachment');
+    expect(result).toContain('film');
+    expect(result).toContain('buffer');
+    expect(result).toContain('image');
+  });
+});
+
+describe('expandToken — rendering abbreviations (ABBREV_TO_FULL)', () => {
+  it('"bsdf" expands to bidirectional, scattering', () => {
+    expect(expandToken('bsdf')).toEqual(['bidirectional', 'scattering']);
+  });
+
+  it('"bidirectional" reverse-expands to bsdf', () => {
+    expect(expandToken('bidirectional')).toEqual(['bsdf']);
+  });
+
+  it('"scattering" reverse-expands to bsdf', () => {
+    expect(expandToken('scattering')).toEqual(['bsdf']);
+  });
+
+  it('"ggx" expands to microfacet, roughness', () => {
+    expect(expandToken('ggx')).toEqual(['microfacet', 'roughness']);
+  });
+
+  it('"microfacet" reverse-expands to ggx', () => {
+    expect(expandToken('microfacet')).toEqual(['ggx']);
+  });
+
+  it('"roughness" reverse-expands to ggx', () => {
+    expect(expandToken('roughness')).toEqual(['ggx']);
+  });
+
+  it('single-token "bsdf" preprocessQuery includes bidirectional and scattering', () => {
+    const result = preprocessQuery('bsdf');
+    expect(result).toContain('bsdf');
+    expect(result).toContain('bidirectional');
+    expect(result).toContain('scattering');
+  });
+
+  it('single-token "ggx" preprocessQuery includes microfacet and roughness', () => {
+    const result = preprocessQuery('ggx');
+    expect(result).toContain('ggx');
+    expect(result).toContain('microfacet');
+    expect(result).toContain('roughness');
   });
 });

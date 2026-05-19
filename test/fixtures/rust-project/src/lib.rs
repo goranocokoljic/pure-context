@@ -49,7 +49,7 @@ impl User {
     }
 
     fn private_method(&self) {
-        // private — should still be emitted (impl exception)
+        // private — NOT indexed (pub required for impl methods)
     }
 }
 

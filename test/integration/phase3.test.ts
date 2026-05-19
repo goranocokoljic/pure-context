@@ -168,19 +168,25 @@ describe('Go — symbol extraction', () => {
     expect(all.find((s) => s.name === 'joinLines')).toBeUndefined();
   });
 
-  it('5. method name includes receiver type', () => {
+  it('5. method uses bare name (receiver type in signature)', () => {
     const db = openDatabase(goRepoId);
     const all = getSymbolsByRepo(db, goRepoId);
     db.close();
 
-    const loginMethod = all.find((s) => s.kind === 'method' && s.name === 'AuthService.Login');
-    expect(loginMethod).toBeDefined();
+    // Phase 46: Go methods now store bare names (not qualified ReceiverType.MethodName)
+    // Multiple Login methods exist (interface + struct) — verify at least one is indexed
+    const loginMethods = all.filter((s) => s.kind === 'method' && s.name === 'Login');
+    expect(loginMethods.length).toBeGreaterThanOrEqual(1);
+    // The struct method's signature includes the func keyword and receiver
+    const structLogin = loginMethods.find((s) => s.signature.includes('func ('));
+    expect(structLogin).toBeDefined();
+    expect(structLogin!.signature).toContain('Login');
 
-    const logoutMethod = all.find((s) => s.kind === 'method' && s.name === 'AuthService.Logout');
-    expect(logoutMethod).toBeDefined();
+    const logoutMethods = all.filter((s) => s.kind === 'method' && s.name === 'Logout');
+    expect(logoutMethods.length).toBeGreaterThanOrEqual(1);
 
-    // User model methods
-    const displayName = all.find((s) => s.kind === 'method' && s.name === 'User.DisplayName');
+    // User model methods — bare names
+    const displayName = all.find((s) => s.kind === 'method' && s.name === 'DisplayName');
     expect(displayName).toBeDefined();
   });
 

@@ -7,14 +7,16 @@
  * scheme that promotes exact name matches to the top.
  *
  * Scoring (additive, higher = more relevant):
- *  100 — exact name match (case-insensitive)
+ *  100 — exact name match (case-insensitive, entire query = entire name)
  *   60 — name starts with query
  *   40 — name contains query as substring
+ *   40 — identity-exact: any single query word exactly equals the symbol name
  *   30 — all query words match a word-boundary name part (exact or stem)
  *   20 — any query word matches a word-boundary name part (exact or stem)
  *   15 — method verb bonus: first part of method name matches a query word
  *   30 — kindBoost: method on a *Service class
- *   15 — kindBoost: method on a *Repository / *Manager / *Store / *_model class
+ *   20 — kindBoost: Rust trait (interface kind) when ALL trait name parts match query words
+ *   15 — kindBoost: method on a *Repository / *Manager / *Store / *_model / *Handler / *DB / *Client / *Activity / *Fragment / *Adapter / *ViewModel / *Processor / *Indexer / *Parser / *EventSubscriber / *Listener / *FormType class
  *   10 — each query word with an exact word-boundary name-part match
  *    8 — each query word with a stem-only word-boundary name-part match
  *    8 — query phrase in signature
@@ -44,11 +46,13 @@ export interface DebugScore {
   nameExact: number;
   namePrefix: number;
   nameFuzzy: number;
+  identityExact: number;
   wordOverlap: number;
   methodVerbBonus: number;
   signatureMatch: number;
   summaryMatch: number;
   kindBoost: number;
+  kindHintBoost: number;
   libraryPenalty: number;
   recencyBoost: number;
 }
@@ -91,6 +95,41 @@ const LIBRARY_PATH_SEGMENTS = new Set([
 export function isLibraryPath(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, '/');
   return normalized.split('/').some((seg) => LIBRARY_PATH_SEGMENTS.has(seg));
+}
+
+/**
+ * For methods stored with bare names (Java post-Task 258, Rust post-Task 255),
+ * extract the class/type name from the signature prefix.
+ *
+ * Signature formats:
+ *   Java:  "ClassName.methodName: <raw sig>"
+ *   Rust:  "TypeName::methodName: <raw sig>"
+ *
+ * Returns the lower-cased class/type name, or '' when extraction fails.
+ * Guards against false positives by requiring the class part to be a simple
+ * identifier (no dots or colons in it).
+ */
+function classFromSignature(name: string, signature: string): string {
+  if (!signature) return '';
+  // Dot notation — Java: "ClassName.methodName: ..."
+  const dotPat = '.' + name + ':';
+  const di = signature.indexOf(dotPat);
+  if (di > 0) {
+    const candidate = signature.slice(0, di);
+    if (!candidate.includes('.') && !candidate.includes(':')) {
+      return candidate.toLowerCase();
+    }
+  }
+  // Double-colon notation — Rust: "TypeName::methodName ..."
+  const colonPat = '::' + name;
+  const ci = signature.indexOf(colonPat);
+  if (ci > 0) {
+    const candidate = signature.slice(0, ci);
+    if (!candidate.includes('.') && !candidate.includes(':')) {
+      return candidate.toLowerCase();
+    }
+  }
+  return '';
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -176,6 +215,27 @@ function score(
     nameFuzzy = 40;
     total += 40;
     matchReason = 'name_contains';
+  }
+
+  // ── Identity-exact boost ─────────────────────────────────────────────────────
+  //
+  // Fires when any single query word exactly matches the symbol's bare name
+  // (case-insensitive). Equivalent to JC's Identity channel (weight=2.0).
+  //
+  // Primary use case: with Go/Rust bare method names (Phase 46), struct/class
+  // symbols like `Builder` or `Mutex` share name parts with their own methods.
+  // For a query like "Builder struct" or "Mutex lock", the struct symbol should
+  // rank above a method named `build` or `lock` on the same type.
+  //
+  // This differs from nameExact (100pt, entire query = name): identityExact fires
+  // for multi-word queries where ONE word is the symbol's full name.
+  //
+  // Boost: +40 — large enough to overcome a method's kindBoost (+15–+30) advantage.
+
+  let identityExact = 0;
+  if (queryWords.length > 0 && queryWords.some((w) => w === nameLower)) {
+    identityExact = 40;
+    total += 40;
   }
 
   // ── Word-overlap rules (word-boundary matching against split name parts) ────
@@ -272,7 +332,7 @@ function score(
 
   total += signatureMatch + summaryMatch;
 
-  // ── Kind boost for application-layer methods ─────────────────────────────────
+  // ── Kind boost for application-layer methods and Rust traits ────────────────
   //
   // For natural-language "how to do X" queries, a method on a *Service class is
   // almost always the correct answer — not the DTO, event type, schema const, or
@@ -280,19 +340,44 @@ function score(
   //
   // Boost values (additive):
   //   +30 — method on a *Service class  (e.g. AuthService.login)
+  //   +20 — Rust trait (interface kind) when a query word matches the trait name
   //   +15 — method on a *Repository / *Manager / *Store class  (data-access layer)
   //   +15 — method on a *_model class  (PHP CodeIgniter model convention)
+  //   +15 — method on a *Handler / *DB / *Client class  (Go HTTP handlers, DB layers, API clients)
+  //   +15 — method on a *Activity / *Fragment / *Adapter / *ViewModel class  (Android framework)
+  //   +15 — method on a *Processor / *Indexer / *Parser class  (Python application-layer patterns)
+  //   +15 — method on a *EventSubscriber / *Listener / *FormType class  (Symfony patterns)
   //
-  // The boost is only applied to 'method' kind symbols that use dot ('.') or
-  // double-colon ('::') notation, which is how PureContext records class methods.
+  // The method boost is applied to 'method' kind symbols.  Class context is
+  // extracted from the symbol name (qualified: "ClassName.method" or
+  // "TypeName::method") or, for bare-name handlers (Java, Rust), from the
+  // signature prefix ("ClassName.method: <sig>" / "TypeName::method: <sig>").
+  // The interface boost applies to Rust traits (kind: 'interface') when query
+  // words overlap with the trait name's word-boundary parts.
 
   let kindBoost = 0;
+
+  // Rust trait kindBoost: boost when ALL word-boundary parts of the trait name
+  // are matched by query words.  This lifts Serialize/Deserialize above private
+  // helpers for queries like "serializable type" or "implement serialize",
+  // without boosting TypeScript option-bag interfaces (e.g. NuxtLinkOptions
+  // which has parts [nuxt, link, options] — "link" is rarely in the query).
+  if (symbol.kind === 'interface' && queryWords.length > 0) {
+    const traitParts = splitNameParts(symbol.name);
+    const hasQueryMatch = traitParts.length > 0 && traitParts.every((p) => queryWords.includes(p));
+    if (hasQueryMatch) kindBoost = 20;
+  }
+
   if (symbol.kind === 'method') {
     const dotIdx = symbol.name.indexOf('.');
     const colonIdx = symbol.name.indexOf('::');
     const sepIdx = dotIdx >= 0 ? dotIdx : colonIdx;
-    if (sepIdx > 0) {
-      const classPart = symbol.name.slice(0, sepIdx).toLowerCase();
+    // For bare names (Java/Rust handlers store bare methodName), fall back to
+    // extracting the class/type name from the signature prefix.
+    const classPart = sepIdx > 0
+      ? symbol.name.slice(0, sepIdx).toLowerCase()
+      : classFromSignature(symbol.name, symbol.signature);
+    if (classPart) {
       if (classPart.endsWith('service')) {
         kindBoost = 30;
       } else if (
@@ -300,13 +385,63 @@ function score(
         classPart.endsWith('manager') ||
         classPart.endsWith('store') ||
         classPart.endsWith('_model') ||
-        (classPart.endsWith('model') && classPart.length > 5)
+        (classPart.endsWith('model') && classPart.length > 5) ||
+        // PHP / NestJS controller action methods
+        classPart.endsWith('_controller') ||
+        (classPart.endsWith('controller') && classPart.length > 10) ||
+        // Go HTTP handlers, database layers, and API clients
+        classPart.endsWith('handler') ||
+        classPart.endsWith('db') ||
+        classPart.endsWith('client') ||
+        // Android framework classes (lifecycle methods, adapters)
+        classPart.endsWith('activity') ||
+        classPart.endsWith('fragment') ||
+        classPart.endsWith('adapter') ||
+        classPart.endsWith('viewmodel') ||
+        // Python application-layer class patterns
+        classPart.endsWith('processor') ||
+        classPart.endsWith('indexer') ||
+        classPart.endsWith('parser') ||
+        // Symfony event-driven and form patterns
+        classPart.endsWith('eventsubscriber') ||
+        classPart.endsWith('listener') ||
+        classPart.endsWith('formtype') ||
+        (classPart.endsWith('type') && classPart.length > 4)
       ) {
         kindBoost = 15;
       }
     }
   }
   total += kindBoost;
+
+  // ── Kind-hint boost ──────────────────────────────────────────────────────────
+  //
+  // When the query explicitly names a symbol kind ("class that ...", "callback
+  // interface", "enum of ..."), strongly prefer symbols of that exact kind.
+  // This prevents method/function symbols from outranking the class or interface
+  // the query is asking about.
+  //
+  // Boost value: +35 — enough to overcome the method kindBoost (+15–+30) and a
+  // multi-word overlap advantage that a method on a similarly-named class may have.
+  //
+  // Match rules (all case-insensitive, word-boundary in query words):
+  //   "class"     → prefer kind 'class' or 'struct'
+  //   "interface" → prefer kind 'class', 'struct', or 'interface'
+  //   "struct"    → prefer kind 'struct'
+  //   "enum"      → prefer kind 'enum'
+  //   "function"  → prefer kind 'function'
+
+  let kindHintBoost = 0;
+  if (queryWords.includes('class') || queryWords.includes('cls')) {
+    if (symbol.kind === 'class' || symbol.kind === 'struct') kindHintBoost = 35;
+  } else if (queryWords.includes('interface')) {
+    if (symbol.kind === 'class' || symbol.kind === 'struct' || symbol.kind === 'interface') kindHintBoost = 35;
+  } else if (queryWords.includes('struct')) {
+    if (symbol.kind === 'struct') kindHintBoost = 35;
+  } else if (queryWords.includes('enum')) {
+    if (symbol.kind === 'enum') kindHintBoost = 35;
+  }
+  total += kindHintBoost;
 
   // ── Library path penalty ─────────────────────────────────────────────────────
   //
@@ -336,11 +471,13 @@ function score(
     nameExact,
     namePrefix,
     nameFuzzy,
+    identityExact,
     wordOverlap,
     methodVerbBonus,
     signatureMatch,
     summaryMatch,
     kindBoost,
+    kindHintBoost,
     libraryPenalty,
     recencyBoost: 0,
   };

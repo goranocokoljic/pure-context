@@ -842,3 +842,310 @@ use App\\Services\\UserService;`;
     expect(specifiers).toContain('App\\Services\\UserService');
   });
 });
+
+// ─── PHP 8 attribute syntax (#[...]) ─────────────────────────────────────────
+
+describe('PHP 8 attribute syntax', () => {
+  it('extracts class and methods when PHP 8 route attributes are present', async () => {
+    const src = `<?php
+namespace App\\Controller;
+
+class HomeController
+{
+    #[Route('/home', name: 'homepage')]
+    public function index(): Response
+    {
+        return $this->render('home/index.html.twig');
+    }
+
+    #[Route('/about', name: 'about', methods: ['GET'])]
+    public function about(): Response
+    {
+        return $this->render('home/about.html.twig');
+    }
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/Controller/HomeController.php');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('App\\Controller\\HomeController');
+    expect(names).toContain('App\\Controller\\HomeController::index');
+    expect(names).toContain('App\\Controller\\HomeController::about');
+  });
+
+  it('does not produce spurious symbols from inside attribute bodies', async () => {
+    const src = `<?php
+namespace App\\Controller;
+
+class PageController
+{
+    #[Route('/page/{id}', name: 'page_show', requirements: ['id' => '\\d+'])]
+    public function show(int $id): Response
+    {
+        return $this->render('page/show.html.twig');
+    }
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/Controller/PageController.php');
+    // Only the class and the one method; no symbols from inside #[Route(...)]
+    expect(syms.length).toBe(2);
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('App\\Controller\\PageController');
+    expect(names).toContain('App\\Controller\\PageController::show');
+  });
+
+  it('produces clean signatures that omit the attribute line', async () => {
+    const src = `<?php
+namespace App\\Controller;
+
+class ArticleController
+{
+    #[Route('/articles', name: 'article_list', methods: ['GET'])]
+    public function list(): Response
+    {
+        return $this->json([]);
+    }
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/Controller/ArticleController.php');
+    const method = syms.find((s) => s.name === 'App\\Controller\\ArticleController::list');
+    expect(method).toBeDefined();
+    // Signature should NOT include the #[Route(...)] attribute text
+    expect(method!.signature).not.toContain('#[');
+    expect(method!.signature).not.toContain('Route(');
+    expect(method!.signature).toContain('public function list');
+  });
+
+  it('handles multiple attributes stacked on a single method', async () => {
+    const src = `<?php
+namespace App\\Controller;
+
+class ApiController
+{
+    #[Route('/api/users', methods: ['GET'])]
+    #[IsGranted('ROLE_USER')]
+    public function getUsers(): JsonResponse
+    {
+        return $this->json([]);
+    }
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/Controller/ApiController.php');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('App\\Controller\\ApiController::getUsers');
+    const method = syms.find((s) => s.name === 'App\\Controller\\ApiController::getUsers');
+    expect(method!.signature).not.toContain('#[');
+    expect(method!.signature).toContain('public function getUsers');
+  });
+
+  it('handles PHP 8 constructor property promotion', async () => {
+    const src = `<?php
+namespace App\\Service;
+
+class UserService
+{
+    public function __construct(
+        private readonly EntityManagerInterface $em,
+        private readonly LoggerInterface $logger
+    ) {}
+
+    public function createUser(string $email): User
+    {
+        $user = new User($email);
+        $this->em->persist($user);
+        return $user;
+    }
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/Service/UserService.php');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('App\\Service\\UserService');
+    expect(names).toContain('App\\Service\\UserService::__construct');
+    expect(names).toContain('App\\Service\\UserService::createUser');
+  });
+
+  it('handles PHP 8 union type hints in method signatures', async () => {
+    const src = `<?php
+namespace App\\Service;
+
+class DataProcessor
+{
+    public function handle(int|string $id, array|null $options = null): Response|JsonResponse
+    {
+        return new Response();
+    }
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/Service/DataProcessor.php');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('App\\Service\\DataProcessor::handle');
+    const method = syms.find((s) => s.name === 'App\\Service\\DataProcessor::handle');
+    expect(method!.signature).toContain('handle');
+  });
+
+  it('handles PHP 8 named arguments in attributes without crashing', async () => {
+    const src = `<?php
+namespace App\\EventListener;
+
+class KernelRequestListener
+{
+    #[AsEventListener(event: KernelEvents::REQUEST, priority: 10)]
+    public function onKernelRequest(RequestEvent $event): void
+    {
+        if (!$event->isMainRequest()) return;
+    }
+
+    #[AsEventListener(event: KernelEvents::RESPONSE)]
+    public function onKernelResponse(ResponseEvent $event): void
+    {
+        // handle response
+    }
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/EventListener/KernelRequestListener.php');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('App\\EventListener\\KernelRequestListener');
+    expect(names).toContain('App\\EventListener\\KernelRequestListener::onKernelRequest');
+    expect(names).toContain('App\\EventListener\\KernelRequestListener::onKernelResponse');
+  });
+
+  it('handles PHP 8.1 readonly properties gracefully (not extracted as symbols)', async () => {
+    const src = `<?php
+namespace App\\Entity;
+
+class Product
+{
+    public readonly string $name;
+    public readonly float $price;
+
+    public function __construct(string $name, float $price)
+    {
+        $this->name = $name;
+        $this->price = $price;
+    }
+
+    public function getDisplayName(): string
+    {
+        return $this->name;
+    }
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/Entity/Product.php');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('App\\Entity\\Product');
+    // Constructor and getter extracted
+    expect(names).toContain('App\\Entity\\Product::__construct');
+    expect(names).toContain('App\\Entity\\Product::getDisplayName');
+  });
+
+  it('handles Symfony #[Route] on controller with namespace correctly', async () => {
+    const src = `<?php
+namespace App\\Controller;
+
+use Symfony\\Bundle\\FrameworkBundle\\Controller\\AbstractController;
+use Symfony\\Component\\HttpFoundation\\Response;
+use Symfony\\Component\\Routing\\Attribute\\Route;
+
+class SecurityController extends AbstractController
+{
+    #[Route('/login', name: 'app_login')]
+    public function login(): Response
+    {
+        return $this->render('security/login.html.twig');
+    }
+
+    #[Route('/logout', name: 'app_logout', methods: ['POST'])]
+    public function logout(): void {}
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/Controller/SecurityController.php');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('App\\Controller\\SecurityController');
+    expect(names).toContain('App\\Controller\\SecurityController::login');
+    expect(names).toContain('App\\Controller\\SecurityController::logout');
+    // Signatures should be clean (no attribute noise)
+    const loginMethod = syms.find((s) => s.name.endsWith('::login'));
+    expect(loginMethod!.signature).not.toContain('#[');
+  });
+
+  it('extracts abstract methods with PHP 8 attributes', async () => {
+    const src = `<?php
+namespace App\\Controller;
+
+abstract class BaseController
+{
+    #[Required]
+    abstract public function configure(): void;
+
+    public function render(string $template): Response
+    {
+        return new Response();
+    }
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/Controller/BaseController.php');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('App\\Controller\\BaseController');
+    expect(names).toContain('App\\Controller\\BaseController::configure');
+    expect(names).toContain('App\\Controller\\BaseController::render');
+  });
+
+  it('handles PHP 8 enum with backed type and attributes', async () => {
+    const src = `<?php
+namespace App\\Enum;
+
+enum Status: string
+{
+    #[Label('Active')]
+    case Active = 'active';
+
+    #[Label('Inactive')]
+    case Inactive = 'inactive';
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/Enum/Status.php');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('App\\Enum\\Status');
+    // Enum cases should still be extracted even with attributes on them
+    expect(names.some((n) => n.includes('Status::'))).toBe(true);
+  });
+
+  it('class with PHP 8 attributes on the class itself extracts correctly', async () => {
+    const src = `<?php
+namespace App\\Entity;
+
+#[ORM\\Entity(repositoryClass: UserRepository::class)]
+#[ORM\\Table(name: 'users')]
+class User
+{
+    public function getId(): int { return $this->id; }
+    public function getEmail(): string { return $this->email; }
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/Entity/User.php');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('App\\Entity\\User');
+    expect(names).toContain('App\\Entity\\User::getId');
+    expect(names).toContain('App\\Entity\\User::getEmail');
+    const cls = syms.find((s) => s.name === 'App\\Entity\\User');
+    // Class signature should not include #[ORM\...] attribute text
+    expect(cls!.signature).not.toContain('#[');
+    expect(cls!.signature).toContain('class User');
+  });
+
+  it('handles PHP 8 intersection types in method parameters', async () => {
+    const src = `<?php
+namespace App\\Service;
+
+class ValidatorService
+{
+    public function validate(Countable&Traversable $collection): bool
+    {
+        return count($collection) > 0;
+    }
+}`;
+    const { tree, buf } = await parse(src);
+    const syms = phpHandler.extractSymbols(tree, buf, 'src/Service/ValidatorService.php');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('App\\Service\\ValidatorService::validate');
+  });
+});

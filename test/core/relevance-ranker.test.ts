@@ -409,10 +409,10 @@ describe('rankSymbols — kindBoost for Service/Repository methods', () => {
     expect(results[0].debugScore?.kindBoost).toBe(15);
   });
 
-  it('Controller method gets no kindBoost', () => {
+  it('Controller method gets kindBoost = 15 (Phase 45 — controllers now boosted)', () => {
     const controllerMethod = sym('AuthController.login', { kind: 'method' });
     const results = rankSymbols([controllerMethod], 'login user', true);
-    expect(results[0].debugScore?.kindBoost).toBe(0);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
   });
 
   it('non-method kinds get no kindBoost even with Service in name', () => {
@@ -603,6 +603,53 @@ describe('rankSymbols — method verb bonus', () => {
     const results = rankSymbols([findMethod], 'find user by id', true);
     // "find" is the verb AND "find" is in the query → gets +15
     expect(results[0].debugScore?.methodVerbBonus).toBe(15);
+  });
+});
+
+// ─── Go pattern kindBoost ─────────────────────────────────────────────────────
+
+describe('rankSymbols — Go patterns', () => {
+  it('*Handler method (HttpHandler.ServeHTTP) gets kindBoost = 15', () => {
+    const goHandler = sym('HttpHandler.ServeHTTP', { kind: 'method' });
+    const results = rankSymbols([goHandler], 'serve http request', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*DB method (PostgresDB.Query) gets kindBoost = 15', () => {
+    const goDb = sym('PostgresDB.Query', { kind: 'method' });
+    const results = rankSymbols([goDb], 'query database records', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*Client method (APIClient.Send) gets kindBoost = 15', () => {
+    const goClient = sym('APIClient.Send', { kind: 'method' });
+    const results = rankSymbols([goClient], 'send api request', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('Go handler method outranks unrelated function for an HTTP query', () => {
+    const handler = sym('RouteHandler.Handle', {
+      kind: 'method',
+      summary: 'Handles incoming HTTP requests and routes them.',
+    });
+    const unrelated = sym('parseRequestBody', {
+      kind: 'function',
+      summary: 'Parses the JSON body of an HTTP request.',
+    });
+    const results = rankSymbols([unrelated, handler], 'handle incoming http request route');
+    expect(results[0].symbol.name).toBe('RouteHandler.Handle');
+  });
+
+  it('*DB method with lowercase suffix gets kindBoost = 15', () => {
+    const userDb = sym('UserDB.Insert', { kind: 'method' });
+    const results = rankSymbols([userDb], 'insert user record', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('non-method *Handler symbol gets no kindBoost', () => {
+    const handlerFn = sym('NewHttpHandler', { kind: 'function' });
+    const results = rankSymbols([handlerFn], 'create http handler', true);
+    expect(results[0].debugScore?.kindBoost).toBe(0);
   });
 });
 
@@ -809,5 +856,478 @@ describe('rankSymbols — kindBoost for PHP *_model methods', () => {
     });
     const results = rankSymbols([controllerMethod, modelMethod], 'get all settings from database');
     expect(results[0].symbol.name).toBe('Settings_model::get_settings');
+  });
+});
+
+// ─── Android pattern kindBoost ────────────────────────────────────────────────
+
+describe('rankSymbols — Android patterns', () => {
+  it('*Activity method gets +15 kindBoost', () => {
+    const activityMethod = sym('MainActivity.onCreate', { kind: 'method' });
+    const results = rankSymbols([activityMethod], 'create activity ui', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*Fragment method gets +15 kindBoost', () => {
+    const fragmentMethod = sym('HomeFragment.onCreateView', { kind: 'method' });
+    const results = rankSymbols([fragmentMethod], 'create fragment view layout', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*Adapter method gets +15 kindBoost', () => {
+    const adapterMethod = sym('RecyclerAdapter.onBindViewHolder', { kind: 'method' });
+    const results = rankSymbols([adapterMethod], 'bind view holder data', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*ViewModel method gets +15 kindBoost', () => {
+    const vmMethod = sym('ProductViewModel.loadData', { kind: 'method' });
+    const results = rankSymbols([vmMethod], 'load product data', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('Android method outranks utility function for lifecycle query', () => {
+    const activityMethod = sym('LoginActivity.onResume', {
+      kind: 'method',
+      summary: 'Resumes the login activity and refreshes the UI.',
+    });
+    const utilFunction = sym('resumeSession', {
+      kind: 'function',
+      summary: 'Resumes a user session.',
+    });
+    const results = rankSymbols([utilFunction, activityMethod], 'resume login activity');
+    expect(results[0].symbol.name).toBe('LoginActivity.onResume');
+  });
+
+  it('non-method *Activity symbol gets no kindBoost', () => {
+    const activityClass = sym('MainActivity', { kind: 'class' });
+    const results = rankSymbols([activityClass], 'main activity setup', true);
+    expect(results[0].debugScore?.kindBoost).toBe(0);
+  });
+
+  it('*Adapter method on RecyclerView pattern gets +15 kindBoost', () => {
+    const adapterMethod = sym('ProductListAdapter.getItemCount', { kind: 'method' });
+    const results = rankSymbols([adapterMethod], 'get number of items in list', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+});
+
+// ─── Python pattern kindBoost ────────────────────────────────────────────────
+
+describe('rankSymbols — Python patterns', () => {
+  it('*Processor method gets +15 kindBoost', () => {
+    const processorMethod = sym('DataProcessor.process', { kind: 'method' });
+    const results = rankSymbols([processorMethod], 'process data records', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*Indexer method gets +15 kindBoost', () => {
+    const indexerMethod = sym('SymbolIndexer.index', { kind: 'method' });
+    const results = rankSymbols([indexerMethod], 'index symbol into store', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*Parser method gets +15 kindBoost', () => {
+    const parserMethod = sym('QueryParser.parse', { kind: 'method' });
+    const results = rankSymbols([parserMethod], 'parse query string into tokens', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*Processor method outranks unrelated function for processing query', () => {
+    const processorMethod = sym('EventProcessor.handle', {
+      kind: 'method',
+      summary: 'Handles and processes incoming events.',
+    });
+    const utilFn = sym('processRawData', {
+      kind: 'function',
+      summary: 'Processes raw data into usable format.',
+    });
+    const results = rankSymbols([utilFn, processorMethod], 'handle process incoming event');
+    expect(results[0].symbol.name).toBe('EventProcessor.handle');
+  });
+
+  it('*Parser method outranks standalone function for parse query', () => {
+    const parserMethod = sym('ASTParser.parse', {
+      kind: 'method',
+      summary: 'Parses source code into an AST.',
+    });
+    const parseUtil = sym('parseSourceCode', {
+      kind: 'function',
+      summary: 'Parses source code string.',
+    });
+    const results = rankSymbols([parseUtil, parserMethod], 'parse source code into ast');
+    expect(results[0].symbol.name).toBe('ASTParser.parse');
+  });
+
+  it('non-method *Processor symbol gets no kindBoost', () => {
+    const processorClass = sym('DataProcessor', { kind: 'class' });
+    const results = rankSymbols([processorClass], 'process data', true);
+    expect(results[0].debugScore?.kindBoost).toBe(0);
+  });
+});
+
+// ─── Rust trait kindBoost ─────────────────────────────────────────────────────
+
+describe('rankSymbols — Rust trait kindBoost', () => {
+  it('Serialize trait (interface kind) gets kindBoost = 20 for "serialize" query', () => {
+    const trait = sym('Serialize', { kind: 'interface' });
+    const results = rankSymbols([trait], 'serialize custom type', true);
+    expect(results[0].debugScore?.kindBoost).toBe(20);
+  });
+
+  it('Deserialize trait gets kindBoost = 20 for "deserialize" query', () => {
+    const trait = sym('Deserialize', { kind: 'interface' });
+    const results = rankSymbols([trait], 'deserialize json into struct', true);
+    expect(results[0].debugScore?.kindBoost).toBe(20);
+  });
+
+  it('Serialize trait gets kindBoost = 20 for "serializable" query (synonym expansion)', () => {
+    // "serializable" expands to ["serialize", "serde"] via synonym map
+    // extractQueryWords includes "serialize" → splitNameParts("Serialize") includes "serialize"
+    const trait = sym('Serialize', { kind: 'interface' });
+    const results = rankSymbols([trait], 'serializable type', true);
+    expect(results[0].debugScore?.kindBoost).toBe(20);
+  });
+
+  it('Serialize outranks private helper function for serialization query', () => {
+    const trait = sym('Serialize', {
+      kind: 'interface',
+      summary: 'Trait implemented by types that can be serialized.',
+    });
+    const helperFn = sym('serialize_field', {
+      kind: 'function',
+      summary: 'Internal helper to serialize a single struct field.',
+    });
+    const results = rankSymbols([helperFn, trait],
+      'trait a custom type implements to become serializable');
+    expect(results[0].symbol.name).toBe('Serialize');
+  });
+
+  it('interface kind symbol with no matching query word gets NO kindBoost', () => {
+    // "Iterator" trait for a query about "serialize" — name parts don't match query
+    const iterTrait = sym('Iterator', { kind: 'interface' });
+    const results = rankSymbols([iterTrait], 'serialize custom type', true);
+    expect(results[0].debugScore?.kindBoost).toBe(0);
+  });
+
+  it('Display trait gets kindBoost = 20 for "display" query', () => {
+    const trait = sym('Display', { kind: 'interface' });
+    const results = rankSymbols([trait], 'implement display for custom type', true);
+    expect(results[0].debugScore?.kindBoost).toBe(20);
+  });
+
+  it('multi-part TypeScript option interface gets NO kindBoost when one part is missing from query', () => {
+    // NuxtLinkOptions has parts [nuxt, link, options] — "link" is not in the query
+    // The "all parts must match" rule prevents option-bag interfaces from flooding results
+    const optIface = sym('NuxtLinkOptions', { kind: 'interface' });
+    const results = rankSymbols([optIface], 'initialise a new Nuxt framework instance with the provided options', true);
+    expect(results[0].debugScore?.kindBoost).toBe(0);
+  });
+
+  it('two-part interface gets kindBoost when both parts match query', () => {
+    // NuxtHooks has parts [nuxt, hooks] — both appear in the query
+    const hooks = sym('NuxtHooks', { kind: 'interface' });
+    const results = rankSymbols([hooks], 'interface listing all available build-time hooks for the nuxt framework', true);
+    expect(results[0].debugScore?.kindBoost).toBe(20);
+  });
+});
+
+// ─── Controller kindBoost ─────────────────────────────────────────────────────
+
+describe('rankSymbols — controller kindBoost', () => {
+  it('method on *Controller class gets kindBoost = 15', () => {
+    const s = sym('UserController::create', { kind: 'method' });
+    const results = rankSymbols([s], 'create user', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('method on namespace-qualified *Controller gets kindBoost = 15', () => {
+    const s = sym('App\\Controller\\DefaultController::index', { kind: 'method' });
+    const results = rankSymbols([s], 'home page render', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('method on *_controller class gets kindBoost = 15', () => {
+    const s = sym('home_controller::index', { kind: 'method' });
+    const results = rankSymbols([s], 'home page', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*Controller method outranks *Repository method for same query when name matches better', () => {
+    const controller = sym('App\\Controller\\DefaultController::index', { kind: 'method' });
+    const repo = sym('App\\Repository\\PageRepository::getHomePagePages', { kind: 'method' });
+    // Query matches "home" and "page" in repo name but "index" in controller name
+    // Controller should get +15 boost, repo also gets +15 — name overlap decides
+    const results = rankSymbols([controller, repo], 'home page render index', true);
+    // Both get +15 kindBoost
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+    expect(results[1].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('short "controller" class name below length threshold gets no kindBoost', () => {
+    // "controller" by itself is length 10, which is NOT > 10, so no boost
+    const s = sym('controller::run', { kind: 'method' });
+    const results = rankSymbols([s], 'run controller', true);
+    expect(results[0].debugScore?.kindBoost).toBe(0);
+  });
+
+  it('*Controller non-method (class symbol) does not get kindBoost', () => {
+    const s = sym('UserController', { kind: 'class' });
+    const results = rankSymbols([s], 'user controller', true);
+    // kindBoost is only for methods
+    expect(results[0].debugScore?.kindBoost).toBe(0);
+  });
+});
+
+// ─── Symfony pattern kindBoost ────────────────────────────────────────────────
+
+describe('rankSymbols — Symfony patterns', () => {
+  it('*EventSubscriber method gets kindBoost = 15', () => {
+    const sub = sym('SecurityEventSubscriber.onKernelRequest', { kind: 'method' });
+    const results = rankSymbols([sub], 'handle kernel request event', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*Listener method gets kindBoost = 15', () => {
+    const listener = sym('ExceptionListener.onKernelException', { kind: 'method' });
+    const results = rankSymbols([listener], 'handle kernel exception', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*FormType method gets kindBoost = 15', () => {
+    const formType = sym('RegistrationFormType.buildForm', { kind: 'method' });
+    const results = rankSymbols([formType], 'build registration form', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('*Type method (Symfony FormType convention) gets kindBoost = 15 when name > 4 chars', () => {
+    const formType = sym('UserType.buildForm', { kind: 'method' });
+    const results = rankSymbols([formType], 'build user form', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('exact "type" class (length <= 4) does NOT get kindBoost', () => {
+    // "type" itself is length 4, condition is length > 4, so no boost
+    const s = sym('type.doSomething', { kind: 'method' });
+    const results = rankSymbols([s], 'do something', true);
+    expect(results[0].debugScore?.kindBoost).toBe(0);
+  });
+
+  it('EventSubscriber method outranks unrelated function for event-listener query', () => {
+    const subscriber = sym('RequestEventSubscriber.onKernelRequest', {
+      kind: 'method',
+      summary: 'Handles the kernel request event to authenticate the user.',
+    });
+    const unrelated = sym('checkAuthentication', {
+      kind: 'function',
+      summary: 'Checks whether the current user is authenticated.',
+    });
+    const results = rankSymbols([unrelated, subscriber], 'handle kernel request event authentication');
+    expect(results[0].symbol.name).toBe('RequestEventSubscriber.onKernelRequest');
+  });
+
+  it('*EventSubscriber non-method gets no kindBoost', () => {
+    const cls = sym('SecurityEventSubscriber', { kind: 'class' });
+    const results = rankSymbols([cls], 'security event subscriber', true);
+    expect(results[0].debugScore?.kindBoost).toBe(0);
+  });
+});
+
+// ─── Kind-hint boost ─────────────────────────────────────────────────────────
+
+describe('rankSymbols — kind-hint boost', () => {
+  it('"class" in query gives +35 kindHintBoost to class symbols', () => {
+    const cls = sym('CalculatorManager', { kind: 'class' });
+    const results = rankSymbols([cls], 'class that manages calculator engines', true);
+    expect(results[0].debugScore?.kindHintBoost).toBe(35);
+  });
+
+  it('"class" in query gives +35 kindHintBoost to struct symbols', () => {
+    const st = sym('CalcInput', { kind: 'struct' });
+    const results = rankSymbols([st], 'class representing the current numeric input', true);
+    expect(results[0].debugScore?.kindHintBoost).toBe(35);
+  });
+
+  it('"class" in query does NOT boost function symbols', () => {
+    const fn = sym('createCalculator', { kind: 'function' });
+    const results = rankSymbols([fn], 'class that creates calculators', true);
+    expect(results[0].debugScore?.kindHintBoost).toBe(0);
+  });
+
+  it('"interface" in query gives +35 kindHintBoost to interface symbols', () => {
+    const iface = sym('ICalcDisplay', { kind: 'interface' });
+    const results = rankSymbols([iface], 'callback interface for display updates', true);
+    expect(results[0].debugScore?.kindHintBoost).toBe(35);
+  });
+
+  it('"interface" in query also boosts class symbols (C++ classes implement interfaces)', () => {
+    const cls = sym('CalcDisplay', { kind: 'class' });
+    const results = rankSymbols([cls], 'interface that the calculator uses to display', true);
+    expect(results[0].debugScore?.kindHintBoost).toBe(35);
+  });
+
+  it('"struct" in query gives +35 kindHintBoost to struct symbols only', () => {
+    const st = sym('SurfaceInteraction', { kind: 'struct' });
+    const cls = sym('SurfaceHandler', { kind: 'class' });
+    const resultsStruct = rankSymbols([st], 'struct holding intersection record', true);
+    const resultsClass = rankSymbols([cls], 'struct holding intersection record', true);
+    expect(resultsStruct[0].debugScore?.kindHintBoost).toBe(35);
+    expect(resultsClass[0].debugScore?.kindHintBoost).toBe(0);
+  });
+
+  it('"enum" in query gives +35 kindHintBoost to enum symbols only', () => {
+    const en = sym('ViewMode', { kind: 'enum' });
+    const fn = sym('getViewMode', { kind: 'function' });
+    const resultsEnum = rankSymbols([en], 'enum of calculator view modes', true);
+    const resultsFn = rankSymbols([fn], 'enum of calculator view modes', true);
+    expect(resultsEnum[0].debugScore?.kindHintBoost).toBe(35);
+    expect(resultsFn[0].debugScore?.kindHintBoost).toBe(0);
+  });
+
+  it('kind-hint boost lifts class symbol above function for class query', () => {
+    const cls = sym('CalculationManager', { kind: 'class' });
+    const fn = sym('calculateManager', { kind: 'function' });
+    const results = rankSymbols([fn, cls], 'class that orchestrates calculator engines');
+    expect(results[0].symbol.name).toBe('CalculationManager');
+  });
+
+  it('"cls" abbreviation also triggers class kind-hint boost', () => {
+    const cls = sym('BaseController', { kind: 'class' });
+    const results = rankSymbols([cls], 'cls for handling web requests', true);
+    expect(results[0].debugScore?.kindHintBoost).toBe(35);
+  });
+
+  it('no kind-hint boost when query has no kind hint word', () => {
+    const cls = sym('UserService', { kind: 'class' });
+    const results = rankSymbols([cls], 'service that manages user accounts', true);
+    expect(results[0].debugScore?.kindHintBoost).toBe(0);
+  });
+});
+
+// ─── Identity-exact boost ─────────────────────────────────────────────────────
+
+describe('rankSymbols — identityExact boost', () => {
+  it('identityExact fires +40 when a query word exactly matches the symbol name', () => {
+    const s = sym('Builder', { kind: 'struct' });
+    const results = rankSymbols([s], 'builder struct', true);
+    expect(results[0].debugScore?.identityExact).toBe(40);
+  });
+
+  it('identityExact does NOT fire when no query word equals the symbol name', () => {
+    const s = sym('BuilderFactory', { kind: 'class' });
+    const results = rankSymbols([s], 'builder struct', true);
+    expect(results[0].debugScore?.identityExact).toBe(0);
+  });
+
+  it('identityExact lifts struct Builder above bare method "build" for multi-word query', () => {
+    // Phase 46: Go/Rust methods now stored with bare names
+    // "Builder struct" → queryWords includes "builder"
+    // Builder (struct): nameLower = "builder" matches queryWord "builder" → +40
+    // build (method, bare name): nameLower = "build" ≠ "builder" → no boost
+    const builderStruct = sym('Builder', { kind: 'struct' });
+    const buildMethod = sym('build', { kind: 'method' });
+    const results = rankSymbols([buildMethod, builderStruct], 'builder struct');
+    expect(results[0].symbol.name).toBe('Builder');
+  });
+
+  it('identityExact lifts Mutex struct above bare method "lock" for exact-name query', () => {
+    const mutexStruct = sym('Mutex', { kind: 'struct' });
+    const lockMethod = sym('lock', { kind: 'method' });
+    const results = rankSymbols([lockMethod, mutexStruct], 'mutex thread-safe type');
+    expect(results[0].symbol.name).toBe('Mutex');
+  });
+
+  it('identityExact also fires for single-word exact queries (stacks with nameExact)', () => {
+    const s = sym('Builder', { kind: 'struct' });
+    const results = rankSymbols([s], 'Builder', true);
+    // nameExact = 100, identityExact = 40 (queryWords includes "builder")
+    expect(results[0].debugScore?.nameExact).toBe(100);
+    expect(results[0].debugScore?.identityExact).toBe(40);
+    expect(results[0].score).toBeGreaterThanOrEqual(140);
+  });
+
+  it('identityExact is case-insensitive', () => {
+    const s = sym('PushCampaignMessage', { kind: 'method' });
+    // query word "pushcampaignmessage" should match nameLower "pushcampaignmessage"
+    const results = rankSymbols([s], 'PushCampaignMessage', true);
+    expect(results[0].debugScore?.identityExact).toBe(40);
+  });
+
+  it('identityExact fires for Go bare method name matching query word', () => {
+    // Phase 46 Go handler: methods stored as bare names like "PushCampaignMessage"
+    // Query "push campaign message" → queryWords: ["push", "campaign", "message"]
+    // "push" ≠ "pushcampaignmessage"; "campaign" ≠ …; "message" ≠ …
+    // → no identityExact (bare name is the full method name, not a single word)
+    const s = sym('PushCampaignMessage', { kind: 'method' });
+    const results = rankSymbols([s], 'push campaign message', true);
+    // identityExact should NOT fire — no single query word equals the full name
+    expect(results[0].debugScore?.identityExact).toBe(0);
+  });
+
+  it('identityExact fires when query is longer but contains the exact name as a token', () => {
+    // query "find Builder implementation" → queryWords includes "builder"
+    // symbol "Builder" → nameLower = "builder" matches
+    const s = sym('Builder', { kind: 'struct' });
+    const results = rankSymbols([s], 'find Builder implementation', true);
+    expect(results[0].debugScore?.identityExact).toBe(40);
+  });
+});
+
+// ─── Bare method name kindBoost (Java/Rust signature fallback) ────────────────
+
+describe('rankSymbols — kindBoost from signature for bare method names', () => {
+  // Java methods (Task 258): stored as bare name, class in signature prefix
+  // "ClassName.methodName: <raw sig>"
+
+  it('Java *Activity bare method gets kindBoost = 15 via signature', () => {
+    const method = sym('nextButtonClicked', {
+      kind: 'method',
+      signature: 'InspectionFragment.nextButtonClicked: public void nextButtonClicked(View v)',
+    });
+    const results = rankSymbols([method], 'validate form and advance tab', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('Java *ViewModel bare method gets kindBoost = 15 via signature', () => {
+    const method = sym('getTabData', {
+      kind: 'method',
+      signature: 'InspectionViewModel.getTabData: public LiveData<List<TabItem>> getTabData()',
+    });
+    const results = rankSymbols([method], 'get inspection tab data', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('Java *Service bare method gets kindBoost = 30 via signature', () => {
+    const method = sym('sendLocation', {
+      kind: 'method',
+      signature: 'GpsService.sendLocation: public void sendLocation(double lat, double lng)',
+    });
+    const results = rankSymbols([method], 'send gps location coordinates', true);
+    expect(results[0].debugScore?.kindBoost).toBe(30);
+  });
+
+  // Rust methods (Task 255): "TypeName::methodName: <raw sig>"
+  it('Rust bare method gets kindBoost via :: signature prefix', () => {
+    const method = sym('lock', {
+      kind: 'method',
+      signature: 'MutexManager::lock: pub async fn lock(&self) -> Guard',
+    });
+    const results = rankSymbols([method], 'lock resource', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('qualified name (dot) still works as before', () => {
+    const method = sym('InspectionFragment.nextButtonClicked', { kind: 'method' });
+    const results = rankSymbols([method], 'validate form and advance tab', true);
+    expect(results[0].debugScore?.kindBoost).toBe(15);
+  });
+
+  it('bare name with no class context in signature gets no kindBoost', () => {
+    const method = sym('doSomething', {
+      kind: 'method',
+      signature: 'public void doSomething()',
+    });
+    const results = rankSymbols([method], 'do something useful', true);
+    expect(results[0].debugScore?.kindBoost).toBe(0);
   });
 });

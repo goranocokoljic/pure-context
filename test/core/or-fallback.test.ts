@@ -58,7 +58,8 @@ describe('toOrFallbackQuery — unit', () => {
 
   it('handles five-word query', () => {
     const result = toOrFallbackQuery('parse source file tree sitter');
-    expect(result).toBe('parse OR source OR file OR tree OR sitter');
+    // "parse" now expands to synonyms "analyze" and "extract" via VERB_SYNONYMS
+    expect(result).toBe('parse OR source OR file OR tree OR sitter OR analyze OR extract');
   });
 
   it('round-trips through preprocessQuery → toOrFallbackQuery', () => {

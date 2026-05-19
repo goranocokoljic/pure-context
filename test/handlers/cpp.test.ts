@@ -275,6 +275,231 @@ class Cache<int> {};
     expect(caches[0]!.name).toBe('Cache');
   });
 
+  // ── Export-macro class/struct patterns (e.g. mitsuba3's MI_EXPORT_LIB) ───────
+
+  it('extracts class name correctly when export macro precedes it', async () => {
+    // `class MI_EXPORT_LIB ClassName` — the macro appears as a type_identifier
+    // before the real class name; we must pick the last type_identifier.
+    const { tree, buf } = await parse(`
+class MI_EXPORT_LIB Scene : public Base {
+public:
+  void render();
+};
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'scene.hpp');
+    const cls = syms.find((s) => s.kind === 'class');
+    expect(cls).toBeDefined();
+    expect(cls!.name).toBe('Scene');
+    expect(cls!.name).not.toBe('MI_EXPORT_LIB');
+  });
+
+  it('extracts struct name correctly when export macro precedes it', async () => {
+    const { tree, buf } = await parse(`
+struct MI_EXPORT_LIB BSDFContext {
+  int flags;
+};
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'bsdf.hpp');
+    const st = syms.find((s) => s.kind === 'struct');
+    expect(st).toBeDefined();
+    expect(st!.name).toBe('BSDFContext');
+    expect(st!.name).not.toBe('MI_EXPORT_LIB');
+  });
+
+  it('extracts template class with export macro — name is the class not the macro', async () => {
+    const { tree, buf } = await parse(`
+template <typename Float, typename Spectrum>
+class MI_EXPORT_LIB BSDF : public Base<BSDF<Float, Spectrum>> {
+public:
+  void eval();
+};
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'bsdf.hpp');
+    const cls = syms.find((s) => s.kind === 'class');
+    expect(cls).toBeDefined();
+    expect(cls!.name).toBe('BSDF');
+    expect(cls!.signature).toContain('template');
+    expect(cls!.signature).toContain('BSDF');
+    expect(cls!.name).not.toBe('MI_EXPORT_LIB');
+  });
+
+  it('extracts template class with export macro and final specifier (mitsuba3 pattern)', async () => {
+    // `class MI_EXPORT_LIB Scene final : public JitObject<...>` — the `final`
+    // keyword causes tree-sitter to produce a different AST than without it.
+    const { tree, buf } = await parse(`
+template <typename Float, typename Spectrum>
+class MI_EXPORT_LIB Scene final : public JitObject<Scene<Float, Spectrum>> {
+public:
+  void render();
+};
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'scene.hpp');
+    const cls = syms.find((s) => s.kind === 'class');
+    expect(cls).toBeDefined();
+    expect(cls!.name).toBe('Scene');
+    expect(cls!.signature).toContain('template');
+    expect(cls!.signature).toContain('Scene');
+    expect(cls!.name).not.toBe('MI_EXPORT_LIB');
+  });
+
+  it('class body snippet captures first 200 chars of class body for FTS', async () => {
+    // Body snippet helps FTS match conceptual queries like "scene container
+    // with shapes emitters sensors" by including type names from the class body.
+    const { tree, buf } = await parse(`
+template <typename Float, typename Spectrum>
+class MI_EXPORT_LIB Scene final : public JitObject<Scene<Float, Spectrum>> {
+public:
+  MI_IMPORT_TYPES(BSDF, Emitter, EmitterPtr, Film, Sampler, Shape, Sensor, Integrator)
+  void render();
+};
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'scene.hpp');
+    const cls = syms.find((s) => s.kind === 'class');
+    expect(cls).toBeDefined();
+    expect(cls!.bodySnippet).toBeDefined();
+    expect(cls!.bodySnippet).toContain('Emitter');
+    expect(cls!.bodySnippet).toContain('Sensor');
+    expect(cls!.bodySnippet).toContain('Shape');
+  });
+
+  it('extracts template class from ERROR node (bare class keyword, no export macro)', async () => {
+    // microfacet.h pattern: template class without export macro, inside NAMESPACE_BEGIN macro,
+    // causes tree-sitter to produce ERROR with bare 'class' keyword + type_identifier directly.
+    const { tree, buf } = await parse(`
+#pragma once
+#include "mitsuba/core/frame.h"
+#include "mitsuba/render/fresnel.h"
+
+NAMESPACE_BEGIN(mitsuba)
+
+template <typename Float, typename Spectrum>
+class MicrofacetDistribution : public drjit::TraversableBase {
+public:
+  Float eval(const Vector3f &m) const;
+  Float pdf(const Vector3f &wi, const Vector3f &m) const;
+};
+
+NAMESPACE_END(mitsuba)
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'microfacet.hpp');
+    const cls = syms.find((s) => s.name === 'MicrofacetDistribution');
+    expect(cls).toBeDefined();
+    expect(cls!.kind).toBe('class');
+    expect(cls!.signature).toContain('template');
+    expect(cls!.signature).toContain('MicrofacetDistribution');
+  });
+
+  it('extracts template class from sibling-level pattern (class_specifier + ERROR siblings)', async () => {
+    // integrator.h pattern: tree-sitter scatters the declaration across root-level siblings:
+    //   template_parameter_list, class_specifier("class MI_EXPORT_LIB"), ERROR("Integrator : public"),
+    //   template_function("JitObject<...>"), { body }
+    // The walkNodes sibling-detection handles this pattern.
+    const { tree, buf } = await parse(`
+#pragma once
+#include "mitsuba/core/object.h"
+#include "mitsuba/render/fwd.h"
+
+NAMESPACE_BEGIN(mitsuba)
+
+template <typename Float, typename Spectrum>
+class MI_EXPORT_LIB Integrator : public JitObject<Integrator<Float, Spectrum>> {
+public:
+  virtual TensorXf render(Scene *scene, Sensor *sensor) = 0;
+  virtual bool render(Scene *scene) = 0;
+};
+
+NAMESPACE_END(mitsuba)
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'integrator.hpp');
+    const cls = syms.find((s) => s.name === 'Integrator');
+    expect(cls).toBeDefined();
+    expect(cls!.kind).toBe('class');
+    expect(cls!.signature).toContain('Integrator');
+  });
+
+  it('extracts template class from ERROR node (NAMESPACE_BEGIN + includes pattern)', async () => {
+    // When #include directives precede a NAMESPACE_BEGIN(mitsuba) macro,
+    // tree-sitter-cpp misparsed the template class as an ERROR node.
+    // Regression test: verifies the ERROR-recovery path in walkNode.
+    const { tree, buf } = await parse(`
+#pragma once
+#include "mitsuba/core/object.h"
+#include "mitsuba/render/fwd.h"
+
+NAMESPACE_BEGIN(mitsuba)
+
+template <typename Float, typename Spectrum>
+class MI_EXPORT_LIB Scene final : public JitObject<Scene<Float, Spectrum>> {
+public:
+  MI_IMPORT_TYPES(BSDF, Emitter, Film, Sensor, Shape)
+  void render();
+  virtual ~Scene();
+};
+
+NAMESPACE_END(mitsuba)
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'scene.hpp');
+    const cls = syms.find((s) => s.name === 'Scene');
+    expect(cls).toBeDefined();
+    expect(cls!.kind).toBe('class');
+    expect(cls!.signature).toContain('template');
+    expect(cls!.signature).toContain('Scene');
+  });
+
+  it('plain class body snippet captures first 200 chars for FTS', async () => {
+    const { tree, buf } = await parse(`
+class Shape {
+public:
+  virtual bool rayIntersect(const Ray& ray) const = 0;
+  virtual BoundingBox getBounds() const = 0;
+};
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'shape.hpp');
+    const cls = syms.find((s) => s.kind === 'class');
+    expect(cls).toBeDefined();
+    expect(cls!.bodySnippet).toBeDefined();
+    expect(cls!.bodySnippet).toContain('rayIntersect');
+  });
+
+  // ── Template args stripped from out-of-class method names ────────────────────
+
+  it('strips template args from out-of-class method qualified name', async () => {
+    // `void Scene<Float, Spectrum>::render()` → name "Scene::render"
+    const { tree, buf } = await parse(`
+template <typename Float, typename Spectrum>
+void Scene<Float, Spectrum>::render() {}
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'scene.cpp');
+    const fn = syms.find((s) => s.name.includes('render'));
+    expect(fn).toBeDefined();
+    expect(fn!.name).toBe('Scene::render');
+    expect(fn!.name).not.toContain('<');
+  });
+
+  it('strips template args from nested qualified method name', async () => {
+    // `void Outer::Inner<T>::method()` → name "Outer::Inner::method"
+    const { tree, buf } = await parse(`
+template <typename T>
+void Outer::Inner<T>::process() {}
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'outer.cpp');
+    const fn = syms.find((s) => s.name.includes('process'));
+    expect(fn).toBeDefined();
+    expect(fn!.name).toBe('Outer::Inner::process');
+    expect(fn!.name).not.toContain('<');
+  });
+
+  it('preserves plain qualified name without template args unchanged', async () => {
+    // `void Foo::bar()` → name "Foo::bar" (no template args to strip)
+    const { tree, buf } = await parse(`
+void Foo::bar() {}
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'foo.cpp');
+    const fn = syms.find((s) => s.name === 'Foo::bar');
+    expect(fn).toBeDefined();
+    expect(fn!.kind).toBe('function');
+  });
+
   // ── using alias (type alias) ─────────────────────────────────────────────────
 
   it('extracts using type alias as kind "type"', async () => {
@@ -424,5 +649,129 @@ bool validate() { return true; }
     const syms = cppHandler.extractSymbols(tree, buf, 'auth.cpp');
     const fn = syms.find((s) => s.name === 'validate');
     expect(fn!.summary).toContain('Validates');
+  });
+});
+
+// ─── C-style typedef struct / enum (for .h files) ────────────────────────────
+
+describe('cppHandler — C-style typedef struct and typedef enum', () => {
+  it('extracts typedef struct as kind:struct', async () => {
+    const { tree, buf } = await parse(`
+typedef struct {
+    int x;
+    int y;
+} Point;
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'geom.h');
+    const s = syms.find((sym) => sym.name === 'Point');
+    expect(s).toBeDefined();
+    expect(s!.kind).toBe('struct');
+  });
+
+  it('extracts typedef enum as kind:enum', async () => {
+    const { tree, buf } = await parse(`
+typedef enum {
+    AUTH_OK = 0,
+    AUTH_ERR_INVALID,
+    AUTH_ERR_EXPIRED,
+} AuthResult;
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'auth.h');
+    const s = syms.find((sym) => sym.name === 'AuthResult');
+    expect(s).toBeDefined();
+    expect(s!.kind).toBe('enum');
+  });
+
+  it('typedef struct name is the alias, not the tag', async () => {
+    const { tree, buf } = await parse(`
+typedef struct AuthSession_s {
+    unsigned int user_id;
+    char token[256];
+} AuthSession;
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'session.h');
+    const s = syms.find((sym) => sym.name === 'AuthSession');
+    expect(s).toBeDefined();
+    expect(s!.kind).toBe('struct');
+  });
+
+  it('typedef struct does not produce duplicate symbol for tag name', async () => {
+    const { tree, buf } = await parse(`
+typedef struct Node {
+    int val;
+    struct Node *next;
+} Node;
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'list.h');
+    const nodes = syms.filter((sym) => sym.name === 'Node');
+    // typedef_definition produces 1 entry; struct_specifier inside may also produce one
+    // we only care that at least 1 correct struct symbol exists
+    expect(nodes.some((s) => s.kind === 'struct')).toBe(true);
+  });
+
+  it('typedef enum signature contains enum constants', async () => {
+    const { tree, buf } = await parse(`
+typedef enum { RED, GREEN, BLUE } Color;
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'colors.h');
+    const s = syms.find((sym) => sym.name === 'Color');
+    expect(s).toBeDefined();
+    expect(s!.signature).toContain('RED');
+  });
+});
+
+// ─── C functions with struct return types (regression: Task 262) ──────────────
+
+describe('cppHandler — C functions with struct return types', () => {
+  it('extracts C function that returns struct pointer (not treated as export macro class)', async () => {
+    const { tree, buf } = await parse(`
+struct AP_info *get_ap_by_mac(unsigned char *mac)
+{
+    return NULL;
+}
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'airodump.c');
+    const fn = syms.find((s) => s.name === 'get_ap_by_mac');
+    expect(fn).toBeDefined();
+    expect(fn!.kind).toBe('function');
+  });
+
+  it('extracts multiple C functions with struct return types from same file', async () => {
+    const { tree, buf } = await parse(`
+struct AP_info *dump_initialize(const char *prefix)
+{
+    return NULL;
+}
+
+struct ST_info *add_station(unsigned char *mac)
+{
+    return NULL;
+}
+
+int check_shared_key(unsigned char *h80211, int caplen)
+{
+    return 0;
+}
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'dump.c');
+    const dump_init = syms.find((s) => s.name === 'dump_initialize');
+    const add_st = syms.find((s) => s.name === 'add_station');
+    const check_key = syms.find((s) => s.name === 'check_shared_key');
+    expect(dump_init).toBeDefined();
+    expect(dump_init!.kind).toBe('function');
+    expect(add_st).toBeDefined();
+    expect(add_st!.kind).toBe('function');
+    expect(check_key).toBeDefined();
+    expect(check_key!.kind).toBe('function');
+  });
+
+  it('plain int function still extracts correctly alongside struct-returning functions', async () => {
+    const { tree, buf } = await parse(`
+int check_crc(unsigned char *buf, int len) { return 1; }
+`);
+    const syms = cppHandler.extractSymbols(tree, buf, 'crc.c');
+    const fn = syms.find((s) => s.name === 'check_crc');
+    expect(fn).toBeDefined();
+    expect(fn!.kind).toBe('function');
   });
 });

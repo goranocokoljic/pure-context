@@ -119,6 +119,52 @@ function extractReceiverType(methodNode: SyntaxNode): string {
   return paramDecl.children.find((c) => c.type === 'type_identifier')?.text ?? '';
 }
 
+// ─── Interface method extraction ─────────────────────────────────────────────
+
+/**
+ * Walk an interface_type body and emit each exported method_spec as a bare-name
+ * symbol (kind `method`). The interface name is prepended to the signature for
+ * disambiguation (e.g. `Handler.ServeHTTP(w ResponseWriter, r *Request)`).
+ * Embedded interface type_name nodes are skipped (they are not method specs).
+ */
+function extractInterfaceMethods(
+  interfaceBody: SyntaxNode,
+  interfaceName: string,
+  filePath: string,
+  source: Buffer,
+  symbols: SymbolRecord[],
+): void {
+  for (const child of interfaceBody.children) {
+    if (child.type !== 'method_elem') continue;
+
+    const nameNode = child.children.find((c) => c.type === 'field_identifier');
+    if (!nameNode) continue;
+    const methodName = nameNode.text;
+    if (!isExported(methodName)) continue;
+
+    // Bare signature from source, then prepend interface name for disambiguation
+    const rawSig = source
+      .toString('utf8', child.startIndex, child.endIndex)
+      .replace(/\s+/g, ' ')
+      .trim();
+    const sig = `${interfaceName}.${rawSig}`.slice(0, 120);
+
+    // Use qualified name for ID hashing to guarantee uniqueness within the file
+    const qualifiedName = `${interfaceName}.${methodName}`;
+
+    symbols.push({
+      id: makeId(filePath, qualifiedName, 'method'),
+      name: methodName,     // bare name — search matches on this
+      kind: 'method',
+      filePath,
+      startByte: child.startIndex,
+      endByte: child.endIndex,
+      signature: sig,
+      summary: extractDocstring(child) ?? '',
+    });
+  }
+}
+
 // ─── Symbol extraction ────────────────────────────────────────────────────────
 
 function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRecord[] {
@@ -152,16 +198,19 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
       if (!isExported(methodName)) continue;
 
       const receiverType = extractReceiverType(node);
+      // Use qualified name for ID hashing to guarantee uniqueness within the file
+      // (two different receiver types can have a method with the same bare name).
+      // The name field stores only the bare method name for search matching.
       const qualifiedName = receiverType ? `${receiverType}.${methodName}` : methodName;
 
       symbols.push({
         id: makeId(filePath, qualifiedName, 'method'),
-        name: qualifiedName,
+        name: methodName,    // bare name — search matches on this
         kind: 'method',
         filePath,
         startByte: node.startIndex,
         endByte: node.endIndex,
-        signature: buildSignature(node, source),
+        signature: buildSignature(node, source), // already includes "func (s *ReceiverType)"
         summary: extractDocstring(node) ?? '',
       });
       continue;
@@ -201,6 +250,11 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         signature: buildTypeSignature(node, source),
         summary: extractDocstring(node) ?? '',
       });
+
+      // Extract individual method specs from interface bodies
+      if (typeBody?.type === 'interface_type') {
+        extractInterfaceMethods(typeBody, name, filePath, source, symbols);
+      }
       continue;
     }
 
@@ -221,6 +275,47 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
           startByte: child.startIndex,
           endByte: child.endIndex,
           signature: buildConstSignature(child, source),
+          summary: extractDocstring(node) ?? '',
+        });
+      }
+      continue;
+    }
+
+    // ── var_declaration ──────────────────────────────────────────────────────
+    if (node.type === 'var_declaration') {
+      // Collect var_spec nodes — either direct children (single var) or
+      // nested inside a var_spec_list (grouped var block).
+      const varSpecs: SyntaxNode[] = [];
+      for (const child of node.children) {
+        if (child.type === 'var_spec') {
+          varSpecs.push(child);
+        } else if (child.type === 'var_spec_list') {
+          for (const inner of child.children) {
+            if (inner.type === 'var_spec') varSpecs.push(inner);
+          }
+        }
+      }
+
+      for (const spec of varSpecs) {
+        const nameNode = spec.children.find((c) => c.type === 'identifier');
+        if (!nameNode) continue;
+        const name = nameNode.text;
+        if (!isExported(name)) continue;
+
+        const sig = 'var ' + source
+          .toString('utf8', spec.startIndex, spec.endIndex)
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 116);
+
+        symbols.push({
+          id: makeId(filePath, name, 'const'),
+          name,
+          kind: 'const',
+          filePath,
+          startByte: spec.startIndex,
+          endByte: spec.endIndex,
+          signature: sig,
           summary: extractDocstring(node) ?? '',
         });
       }

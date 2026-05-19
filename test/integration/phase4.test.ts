@@ -187,11 +187,16 @@ describe('1. Rust: public symbol extraction', () => {
 // ─── 2. Rust: docstring and impl method naming ────────────────────────────────
 
 describe('2. Rust: docstrings and impl method names', () => {
-  it('impl method name includes type (TypeName.method)', () => {
+  it('impl methods use bare names (Phase 46: TypeName context in signature, not name)', () => {
     const db = openDatabase(rustRepoId);
-    const methods = searchSymbols(db, rustRepoId, '.', { kind: 'method', limit: 100 });
+    const methods = searchSymbols(db, rustRepoId, '', { kind: 'method', limit: 100 });
     db.close();
-    expect(methods.some((s) => s.name.includes('.'))).toBe(true);
+    // Phase 46: bare method names for search matching; TypeName:: prefix lives in signature
+    expect(methods.length).toBeGreaterThan(0);
+    expect(methods.every((s) => !s.name.includes('.'))).toBe(true);
+    // The class context is preserved in the signature
+    const withContext = methods.filter((s) => s.signature.includes('::'));
+    expect(withContext.length).toBeGreaterThan(0);
   });
 
   it('captures /// docstring as summary', () => {
