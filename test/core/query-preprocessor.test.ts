@@ -1375,46 +1375,61 @@ describe('preprocessQuery — punctuation stripping', () => {
 // ─── Task 247: Rust-specific synonyms ────────────────────────────────────────
 
 describe('expandVerbSynonyms — Rust synonyms', () => {
-  it('serializable → serialize and serde', () => {
-    expect(expandVerbSynonyms('serializable')).toEqual(['serialize', 'serde']);
+  it('serializable → serialize and serde (rust domain)', () => {
+    expect(expandVerbSynonyms('serializable', 'rust')).toEqual(['serialize', 'serde']);
   });
 
-  it('deserializable → deserialize and serde', () => {
-    expect(expandVerbSynonyms('deserializable')).toEqual(['deserialize', 'serde']);
+  it('serializable → [] without rust domain (prevents noise in non-Rust repos)', () => {
+    expect(expandVerbSynonyms('serializable')).toEqual([]);
   });
 
-  it('serialize → serializable and serde (bidirectional)', () => {
-    expect(expandVerbSynonyms('serialize')).toEqual(['serializable', 'serde']);
+  it('deserializable → deserialize and serde (rust domain)', () => {
+    expect(expandVerbSynonyms('deserializable', 'rust')).toEqual(['deserialize', 'serde']);
   });
 
-  it('deserialize → deserializable and serde (bidirectional)', () => {
-    expect(expandVerbSynonyms('deserialize')).toEqual(['deserializable', 'serde']);
+  it('serialize → serializable and serde (bidirectional, rust domain)', () => {
+    expect(expandVerbSynonyms('serialize', 'rust')).toEqual(['serializable', 'serde']);
   });
 
-  it('spawn → async, tokio, and task', () => {
-    expect(expandVerbSynonyms('spawn')).toEqual(['async', 'tokio', 'task']);
+  it('deserialize → deserializable and serde (bidirectional, rust domain)', () => {
+    expect(expandVerbSynonyms('deserialize', 'rust')).toEqual(['deserializable', 'serde']);
   });
 
-  it('concurrent → async and parallel', () => {
-    expect(expandVerbSynonyms('concurrent')).toEqual(['async', 'parallel']);
+  it('spawn → async, tokio, and task (rust domain)', () => {
+    expect(expandVerbSynonyms('spawn', 'rust')).toEqual(['async', 'tokio', 'task']);
   });
 
-  it('future → async and poll', () => {
-    expect(expandVerbSynonyms('future')).toEqual(['async', 'poll']);
+  it('spawn → [] without rust domain', () => {
+    expect(expandVerbSynonyms('spawn')).toEqual([]);
   });
 
-  it('preprocessQuery includes serde in AND query for "serializable type"', () => {
-    // "serializable" → syns include "serialize" and "serde"
-    // These are joined as FTS5 OR-group: "(serializable OR serialize OR serde)"
-    const result = preprocessQuery('serializable type');
+  it('concurrent → async and parallel (rust domain)', () => {
+    expect(expandVerbSynonyms('concurrent', 'rust')).toEqual(['async', 'parallel']);
+  });
+
+  it('future → async and poll (rust domain)', () => {
+    expect(expandVerbSynonyms('future', 'rust')).toEqual(['async', 'poll']);
+  });
+
+  it('future → [] without rust domain (prevents FutureBase::poll outscoring folly::Future)', () => {
+    expect(expandVerbSynonyms('future')).toEqual([]);
+  });
+
+  it('preprocessQuery includes serde in AND query for "serializable type" (rust domain)', () => {
+    const result = preprocessQuery('serializable type', 'rust');
     expect(result).toContain('serializable');
     expect(result).toContain('serialize');
     expect(result).toContain('serde');
   });
 
-  it('preprocessQuery includes tokio in AND query for "spawn async task"', () => {
-    // "spawn" → syns include "async", "tokio", "task"
-    const result = preprocessQuery('spawn async task');
+  it('preprocessQuery does NOT include serde for "serializable type" without rust domain', () => {
+    const result = preprocessQuery('serializable type');
+    expect(result).toContain('serializable');
+    expect(result).not.toContain('serde');
+  });
+
+  it('preprocessQuery includes tokio in AND query for "spawn async task" (rust domain)', () => {
+    const result = preprocessQuery('spawn async task', 'rust');
     expect(result).toContain('spawn');
     expect(result).toContain('tokio');
   });

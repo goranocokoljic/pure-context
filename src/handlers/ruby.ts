@@ -9,6 +9,7 @@ import type {
   SyntaxNode,
   Tree,
 } from '../core/types.js';
+import { extractDslSymbol, extractDefineMethod, extractClassEval } from './ruby-dsl.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GRAMMARS_DIR = resolve(__dirname, '../../grammars');
@@ -113,7 +114,7 @@ function walkNode(
       if (!name) break;
       const qualified = className ? `${className}#${name}` : name;
       const kind: SymbolKind = className ? 'method' : 'function';
-      symbols.push({
+      const sym: SymbolRecord = {
         id: makeId(filePath, qualified, kind),
         name: qualified,
         kind,
@@ -122,7 +123,12 @@ function walkNode(
         endByte: node.endIndex,
         signature: buildSignature(node, source),
         summary: extractDocstring(node) ?? '',
-      });
+      };
+      // Tag method_missing for dynamic dispatch discovery
+      if (name === 'method_missing' || name === 'respond_to_missing?') {
+        sym.frameworkMeta = { dynamicDispatch: true };
+      }
+      symbols.push(sym);
       break;
     }
 
@@ -226,13 +232,28 @@ function walkNode(
       break;
     }
 
-    // ── call nodes: skip attr_accessor / attr_reader / attr_writer ─────────
+    // ── call nodes: DSL extraction + metaprogramming detection ────────────
     case 'call': {
       const methodName =
         node.childForFieldName?.('method')?.text ??
         node.children.find((c) => c.type === 'identifier')?.text ?? '';
+
       if (ATTR_CALLS.has(methodName)) break;
-      // Other calls are not symbols — fall through silently
+
+      // define_method :foo do ... end (works at any scope)
+      const defineMethodSym = extractDefineMethod(node, className, filePath);
+      if (defineMethodSym) { symbols.push(defineMethodSym); break; }
+
+      // class_eval / instance_eval / module_eval blocks (any scope)
+      const classEvalSym = extractClassEval(node, className, filePath);
+      if (classEvalSym) { symbols.push(classEvalSym); break; }
+
+      // Rails DSL patterns (only meaningful inside a class/module)
+      if (className) {
+        const dslSym = extractDslSymbol(node, className, filePath);
+        if (dslSym) { symbols.push(dslSym); break; }
+      }
+
       break;
     }
 

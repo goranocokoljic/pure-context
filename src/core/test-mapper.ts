@@ -221,7 +221,12 @@ export function buildTestMappings(repoId: string, db: Database.Database): number
     }
   });
 
-  writeAll();
+  try {
+    writeAll();
+  } catch (err) {
+    logger.warn(`test-mapper: writeAll transaction failed (${err}), coverage data not stored`);
+    return 0;
+  }
 
   const elapsed = Date.now() - t0;
   logger.info(

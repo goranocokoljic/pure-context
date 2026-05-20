@@ -122,10 +122,7 @@ function walk(
     if (ig.ignores(relPath)) continue;
 
     if (entry.isDirectory()) {
-      // Also prune if the directory name alone is ignored (e.g. node_modules)
-      if (!ig.ignores(entry.name + '/')) {
-        walk(rootPath, absPath, ig, extensions, maxFileSizeBytes, results);
-      }
+      walk(rootPath, absPath, ig, extensions, maxFileSizeBytes, results);
       continue;
     }
 

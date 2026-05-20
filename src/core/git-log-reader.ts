@@ -29,9 +29,12 @@ export interface FileGitMeta {
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
+const GIT_TIMEOUT_MS = 15_000;
+
 /**
  * Run a git command in `cwd` and return its stdout.
  * Rejects with a descriptive error on non-zero exit or if git is absent.
+ * Times out after GIT_TIMEOUT_MS to prevent hangs on large repos.
  */
 function runGit(args: string[], cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -45,11 +48,22 @@ function runGit(args: string[], cwd: string): Promise<string> {
 
     let stdout = '';
     let stderr = '';
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { proc.kill(); } catch { /* ignore */ }
+      reject(new Error(`git ${args[0] ?? ''} timed out after ${GIT_TIMEOUT_MS}ms`));
+    }, GIT_TIMEOUT_MS);
 
     proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
     proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
 
     proc.on('error', (err: NodeJS.ErrnoException) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (err.code === 'ENOENT') {
         reject(new Error('git is not available on PATH. Install git and try again.'));
       } else {
@@ -58,6 +72,9 @@ function runGit(args: string[], cwd: string): Promise<string> {
     });
 
     proc.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (code === 0) {
         resolve(stdout);
       } else {

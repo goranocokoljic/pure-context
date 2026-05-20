@@ -981,11 +981,11 @@ describe('rankSymbols — Rust trait kindBoost', () => {
     expect(results[0].debugScore?.kindBoost).toBe(20);
   });
 
-  it('Serialize trait gets kindBoost = 20 for "serializable" query (synonym expansion)', () => {
-    // "serializable" expands to ["serialize", "serde"] via synonym map
+  it('Serialize trait gets kindBoost = 20 for "serializable" query (synonym expansion, rust domain)', () => {
+    // "serializable" expands to ["serialize", "serde"] via synonym map (rust domain only)
     // extractQueryWords includes "serialize" → splitNameParts("Serialize") includes "serialize"
     const trait = sym('Serialize', { kind: 'interface' });
-    const results = rankSymbols([trait], 'serializable type', true);
+    const results = rankSymbols([trait], 'serializable type', true, 'rust');
     expect(results[0].debugScore?.kindBoost).toBe(20);
   });
 
@@ -1207,10 +1207,10 @@ describe('rankSymbols — kind-hint boost', () => {
 // ─── Identity-exact boost ─────────────────────────────────────────────────────
 
 describe('rankSymbols — identityExact boost', () => {
-  it('identityExact fires +40 when a query word exactly matches the symbol name', () => {
+  it('identityExact fires +60 when a query word exactly matches the symbol name', () => {
     const s = sym('Builder', { kind: 'struct' });
     const results = rankSymbols([s], 'builder struct', true);
-    expect(results[0].debugScore?.identityExact).toBe(40);
+    expect(results[0].debugScore?.identityExact).toBe(60);
   });
 
   it('identityExact does NOT fire when no query word equals the symbol name', () => {
@@ -1222,7 +1222,7 @@ describe('rankSymbols — identityExact boost', () => {
   it('identityExact lifts struct Builder above bare method "build" for multi-word query', () => {
     // Phase 46: Go/Rust methods now stored with bare names
     // "Builder struct" → queryWords includes "builder"
-    // Builder (struct): nameLower = "builder" matches queryWord "builder" → +40
+    // Builder (struct): nameLower = "builder" matches queryWord "builder" → +60
     // build (method, bare name): nameLower = "build" ≠ "builder" → no boost
     const builderStruct = sym('Builder', { kind: 'struct' });
     const buildMethod = sym('build', { kind: 'method' });
@@ -1240,17 +1240,17 @@ describe('rankSymbols — identityExact boost', () => {
   it('identityExact also fires for single-word exact queries (stacks with nameExact)', () => {
     const s = sym('Builder', { kind: 'struct' });
     const results = rankSymbols([s], 'Builder', true);
-    // nameExact = 100, identityExact = 40 (queryWords includes "builder")
+    // nameExact = 100, identityExact = 60 (queryWords includes "builder", freq=1)
     expect(results[0].debugScore?.nameExact).toBe(100);
-    expect(results[0].debugScore?.identityExact).toBe(40);
-    expect(results[0].score).toBeGreaterThanOrEqual(140);
+    expect(results[0].debugScore?.identityExact).toBe(60);
+    expect(results[0].score).toBeGreaterThanOrEqual(160);
   });
 
   it('identityExact is case-insensitive', () => {
     const s = sym('PushCampaignMessage', { kind: 'method' });
     // query word "pushcampaignmessage" should match nameLower "pushcampaignmessage"
     const results = rankSymbols([s], 'PushCampaignMessage', true);
-    expect(results[0].debugScore?.identityExact).toBe(40);
+    expect(results[0].debugScore?.identityExact).toBe(60);
   });
 
   it('identityExact fires for Go bare method name matching query word', () => {
@@ -1269,7 +1269,30 @@ describe('rankSymbols — identityExact boost', () => {
     // symbol "Builder" → nameLower = "builder" matches
     const s = sym('Builder', { kind: 'struct' });
     const results = rankSymbols([s], 'find Builder implementation', true);
-    expect(results[0].debugScore?.identityExact).toBe(40);
+    expect(results[0].debugScore?.identityExact).toBe(60);
+  });
+
+  it('identityExact doubles (120) when matched query word appears twice in raw query', () => {
+    // brew gt-01: "base formula class that all Homebrew formula files inherit"
+    // "formula" appears twice → Formula (class) gets 60×2=120; Files (class) gets 60×1=60
+    const formula = sym('Formula', { kind: 'class' });
+    const results = rankSymbols([formula], 'base formula class that all Homebrew formula files inherit', true);
+    expect(results[0].debugScore?.identityExact).toBe(120);
+  });
+
+  it('identityExact stays at 60 when matched word appears only once', () => {
+    const keg = sym('Keg', { kind: 'class' });
+    const results = rankSymbols([keg], 'keg representing an installed version of a formula', true);
+    expect(results[0].debugScore?.identityExact).toBe(60);
+  });
+
+  it('identityExact does not apply frequency multiplier to DATA_KINDS', () => {
+    // Data kinds still use 40/N scaling regardless of repetition
+    const c = sym('formula', { kind: 'const' });
+    const results = rankSymbols([c], 'base formula class that all Homebrew formula files inherit', true);
+    // queryWords length ≈ 6 (base, formula, class, homebrew, files, inherit) → 40/6 = 7, min 10
+    expect(results[0].debugScore?.identityExact).toBeLessThanOrEqual(40);
+    expect(results[0].debugScore?.identityExact).toBeGreaterThanOrEqual(10);
   });
 });
 

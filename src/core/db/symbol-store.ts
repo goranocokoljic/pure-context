@@ -113,11 +113,17 @@ function splitCamelParts(token: string): string[] {
  *  - File stem (e.g. "UserController")
  *  - Full signature and summary
  *  - Body snippet (first ~200 bytes of function body, when available)
+ *  - Bare local name for namespace-qualified C++ symbols (e.g. "Future" from "folly::Future")
  */
 function buildFtsContent(s: SymbolRecord): string {
-  return [s.name, splitNameForFts(s.name), getFileStem(s.filePath), s.signature, s.summary, s.bodySnippet ?? '']
-    .filter(Boolean)
-    .join(' ');
+  const parts = [s.name, splitNameForFts(s.name), getFileStem(s.filePath), s.signature, s.summary, s.bodySnippet ?? ''];
+  // For namespace-qualified C++ names, also add the bare local name as a standalone token.
+  // This improves BM25 ranking when searching for the unqualified name (e.g. "Future").
+  if (s.name.includes('::')) {
+    const localName = s.name.split('::').pop()!;
+    if (localName && localName !== s.name) parts.push(localName);
+  }
+  return parts.filter(Boolean).join(' ');
 }
 
 function rowToSymbol(row: DbSymbolRow): SymbolRecord {
@@ -398,6 +404,7 @@ export function bulkUpsertFtsSymbols(
 
 export interface FtsSearchOptions {
   kind?: SymbolKind;
+  kinds?: string[];
   filePath?: string;
   limit?: number;
   tenantId?: string;
@@ -413,7 +420,7 @@ export function ftsSearchSymbols(
   query: string,
   options: FtsSearchOptions = {},
 ): SymbolRecord[] {
-  const { kind, filePath, limit = 20, tenantId } = options;
+  const { kind, kinds, filePath, limit = 20, tenantId } = options;
 
   const parts: string[] = ['f.repo_id = ?', 'fts_symbols MATCH ?'];
   const params: unknown[] = [repoId, query];
@@ -425,6 +432,10 @@ export function ftsSearchSymbols(
   if (kind) {
     parts.push('s.kind = ?');
     params.push(kind);
+  } else if (kinds && kinds.length > 0) {
+    const placeholders = kinds.map(() => '?').join(',');
+    parts.push(`s.kind IN (${placeholders})`);
+    params.push(...kinds);
   }
   if (filePath) {
     parts.push('s.file_path LIKE ?');

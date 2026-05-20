@@ -35,6 +35,20 @@ function childText(node: SyntaxNode, sourceStr: string, ...types: string[]): str
   return child ? nodeText(child, sourceStr) : '';
 }
 
+/**
+ * Extract the method name from a method_declaration node.
+ * The method name is the identifier immediately before the parameter_list.
+ * Using findLast on the slice before parameter_list handles user-defined return
+ * types (e.g. `Entity GetById(...)`) where the return type is also an identifier.
+ */
+function methodName(node: SyntaxNode, sourceStr: string): string {
+  const paramList = node.children.find((c) => c.type === 'parameter_list');
+  const paramIdx = paramList ? node.children.indexOf(paramList) : -1;
+  const candidates = paramIdx > 0 ? node.children.slice(0, paramIdx) : node.children;
+  const nameNode = candidates.findLast((c) => c.type === 'identifier');
+  return nameNode ? nodeText(nameNode, sourceStr) : '';
+}
+
 // ─── Visibility ───────────────────────────────────────────────────────────────
 
 /**
@@ -148,12 +162,16 @@ function extractMembers(
   const body = typeNode.children.find((c) => c.type === 'declaration_list');
   if (!body) return;
 
+  // Interface members are implicitly public in C# — they carry no explicit modifier.
+  // Skip the visibility check when the container is an interface.
+  const isInterface = typeNode.type === 'interface_declaration';
+
   for (const member of body.children) {
-    if (!isPublicOrProtected(member, sourceStr)) continue;
+    if (!isInterface && !isPublicOrProtected(member, sourceStr)) continue;
 
     // ── method_declaration ───────────────────────────────────────────────
     if (member.type === 'method_declaration') {
-      const name = childText(member, sourceStr, 'identifier');
+      const name = methodName(member, sourceStr);
       if (!name) continue;
       const qualifiedName = `${typeName}.${name}`;
       symbols.push({
@@ -200,6 +218,27 @@ function extractMembers(
         startByte: member.startIndex,
         endByte: member.endIndex,
         signature: buildSignature(member, sourceStr),
+        summary: extractDocstringWithSource(member, sourceStr) ?? '',
+      });
+      continue;
+    }
+
+    // ── event_field_declaration ──────────────────────────────────────────
+    // event EventHandler Clicked; → variable_declaration → variable_declarator → identifier
+    if (member.type === 'event_field_declaration') {
+      const varDecl = member.children.find((c) => c.type === 'variable_declaration');
+      const declarator = varDecl?.children.find((c) => c.type === 'variable_declarator');
+      const name = declarator ? childText(declarator, sourceStr, 'identifier') : '';
+      if (!name) continue;
+      const qualifiedName = `${typeName}.${name}`;
+      symbols.push({
+        id: makeId(filePath, qualifiedName, 'property'),
+        name: qualifiedName,
+        kind: 'property',
+        filePath,
+        startByte: member.startIndex,
+        endByte: member.endIndex,
+        signature: sourceStr.slice(member.startIndex, member.endIndex).replace(/\s+/g, ' ').trim().slice(0, 120),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
       });
       continue;

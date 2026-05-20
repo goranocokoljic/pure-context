@@ -10,7 +10,7 @@
  *  100 — exact name match (case-insensitive, entire query = entire name)
  *   60 — name starts with query
  *   40 — name contains query as substring
- *   40 — identity-exact: any single query word exactly equals the symbol name (10–40 for data kinds, scaled by 40/queryWords.length)
+ *   60 — identity-exact: any single query word exactly equals the symbol name (10–40 for data kinds, scaled by 40/queryWords.length); 2× when matched word appears twice in raw query
  *   30 — all query words match a word-boundary name part (exact or stem)
  *   20 — any query word matches a word-boundary name part (exact or stem)
  *   15 — method verb bonus: first part of method name matches a query word
@@ -149,6 +149,17 @@ export function rankSymbols(symbols: SymbolRecord[], query: string, debug = fals
   const queryLower = query.trim().toLowerCase();
   const queryWords = extractQueryWords(query.trim(), domain);
 
+  // Count raw occurrences of each query word (before deduplication/stemming) so
+  // identityExact can award a 2× boost when the matched concept is repeated in the
+  // query (e.g. "base formula class ... formula files" has "formula" twice, signalling
+  // it is the primary search target rather than a generic modifier like "files").
+  const rawQueryFreq = new Map<string, number>();
+  for (const tok of query.trim().toLowerCase().split(/[\s-]+/).filter(Boolean)) {
+    if (!isStopWord(tok) && tok.length >= 2) {
+      rawQueryFreq.set(tok, (rawQueryFreq.get(tok) ?? 0) + 1);
+    }
+  }
+
   // ── FTS5 BM25 normalization ──────────────────────────────────────────────────
   //
   // BM25 scores are negative (more negative = better match). We normalize the
@@ -173,7 +184,7 @@ export function rankSymbols(symbols: SymbolRecord[], query: string, debug = fals
   }
 
   // First pass: compute base scores (without BM25) for all symbols.
-  const baseResults = symbols.map((symbol) => score(symbol, queryLower, queryWords));
+  const baseResults = symbols.map((symbol) => score(symbol, queryLower, queryWords, rawQueryFreq));
 
   // Cap BM25 bonus to 30% of its computed value when any symbol already has a
   // dominant name-match score (≥80). This prevents BM25 from overriding a clear
@@ -217,6 +228,7 @@ function score(
   symbol: SymbolRecord,
   queryLower: string,
   queryWords: string[],
+  rawQueryFreq: ReadonlyMap<string, number>,
 ): { score: number; matchReason: ScoredSymbol['matchReason']; debugScore: DebugScore } {
   const nameLower = symbol.name.toLowerCase();
   const sigLower = symbol.signature.toLowerCase();
@@ -276,18 +288,39 @@ function score(
   //
   // Boost: +40 — large enough to overcome a method's kindBoost (+15–+30) advantage.
 
+  // For namespace-qualified C++ names like `folly::Future`, also check the
+  // bare local name (last segment after ::) for identity matching, since ground
+  // truth uses bare names while the index stores qualified names. Restricted to
+  // non-method symbols: methods with :: are class::method pairs (PHP, C++) where
+  // the bare method name is too generic to warrant a full identity boost.
+  const isNsQualified = nameLower.includes('::');
+  const bareLocalName = isNsQualified && symbol.kind !== 'method'
+    ? nameLower.split('::').pop()!
+    : nameLower;
+
+  // Find the query word that triggered identityExact (needed for the frequency lookup).
+  const identityMatchWord = queryWords.find((w) => w === nameLower)
+    ?? (bareLocalName !== nameLower ? queryWords.find((w) => w === bareLocalName) : undefined);
+
   let identityExact = 0;
-  if (queryWords.length > 0 && queryWords.some((w) => w === nameLower)) {
+  if (queryWords.length > 0 && identityMatchWord !== undefined) {
     // Data-definition symbols (const, type, interface, enum, property) named after
     // a single concept (e.g. STRIPE, Subscribers) fire identityExact when that word
     // appears anywhere in a multi-word query, even as incidental context rather than
     // the actual search target. Scale the bonus proportionally so the signal weakens
     // as the query grows: 40/N, minimum 10. Code-definition symbols (function, method,
-    // class, …) keep the full +40 because their name is almost always the target.
+    // class, …) use a higher base of 60 with a frequency multiplier (capped at 2×):
+    // when the matched word appears twice in the raw query (e.g. "base formula class
+    // … formula files") that repetition signals it is the primary target, giving the
+    // correctly-named symbol enough margin to overcome BM25 noise from generically-
+    // named symbols that also match the repeated word.
     const DATA_KINDS = new Set<string>(['const', 'type', 'interface', 'enum', 'property']);
-    identityExact = DATA_KINDS.has(symbol.kind) && queryWords.length > 1
-      ? Math.max(10, Math.round(40 / queryWords.length))
-      : 40;
+    if (DATA_KINDS.has(symbol.kind) && queryWords.length > 1) {
+      identityExact = Math.max(10, Math.round(40 / queryWords.length));
+    } else {
+      const rawFreq = rawQueryFreq.get(identityMatchWord) ?? 1;
+      identityExact = 60 * Math.min(rawFreq, 2);
+    }
     total += identityExact;
   }
 

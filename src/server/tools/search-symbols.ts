@@ -65,7 +65,77 @@ export const inputSchema = {
     .boolean()
     .optional()
     .describe('Return per-result score breakdown for tuning and diagnostics (default false)'),
+  cfgFilter: z
+    .union([
+      z.string().describe('Simple predicate string, e.g. \'target_os = "linux"\''),
+      z.object({
+        kind: z.string(),
+        key: z.string().optional(),
+        value: z.string().optional(),
+      }).describe('Structured predicate object'),
+    ])
+    .optional()
+    .describe(
+      'Filter results to only symbols gated by a specific Rust #[cfg(...)] predicate. ' +
+      'Applied after ranking. Ignored with a _diagnostics warning when no cfg metadata exists.',
+    ),
 };
+
+// ─── cfg filter helpers ───────────────────────────────────────────────────────
+
+interface CfgPredMatcher {
+  kind: string;
+  key?: string;
+  value?: string;
+}
+
+/** Parse a string predicate like 'target_os = "linux"' into a structured matcher. */
+function parseCfgFilterString(filter: string): CfgPredMatcher | null {
+  const m = filter.match(/^(\w+)\s*=\s*"([^"]+)"$/);
+  if (m) return { kind: 'eq', key: m[1], value: m[2] };
+  const bare = filter.match(/^(\w+)$/);
+  if (bare) return { kind: 'flag', key: bare[1] };
+  return null;
+}
+
+/** Deep-walk a predicate tree to find a matching leaf. */
+function predicateMatches(pred: unknown, matcher: CfgPredMatcher): boolean {
+  if (!pred || typeof pred !== 'object') return false;
+  const p = pred as Record<string, unknown>;
+  if (matcher.kind === 'eq') {
+    if (p['kind'] === 'eq' && p['key'] === matcher.key && p['value'] === matcher.value) return true;
+  } else if (matcher.kind === 'flag') {
+    if (p['kind'] === 'flag' && p['key'] === matcher.key) return true;
+    if (p['kind'] === 'eq' && p['key'] === matcher.key) return true; // key exists in any form
+  }
+  // Recurse into children (all/any/not)
+  if (Array.isArray(p['children'])) {
+    for (const child of p['children'] as unknown[]) {
+      if (predicateMatches(child, matcher)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Returns true if the symbol's cfg metadata matches the given filter.
+ * Handles single CfgMeta object and array of CfgMeta objects.
+ */
+function symbolMatchesCfgFilter(symbol: SymbolRecord, matcher: CfgPredMatcher): boolean {
+  const cfg = symbol.frameworkMeta?.['cfg'];
+  if (!cfg) return false;
+
+  const entries = Array.isArray(cfg) ? cfg : [cfg];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    const predicates = Array.isArray(e['predicates']) ? e['predicates'] : [];
+    for (const p of predicates) {
+      if (predicateMatches(p, matcher)) return true;
+    }
+  }
+  return false;
+}
 
 // ─── Tagged result types ──────────────────────────────────────────────────────
 
@@ -101,11 +171,22 @@ export async function handler(args: {
   semantic_weight?: number;
   keyword_weight?: number;
   debug?: boolean;
+  cfgFilter?: string | { kind: string; key?: string; value?: string };
 }): Promise<CallToolResult> {
   const t0 = Date.now();
   const limit = args.limit ?? 50;
   const semanticWeight = args.semantic_weight ?? 0.5;
   const keywordWeight = args.keyword_weight ?? 0.5;
+
+  // ── Resolve cfgFilter matcher ─────────────────────────────────────────────
+  let cfgMatcher: CfgPredMatcher | null = null;
+  if (args.cfgFilter) {
+    if (typeof args.cfgFilter === 'string') {
+      cfgMatcher = parseCfgFilterString(args.cfgFilter);
+    } else {
+      cfgMatcher = args.cfgFilter as CfgPredMatcher;
+    }
+  }
 
   // ── Resolve target repos ───────────────────────────────────────────────────
   const repos = resolveRepoScope({ repoId: args.repoId, repoIds: args.repoIds });
@@ -125,13 +206,19 @@ export async function handler(args: {
 
   const reposSearched = repos.map((r) => r.id);
 
-  // ── Detect rendering domain (scopes rendering synonyms) ───────────────────
-  // Only enable rendering synonyms when the repo name suggests a rendering /
+  // ── Detect domain (scopes domain-specific synonyms) ─────────────────────
+  // rendering: Only enable rendering synonyms when the repo name suggests a rendering /
   // graphics / PBR codebase — prevents synonym noise in unrelated repos
   // (e.g. nuxt, airodump, origamicms-frontend regressed in Phase 47).
+  // rust: Only enable Rust async/serde synonyms (future→poll, spawn→tokio, etc.)
+  // for Rust repos — prevents 'future→poll' from making FutureBase::poll outscore
+  // folly::Future in C++ repos like facebook-folly.
   const RENDERING_REPO_PATTERN = /render|shader|scene|material|graphic|mitsuba|pbr|tracer|opengl|vulkan|cuda|opencl/i;
+  const RUST_REPO_PATTERN = /\brust\b|tokio|serde|actix|axum|hyper|warp|rocket|cargo/i;
   const domain = repos.some((r) => RENDERING_REPO_PATTERN.test(r.name))
     ? 'rendering'
+    : repos.some((r) => RUST_REPO_PATTERN.test(r.name))
+    ? 'rust'
     : undefined;
 
   // ── Determine effective mode using first repo with a semantic index ─────────
@@ -215,7 +302,14 @@ export async function handler(args: {
         if (allResults.length > 0 || effectiveMode === 'semantic') {
           // Sort by combined score descending, take top `limit`
           allResults.sort((a, b) => b.combinedScore - a.combinedScore);
-          const top = allResults.slice(0, limit);
+          const cfgDiagnostic = cfgMatcher
+            ? allResults.every((r) => !r.symbol.frameworkMeta?.['cfg'])
+              ? 'cfgFilter ignored: no symbols in this repo have cfg metadata'
+              : null
+            : null;
+          const top = cfgMatcher && !cfgDiagnostic
+            ? allResults.filter((r) => symbolMatchesCfgFilter(r.symbol, cfgMatcher!)).slice(0, limit)
+            : allResults.slice(0, limit);
 
           return {
             content: [{
@@ -250,6 +344,7 @@ export async function handler(args: {
                       },
                     } : {}),
                   })),
+                  ...(cfgDiagnostic ? { _diagnostics: [cfgDiagnostic] } : {}),
                   _meta: {
                     ...buildMeta({ timingMs: Date.now() - t0, rawBytes: totalRawBytes, responseBytes: totalResponseBytes }),
                     mode: effectiveMode,
@@ -342,6 +437,35 @@ export async function handler(args: {
           });
           searchMode = 'like_fallback';
         }
+
+        // ── Class-type injection ────────────────────────────────────────────
+        // In large C++ codebases, method symbols with namespace-qualified names
+        // (e.g. FutureBase::poll) dominate the FTS5 candidate pool, pushing out
+        // class/struct/function symbols.  Run a secondary OR query restricted to
+        // non-method kinds so class symbols are always represented in the pool.
+        // Guard: only fires when the main pool contains C++ style qualified methods
+        // (name contains "::"), preventing regression in Ruby/JS repos where
+        // single-word class names (Git, Bottle) would incorrectly outscore compound
+        // class names (GitDownloadStrategy, BottleSpecification) via identityExact.
+        const hasCppStyleMethods = symbols.some((s) => s.kind === 'method' && s.name.includes('::'));
+        if (!args.kind && ftsAvailable && hasCppStyleMethods) {
+          try {
+            const orQuery = toOrFallbackQuery(preprocessQuery(args.query, domain), domain);
+            const classSymbols = ftsSearchSymbols(db, repo.id, orQuery, {
+              kinds: ['class', 'struct', 'enum', 'function', 'namespace'],
+              filePath: args.filePath,
+              limit: 50,
+            });
+            if (classSymbols.length > 0) {
+              const seen = new Set(symbols.map((s) => s.id));
+              for (const s of classSymbols) {
+                if (!seen.has(s.id)) symbols.push(s);
+              }
+            }
+          } catch {
+            // Secondary injection is best-effort — never fail the main search
+          }
+        }
       } else {
         symbols = searchSymbols(db, repo.id, args.query, {
           kind: args.kind as never,
@@ -373,9 +497,16 @@ export async function handler(args: {
     }
   }
 
-  // Sort by score descending across all repos, take top `limit`
+  // Sort by score descending across all repos, apply cfg filter, take top `limit`
   allKeywordResults.sort((a, b) => b.score - a.score);
-  const top = allKeywordResults.slice(0, limit);
+  const cfgDiagnostic = cfgMatcher
+    ? allKeywordResults.every((r) => !r.symbol.frameworkMeta?.['cfg'])
+      ? 'cfgFilter ignored: no symbols in this repo have cfg metadata'
+      : null
+    : null;
+  const top = cfgMatcher && !cfgDiagnostic
+    ? allKeywordResults.filter((r) => symbolMatchesCfgFilter(r.symbol, cfgMatcher!)).slice(0, limit)
+    : allKeywordResults.slice(0, limit);
 
   const negativeEvidence =
     top.length === 0
@@ -396,6 +527,7 @@ export async function handler(args: {
         {
           count: top.length,
           ...(negativeEvidence ? { negative_evidence: negativeEvidence } : {}),
+          ...(cfgDiagnostic ? { _diagnostics: [cfgDiagnostic] } : {}),
           symbols: top.map((r) => ({
             id: r.symbol.id,
             name: r.symbol.name,

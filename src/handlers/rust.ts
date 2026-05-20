@@ -160,6 +160,109 @@ function extractImplTypeName(node: SyntaxNode, sourceStr: string): string {
   return '';
 }
 
+// ─── cfg attribute extraction ────────────────────────────────────────────────
+
+interface CfgPredicate {
+  kind: 'eq' | 'flag' | 'all' | 'any' | 'not' | 'cfg_attr' | 'unknown';
+  key?: string;
+  value?: string;
+  children?: CfgPredicate[];
+}
+
+interface CfgMeta {
+  raw: string;
+  isCfgAttr: boolean;
+  predicates: CfgPredicate[];
+}
+
+/** Parse a token_tree node (the parens content) into predicates, best-effort. */
+function parseTokenTree(node: SyntaxNode, sourceStr: string): CfgPredicate[] {
+  const result: CfgPredicate[] = [];
+  const children = node.children.filter((c) => c.type !== '(' && c.type !== ')' && c.type !== ',');
+
+  let i = 0;
+  while (i < children.length) {
+    const child = children[i]!;
+
+    if (child.type === 'identifier') {
+      const name = nodeText(child, sourceStr);
+      const next = children[i + 1];
+
+      // `key = "value"` pattern
+      if (next && !next.isNamed && nodeText(next, sourceStr) === '=') {
+        const valNode = children[i + 2];
+        if (valNode && (valNode.type === 'string_literal' || valNode.type === 'raw_string_literal')) {
+          const content = valNode.children.find((c) => c.type === 'string_content');
+          const value = content ? nodeText(content, sourceStr) : nodeText(valNode, sourceStr).replace(/^["']|["']$/g, '');
+          result.push({ kind: 'eq', key: name, value });
+          i += 3;
+          continue;
+        }
+      }
+
+      // `all(...)`, `any(...)`, `not(...)` — identifier followed by token_tree
+      if (next && next.type === 'token_tree') {
+        const innerKind = (name === 'all' || name === 'any' || name === 'not') ? name : 'unknown';
+        const inner = parseTokenTree(next, sourceStr);
+        result.push({ kind: innerKind as CfgPredicate['kind'], key: innerKind === 'unknown' ? name : undefined, children: inner });
+        i += 2;
+        continue;
+      }
+
+      // Bare identifier (feature flag): `unix`, `windows`, `feature = "foo"` checked above
+      result.push({ kind: 'flag', key: name });
+      i++;
+      continue;
+    }
+
+    // token_tree nested directly (shouldn't normally happen at top level, but handle gracefully)
+    if (child.type === 'token_tree') {
+      result.push({ kind: 'unknown', children: parseTokenTree(child, sourceStr) });
+    }
+
+    i++;
+  }
+
+  return result;
+}
+
+/**
+ * Walk preceding attribute_item siblings to collect #[cfg(...)] and #[cfg_attr(...)] metadata.
+ * Returns an array of CfgMeta (one per cfg/cfg_attr attribute), or empty if none.
+ */
+function extractCfgAttributes(node: SyntaxNode, sourceStr: string): CfgMeta[] {
+  const result: CfgMeta[] = [];
+  let prev = node.previousNamedSibling;
+
+  while (prev !== null && prev.type === 'attribute_item') {
+    const attr = prev.children.find((c) => c.type === 'attribute');
+    if (!attr) { prev = prev.previousNamedSibling; continue; }
+
+    const attrName = childText(attr, sourceStr, 'identifier');
+    if (attrName !== 'cfg' && attrName !== 'cfg_attr') {
+      prev = prev.previousNamedSibling;
+      continue;
+    }
+
+    const tokenTree = attr.children.find((c) => c.type === 'token_tree');
+    const raw = nodeText(prev, sourceStr);
+
+    let predicates: CfgPredicate[] = [];
+    if (tokenTree) {
+      try {
+        predicates = parseTokenTree(tokenTree, sourceStr);
+      } catch {
+        // Degrade gracefully — store raw only
+      }
+    }
+
+    result.unshift({ raw, isCfgAttr: attrName === 'cfg_attr', predicates });
+    prev = prev.previousNamedSibling;
+  }
+
+  return result;
+}
+
 // ─── Symbol extraction ────────────────────────────────────────────────────────
 
 function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRecord[] {
@@ -172,6 +275,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
       if (!isPublic(node, sourceStr)) continue;
       const name = childText(node, sourceStr, 'identifier');
       if (!name) continue;
+      const cfgAttrs = extractCfgAttributes(node, sourceStr);
       symbols.push({
         id: makeId(filePath, name, 'function'),
         name,
@@ -181,6 +285,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
+        ...(cfgAttrs.length > 0 ? { frameworkMeta: { cfg: cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs } } : {}),
       });
       continue;
     }
@@ -190,6 +295,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
       if (!isPublic(node, sourceStr)) continue;
       const name = childText(node, sourceStr, 'type_identifier');
       if (!name) continue;
+      const cfgAttrs = extractCfgAttributes(node, sourceStr);
       symbols.push({
         id: makeId(filePath, name, 'class'),
         name,
@@ -199,6 +305,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
+        ...(cfgAttrs.length > 0 ? { frameworkMeta: { cfg: cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs } } : {}),
       });
       continue;
     }
@@ -208,6 +315,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
       if (!isPublic(node, sourceStr)) continue;
       const name = childText(node, sourceStr, 'type_identifier');
       if (!name) continue;
+      const cfgAttrs = extractCfgAttributes(node, sourceStr);
       symbols.push({
         id: makeId(filePath, name, 'enum'),
         name,
@@ -217,6 +325,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
+        ...(cfgAttrs.length > 0 ? { frameworkMeta: { cfg: cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs } } : {}),
       });
       continue;
     }
@@ -226,6 +335,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
       if (!isPublic(node, sourceStr)) continue;
       const name = childText(node, sourceStr, 'type_identifier');
       if (!name) continue;
+      const cfgAttrs = extractCfgAttributes(node, sourceStr);
       symbols.push({
         id: makeId(filePath, name, 'interface'),
         name,
@@ -235,6 +345,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
+        ...(cfgAttrs.length > 0 ? { frameworkMeta: { cfg: cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs } } : {}),
       });
       continue;
     }
@@ -244,6 +355,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
       if (!isPublic(node, sourceStr)) continue;
       const name = childText(node, sourceStr, 'identifier');
       if (!name) continue;
+      const cfgAttrs = extractCfgAttributes(node, sourceStr);
       symbols.push({
         id: makeId(filePath, name, 'const'),
         name,
@@ -257,6 +369,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
           .trim()
           .slice(0, 120),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
+        ...(cfgAttrs.length > 0 ? { frameworkMeta: { cfg: cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs } } : {}),
       });
       continue;
     }
@@ -266,6 +379,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
       if (!isPublic(node, sourceStr)) continue;
       const name = childText(node, sourceStr, 'type_identifier');
       if (!name) continue;
+      const cfgAttrs = extractCfgAttributes(node, sourceStr);
       symbols.push({
         id: makeId(filePath, name, 'type'),
         name,
@@ -279,6 +393,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
           .trim()
           .slice(0, 120),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
+        ...(cfgAttrs.length > 0 ? { frameworkMeta: { cfg: cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs } } : {}),
       });
       continue;
     }
@@ -291,26 +406,28 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
       const body = node.children.find((c) => c.type === 'declaration_list');
       if (!body) continue;
 
+      const implCfgAttrs = extractCfgAttributes(node, sourceStr);
+
       for (const member of body.children) {
         if (member.type !== 'function_item') continue;
         if (!isPublic(member, sourceStr)) continue;
         const methodName = childText(member, sourceStr, 'identifier');
         if (!methodName) continue;
-        // Use qualified name for ID hashing to guarantee uniqueness within a file
-        // (two different impl types can have a method with the same bare name).
-        // The name field stores only the bare method name for search matching.
         const qualifiedName = `${typeName}.${methodName}`;
         const methodSig = buildSignature(member, sourceStr);
         const sigWithContext = `${typeName}::${methodSig}`.slice(0, 120);
+        const memberCfgAttrs = extractCfgAttributes(member, sourceStr);
+        const allCfg = [...implCfgAttrs, ...memberCfgAttrs];
         symbols.push({
           id: makeId(filePath, qualifiedName, 'method'),
-          name: methodName,     // bare name — search matches on this
+          name: methodName,
           kind: 'method',
           filePath,
           startByte: member.startIndex,
           endByte: member.endIndex,
           signature: sigWithContext,
           summary: extractDocstringWithSource(member, sourceStr) ?? '',
+          ...(allCfg.length > 0 ? { frameworkMeta: { cfg: allCfg.length === 1 ? allCfg[0] : allCfg } } : {}),
         });
       }
       continue;

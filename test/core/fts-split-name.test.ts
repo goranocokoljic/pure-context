@@ -261,4 +261,31 @@ describe('FTS split-name indexing', () => {
     expect(results).toHaveLength(1);
     expect(results[0].name).toBe('IndexManager');
   });
+
+  // ── C++ namespace-qualified names: bare local name indexing ─────────────────
+  // Task 299: 'folly::Future' → also indexes bare 'Future' as a standalone token.
+
+  it('searching bare "Future" finds namespace-qualified "folly::Future"', () => {
+    insertSymbols(db, REPO_ID, [
+      makeSymbol({ id: 'aaaa000000000012', name: 'folly::Future', kind: 'class', filePath: 'folly/futures/Future.h' }),
+    ]);
+    const results = ftsSearchSymbols(db, REPO_ID, 'Future');
+    expect(results.some(r => r.name === 'folly::Future')).toBe(true);
+  });
+
+  it('searching bare "SemiFuture" finds "folly::SemiFuture"', () => {
+    insertSymbols(db, REPO_ID, [
+      makeSymbol({ id: 'aaaa000000000013', name: 'folly::SemiFuture', kind: 'class', filePath: 'folly/futures/Future.h' }),
+    ]);
+    const results = ftsSearchSymbols(db, REPO_ID, 'SemiFuture');
+    expect(results.some(r => r.name === 'folly::SemiFuture')).toBe(true);
+  });
+
+  it('non-qualified name is unchanged by the local name logic', () => {
+    insertSymbols(db, REPO_ID, [
+      makeSymbol({ id: 'aaaa000000000014', name: 'Future', kind: 'class', filePath: 'Future.h' }),
+    ]);
+    const results = ftsSearchSymbols(db, REPO_ID, 'Future');
+    expect(results.some(r => r.name === 'Future')).toBe(true);
+  });
 });

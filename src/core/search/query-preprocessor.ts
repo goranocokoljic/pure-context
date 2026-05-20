@@ -178,12 +178,21 @@ const RENDERING_ONLY_SYNONYMS: ReadonlySet<string> = new Set([
   'acceleration', 'bidirectional', 'lambertian',
 ]);
 
+// Synonyms that are only relevant in Rust codebases (async runtime vocabulary).
+// Applying 'future→poll' globally causes FutureBase::poll to outscore folly::Future
+// in C++ repos like facebook-folly.
+const RUST_ONLY_SYNONYMS: ReadonlySet<string> = new Set([
+  'future', 'spawn', 'concurrent',
+  'serializable', 'deserializable', 'serialize', 'deserialize',
+]);
+
 /**
  * Return synonym alternatives for a single lowercase token, or an empty array
  * when no mapping is defined.
  *
  * Pass `domain: 'rendering'` to include rendering/graphics synonyms.
- * By default, rendering-only synonyms are suppressed to avoid false positives
+ * Pass `domain: 'rust'` to include Rust async/serde synonyms.
+ * By default, domain-specific synonyms are suppressed to avoid false positives
  * in unrelated codebases.
  *
  * Lookup is case-insensitive.
@@ -192,6 +201,8 @@ const RENDERING_ONLY_SYNONYMS: ReadonlySet<string> = new Set([
  *   expandVerbSynonyms('remove')                        → ['delete']
  *   expandVerbSynonyms('render')                        → []  (not a rendering domain)
  *   expandVerbSynonyms('render', 'rendering')           → ['draw', 'display', 'paint']
+ *   expandVerbSynonyms('future')                        → []  (not a rust domain)
+ *   expandVerbSynonyms('future', 'rust')                → ['async', 'poll']
  *   expandVerbSynonyms('unknown')                       → []
  */
 export function expandVerbSynonyms(
@@ -200,6 +211,7 @@ export function expandVerbSynonyms(
 ): ReadonlyArray<string> {
   const lower = token.toLowerCase();
   if (RENDERING_ONLY_SYNONYMS.has(lower) && domain !== 'rendering') return [];
+  if (RUST_ONLY_SYNONYMS.has(lower) && domain !== 'rust') return [];
   return VERB_SYNONYMS[lower] ?? [];
 }
 

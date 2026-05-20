@@ -75,6 +75,8 @@ import * as getComplexityHotspotsTool from './tools/get-complexity-hotspots.js';
 import * as findUntestedSymbolsTool from './tools/find-untested-symbols.js';
 import * as getTestCoverageMapTool from './tools/get-test-coverage-map.js';
 import * as getTypeGraphTool from './tools/get-type-graph.js';
+import * as getLexicalScopeMatchesTool from './tools/get-lexical-scope-matches.js';
+import * as traceInvocationChainTool from './tools/trace-invocation-chain.js';
 
 // ── Resource handlers ──────────────────────────────────────────────────────────
 import {
@@ -486,6 +488,16 @@ export function createMcpServer(): McpServer {
     description: getTypeGraphTool.description,
     inputSchema: getTypeGraphTool.inputSchema,
   }, typed((args) => getTypeGraphTool.handler(args)));
+
+  server.registerTool(getLexicalScopeMatchesTool.name, {
+    description: getLexicalScopeMatchesTool.description,
+    inputSchema: getLexicalScopeMatchesTool.inputSchema,
+  }, typed((args) => getLexicalScopeMatchesTool.handler(args)));
+
+  server.registerTool(traceInvocationChainTool.name, {
+    description: traceInvocationChainTool.description,
+    inputSchema: traceInvocationChainTool.inputSchema,
+  }, typed((args) => traceInvocationChainTool.handler(args)));
 
   // ── MCP Resources ─────────────────────────────────────────────────────────
 

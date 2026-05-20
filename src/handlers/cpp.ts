@@ -9,6 +9,7 @@ import type {
   SyntaxNode,
   Tree,
 } from '../core/types.js';
+import { findMacroEntry } from './cpp-macro-registry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GRAMMARS_DIR = resolve(__dirname, '../../grammars');
@@ -915,6 +916,60 @@ function walkNode(
         endByte: node.endIndex,
         signature: trunc(`#define ${macroName} ${value}`),
         summary: `C++ macro: ${macroName}`,
+      });
+      break;
+    }
+
+    // ── expression_statement: may wrap a registration macro call_expression ────
+    // tree-sitter-cpp parses REGISTER_OP("Abs") and FUNCTION_REGISTER(Foo) as
+    // expression_statement > call_expression, NOT as macro_invocation nodes.
+    case 'expression_statement': {
+      const callExpr = node.children.find((c) => c.type === 'call_expression');
+      if (!callExpr) break;
+      const macroNameNode = callExpr.children.find((c) => c.type === 'identifier');
+      if (!macroNameNode) break;
+      const macroName = nodeText(macroNameNode, src);
+
+      const entry = findMacroEntry(macroName);
+      if (!entry) break;
+
+      const argList = callExpr.children.find((c) => c.type === 'argument_list');
+      if (!argList) break;
+
+      let symbolName: string | null = null;
+
+      if (entry.argKind === 'identifier' || entry.argKind === 'any') {
+        const identArg = argList.children.find((c) => c.type === 'identifier');
+        if (identArg) symbolName = nodeText(identArg, src);
+      }
+
+      if (!symbolName && (entry.argKind === 'string' || entry.argKind === 'any')) {
+        const strArg = argList.children.find(
+          (c) => c.type === 'string_literal' || c.type === 'raw_string_literal',
+        );
+        if (strArg) {
+          const content = strArg.children.find((c) => c.type === 'string_content');
+          symbolName = content
+            ? nodeText(content, src)
+            : nodeText(strArg, src).replace(/^["']|["']$/g, '').trim();
+        }
+      }
+
+      if (!symbolName) break;
+
+      const nsPart = ctx.nsStack.length > 0 ? ctx.nsStack.join('::') + '::' : '';
+      const qualName = nsPart + symbolName;
+
+      symbols.push({
+        id: makeId(filePath, qualName, entry.symbolKind),
+        name: qualName,
+        kind: entry.symbolKind,
+        filePath,
+        startByte: node.startIndex,
+        endByte: node.endIndex,
+        signature: trunc(`${macroName}(${symbolName})`),
+        summary: extractDocstring(node) ?? `C++ ${entry.symbolKind} registered via ${macroName}`,
+        frameworkMeta: { registeredViaMacro: macroName },
       });
       break;
     }

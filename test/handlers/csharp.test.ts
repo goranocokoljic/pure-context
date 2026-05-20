@@ -235,6 +235,11 @@ describe('C# handler — fixture files', () => {
     const iface = syms.find((s) => s.kind === 'interface');
     expect(iface).toBeDefined();
     expect(iface!.name).toBe('IAuthenticator');
+
+    // Interface methods are implicitly public — should be extracted
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('IAuthenticator.Authenticate');
+    expect(names).toContain('IAuthenticator.IsActive');
   });
 
   it('indexes csharp-project/src/User.cs (record) correctly', async () => {
@@ -249,5 +254,72 @@ describe('C# handler — fixture files', () => {
     const record = syms.find((s) => s.kind === 'class');
     expect(record).toBeDefined();
     expect(record!.name).toBe('User');
+  });
+});
+
+// ─── Interface member extraction ──────────────────────────────────────────────
+
+describe('C# handler — interface member extraction', () => {
+  it('extracts interface methods without explicit public modifier', async () => {
+    const src = `public interface IRepository {\n    Entity GetById(int id);\n    void Save(Entity entity);\n    void Delete(int id);\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = csharpHandler.extractSymbols(tree, buf, 'IRepository.cs');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('IRepository');
+    expect(names).toContain('IRepository.GetById');
+    expect(names).toContain('IRepository.Save');
+    expect(names).toContain('IRepository.Delete');
+    const methods = syms.filter((s) => s.kind === 'method');
+    expect(methods).toHaveLength(3);
+  });
+
+  it('extracts interface properties', async () => {
+    const src = `public interface IEntity {\n    int Id { get; }\n    string Name { get; set; }\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = csharpHandler.extractSymbols(tree, buf, 'IEntity.cs');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('IEntity.Id');
+    expect(names).toContain('IEntity.Name');
+  });
+
+  it('extracts interface methods with XML doc comments', async () => {
+    const src = `public interface IService {\n    /// <summary>Process the request.</summary>\n    void Process(string input);\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = csharpHandler.extractSymbols(tree, buf, 'IService.cs');
+    const method = syms.find((s) => s.name === 'IService.Process');
+    expect(method).toBeDefined();
+    expect(method!.summary).toContain('Process the request');
+  });
+
+  it('does NOT extract private class methods but DOES extract interface methods', async () => {
+    const src = `public class Impl {\n    private void Hidden() {}\n}\npublic interface IPublic {\n    void Visible();\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = csharpHandler.extractSymbols(tree, buf, 'Mixed.cs');
+    const names = syms.map((s) => s.name);
+    expect(names).not.toContain('Impl.Hidden');
+    expect(names).toContain('IPublic.Visible');
+  });
+});
+
+// ─── Event declaration extraction ────────────────────────────────────────────
+
+describe('C# handler — event declaration extraction', () => {
+  it('extracts event field declarations from classes as property kind', async () => {
+    const src = `public class Button {\n    public event EventHandler Clicked;\n    public event EventHandler DataLoaded;\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = csharpHandler.extractSymbols(tree, buf, 'Button.cs');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('Button.Clicked');
+    expect(names).toContain('Button.DataLoaded');
+    const events = syms.filter((s) => s.kind === 'property');
+    expect(events.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('extracts event field declarations from interface declarations', async () => {
+    const src = `public interface INotifier {\n    event EventHandler StateChanged;\n}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = csharpHandler.extractSymbols(tree, buf, 'INotifier.cs');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('INotifier.StateChanged');
   });
 });
