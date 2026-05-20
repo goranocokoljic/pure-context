@@ -18,8 +18,12 @@ But token savings are the mechanism, not the point. The point is that AI gets be
 ## Quick start
 
 ```bash
-# Connect to Claude Code (no global install needed)
+# 1. Connect to Claude Code (no global install needed)
 claude mcp add purecontext-mcp -- npx purecontext-mcp
+
+# 2. Inside your project, install the workflow rules
+#    (auto-detects Claude / Cursor / Windsurf / Continue / Cline / Roo Code / VS Code / Claude Desktop)
+npx purecontext-mcp install all
 ```
 
 Then in a Claude Code conversation:
@@ -54,6 +58,8 @@ The guide explains what PureContext does, why each feature exists, and how to us
 | [Visualizing Code Structure](VISUALIZING-CODE.md) | Mermaid/DOT diagrams, architecture snapshots |
 | [AST-Level Search](AST-SEARCH.md) | Node types, signatures, decorators, complexity |
 | [Code Intelligence](CODE-INTELLIGENCE.md) | Entry points, public API, TODOs, coverage |
+| [Language Support](LANGUAGE-SUPPORT.md) | All 34 supported languages and what's extracted |
+| [Framework Adapters](FRAMEWORK-ADAPTERS.md) | Vue, React, Django, Spring, Rails, Flutter, ORMs, and more |
 | [Using PureContext with a Team](TEAM-SETUP.md) | Shared server, enterprise setup |
 
 **Real-world workflows:**
@@ -77,9 +83,39 @@ You should start from docs/README.md.
 
 ## What it indexes
 
-**34 languages** including TypeScript, JavaScript, Python, Go, Rust, Java, C#, PHP, Ruby, Kotlin, Swift, Dart, C, C++, Elixir, Haskell, Scala, R, Bash, Terraform, Protobuf, GraphQL, SQL, and more.
+### Languages
 
-**Framework-aware extraction** for Vue, React, Nuxt, Next.js, Angular, NestJS, Express, Fastify, Django, FastAPI, Flask, Gin, Rails, Laravel, Spring Boot, and more. Routes, components, hooks, models, and middleware are extracted as first-class symbols.
+**34 languages** via bundled tree-sitter WASM grammars — no separate install required.
+
+| Category | Languages |
+|----------|-----------|
+| Web / Application | TypeScript, JavaScript, Python, PHP, Ruby, Go, Java, Kotlin, C#, Scala, Dart, Swift, Elixir, Haskell, Lua, R, Perl, Groovy, Erlang, Gleam |
+| Systems | C, C++, Rust, Fortran, Objective-C |
+| Scripting & Game | Bash, GDScript |
+| Infrastructure & Config | Terraform / HCL, Nix |
+| Data & API | SQL, Protobuf, GraphQL, OpenAPI / YAML, XML |
+| Styling (regex-based) | SCSS, SASS, LESS, CSS |
+
+→ [Language Support guide](LANGUAGE-SUPPORT.md) · [Full reference](docs/07-language-support.md)
+
+### Frameworks
+
+**Framework-aware extraction** — routes, components, hooks, models, ORM entities, and middleware are pulled out as first-class symbols (not just functions and classes).
+
+| Stack | Frameworks |
+|-------|-----------|
+| JavaScript / TypeScript | Vue 3, React, Nuxt, Next.js (Pages + App Router), Angular, NestJS, Express, Fastify |
+| Python | Django, FastAPI, Flask |
+| Go | Gin, Echo, Fiber |
+| PHP | Laravel, Symfony |
+| Ruby | Rails, Sinatra |
+| Java | Spring Boot, Micronaut, Quarkus |
+| Kotlin | Ktor, Spring (Kotlin) |
+| Rust | Axum, Actix-web, Rocket |
+| Mobile | Flutter |
+| ORMs | Hibernate, SQLAlchemy, Django ORM, Prisma, TypeORM |
+
+→ [Framework Adapters guide](FRAMEWORK-ADAPTERS.md) · [Full reference](docs/08-framework-adapters.md)
 
 ---
 
@@ -180,22 +216,49 @@ If your team runs a shared PureContext server, connect with an HTTP transport in
 
 Installing PureContext gives your agent the tools. Adding the agent instructions tells it *how* to use them — which tool to pick for each task, in what order, and what to avoid.
 
-Two instruction files are provided at the repository root:
+Without these instructions, an agent may default to reading entire files rather than using `search_symbols`, or may not know to call `list_repos` first to get the repository ID required by every tool.
 
-**`AGENT_INSTRUCTIONS_SHORT.md`** — ~2 KB. The mandatory workflow, tool selection table, core rules, and common patterns. Use this for agents with limited system prompt space.
+### One-command install (recommended)
 
-**`AGENT_INSTRUCTIONS.md`** — ~15 KB. Adds detailed parameter notes, every usage pattern, decision trees, and anti-patterns. Use this for complex multi-step workflows.
-
-**Claude Code** — add to your project's `CLAUDE.md`:
+Run this once inside your project directory:
 
 ```bash
-cat AGENT_INSTRUCTIONS_SHORT.md >> CLAUDE.md
+npx purecontext-mcp install all
 ```
 
-**Cursor** — paste into `.cursorrules` or via Cursor Settings → Rules.
+This auto-detects which AI coding tools you have set up in the project and writes the PureContext workflow rules to the right place for each. Re-running is safe — every writer is idempotent (managed blocks are marked and replaced rather than appended).
 
-**Windsurf** — paste into your workspace memory or rules configuration.
+For a single tool:
 
-**Any other agent** — paste into whatever system prompt or memory configuration it supports.
+```bash
+npx purecontext-mcp install <tool>
+```
 
-Without these instructions, an agent may default to reading entire files rather than using `search_symbols`, or may not know to call `list_repos` first to get the repository ID required by every tool.
+To preview without writing files:
+
+```bash
+npx purecontext-mcp install all --dry-run
+npx purecontext-mcp install --list      # show which IDEs were detected
+```
+
+Supported tools and where each one writes:
+
+| Tool | Target file |
+|------|-------------|
+| `claude` | `CLAUDE.md` + Claude Code hooks (PostToolUse re-index, PreCompact snapshot, edit guard) |
+| `cursor` | `.cursor/rules/purecontext.mdc` (MDC frontmatter, `alwaysApply: true`) |
+| `windsurf` | `.windsurfrules` |
+| `continue` | `.continue/config.json` (merges `systemMessage`, preserves other fields) |
+| `cline` | `.clinerules` |
+| `roo-code` | `.roo/rules-code.md` |
+| `vscode` | `.github/copilot-instructions.md` (GitHub Copilot in VS Code) |
+| `claude-desktop` | Platform-specific Claude Desktop config (merges MCP server entry) |
+
+### Manual install
+
+If you'd rather paste the rules yourself, two instruction files are at the repository root:
+
+- **`AGENT_INSTRUCTIONS_SHORT.md`** — ~2 KB. Mandatory workflow, tool selection table, core rules.
+- **`AGENT_INSTRUCTIONS.md`** — ~15 KB. Adds parameter notes, decision trees, anti-patterns.
+
+Paste the contents into whatever system prompt, memory, or rules configuration your agent uses.

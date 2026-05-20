@@ -177,43 +177,76 @@ Your API key is issued by your team's PureContext administrator. See [Team Setup
 
 Installing PureContext gives your AI agent access to the tools. Adding the agent instructions tells it *how* to use them efficiently — which tool to pick for each situation, in what order to call them, and what patterns to avoid.
 
-Two instruction files are provided at the repository root:
-
-**`AGENT_INSTRUCTIONS_SHORT.md`** — A compact reference (~2 KB). Covers the mandatory first step, the complete tool selection table, the core rules, and the most common usage patterns. Use this for agents with limited system prompt space or when you want minimal overhead.
-
-**`AGENT_INSTRUCTIONS.md`** — The full reference (~15 KB). Adds detailed parameter notes, every usage pattern, known limitations, decision trees, and anti-patterns. Use this when you want the agent to have complete context, especially for complex multi-step workflows.
-
-### Adding instructions to Claude Code
-
-Add the short version to your project's `CLAUDE.md`:
-
-```bash
-cat AGENT_INSTRUCTIONS_SHORT.md >> CLAUDE.md
-```
-
-Or add the full version if the project is large and complex:
-
-```bash
-cat AGENT_INSTRUCTIONS.md >> CLAUDE.md
-```
-
-Claude Code reads `CLAUDE.md` at the start of every session. The instructions become part of every conversation in that project automatically — no need to repeat them.
-
-### Adding instructions to Cursor
-
-Paste the contents of `AGENT_INSTRUCTIONS_SHORT.md` into your Cursor rules file (`.cursorrules` in the project root, or via Cursor Settings → Rules).
-
-### Adding instructions to Windsurf
-
-Paste the contents into your Windsurf workspace memory or rules configuration.
-
-### Adding instructions to any other agent
-
-The files are plain Markdown. Paste the contents into whatever system prompt, memory, or rules configuration your agent supports. The short version works well for constrained contexts. The full version is better when you can afford the space.
-
-### What the instructions do
-
 Without them, an AI agent given access to PureContext may default to reading entire files (wasting tokens) rather than using `search_symbols`, or may not know to call `list_repos` first to get the `repoId` required by every tool. The instructions encode the correct workflow: check if indexed → search by name or meaning → retrieve source only for what you'll use.
+
+### Recommended: `purecontext-mcp install`
+
+PureContext ships with a multi-IDE installer that writes the workflow rules into the conventions file each tool expects. Run it once inside your project root:
+
+```bash
+npx purecontext-mcp install all
+```
+
+This auto-detects which AI tools are configured in the project (by looking for marker files such as `.cursor/`, `.windsurfrules`, `CLAUDE.md`, `.continue/`, etc.) and installs the rules for each.
+
+For a single tool:
+
+```bash
+npx purecontext-mcp install cursor
+npx purecontext-mcp install windsurf
+npx purecontext-mcp install continue
+# ...etc.
+```
+
+Useful flags:
+
+```bash
+npx purecontext-mcp install --list           # show detection state, write nothing
+npx purecontext-mcp install all --dry-run    # preview which writers would run
+```
+
+### Supported tools
+
+| Tool | What gets written | Notes |
+|------|-------------------|-------|
+| `claude` | `CLAUDE.md` injection + Claude Code hooks | Equivalent to `purecontext-mcp hooks --install`. Installs PostToolUse re-index, PreCompact snapshot, and a soft edit guard. |
+| `cursor` | `.cursor/rules/purecontext.mdc` | MDC frontmatter with `alwaysApply: true` so the rule is always loaded. |
+| `windsurf` | `.windsurfrules` | Marked block appended or replaced in place. |
+| `continue` | `.continue/config.json` → `systemMessage` field | JSON-aware merge; other fields are preserved. |
+| `cline` | `.clinerules` | Marked block at root of file. |
+| `roo-code` | `.roo/rules-code.md` | Roo Code's code-mode rule slot. |
+| `vscode` | `.github/copilot-instructions.md` | Picked up by GitHub Copilot in VS Code (also respected by some other Copilot-compatible tools). |
+| `claude-desktop` | Platform-specific `claude_desktop_config.json` | Merges the MCP server entry; leaves any other servers untouched. |
+
+### Idempotency
+
+Every writer is safe to re-run. The Markdown writers wrap their content in HTML comment markers:
+
+```html
+<!-- purecontext-mcp-start -->
+... PureContext workflow rules ...
+<!-- purecontext-mcp-end -->
+```
+
+On re-run, the marked block is replaced in place. Anything outside the markers (your own rules, other tools' rules) is preserved. The JSON writers (`continue`, `claude-desktop`) parse and merge structurally rather than re-emitting the whole file.
+
+### Manual install (if you'd rather paste)
+
+The two source-of-truth files are at the repository root:
+
+- **`AGENT_INSTRUCTIONS_SHORT.md`** — Compact (~2 KB). Mandatory first step, tool selection table, core rules, common usage patterns. Use for agents with limited system prompt space.
+- **`AGENT_INSTRUCTIONS.md`** — Full (~15 KB). Adds parameter notes, every usage pattern, known limitations, decision trees, anti-patterns. Use for complex multi-step workflows.
+
+To use these manually:
+
+```bash
+# Claude Code
+cat AGENT_INSTRUCTIONS_SHORT.md >> CLAUDE.md
+
+# Cursor — paste into .cursorrules or via Cursor Settings → Rules
+# Windsurf — paste into .windsurfrules or workspace memory
+# Anything else — paste into whatever rule/memory config it supports
+```
 
 ---
 

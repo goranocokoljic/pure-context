@@ -46,6 +46,14 @@ For parameter-level documentation — every tool input, output, and flag — see
 
 ---
 
+## Language and framework coverage
+
+- [Language Support](LANGUAGE-SUPPORT.md) — All 34 supported languages plus regex-based stylesheet handlers: what's extracted, what's filtered, and known limitations
+
+- [Framework Adapters](FRAMEWORK-ADAPTERS.md) — Routes, components, and ORM entities pulled out as first-class symbols for Vue, React, Nuxt, Next.js, Angular, NestJS, Django, FastAPI, Flask, Spring Boot, Rails, Laravel, Flutter, and more
+
+---
+
 ## For teams and enterprise
 
 - [Using PureContext with a Team](team-setup.md) — Why a shared server is fundamentally different from local use, how to set it up, how to keep the index current automatically, and what enterprise deployments need to consider
