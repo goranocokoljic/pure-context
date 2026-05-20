@@ -123,11 +123,11 @@ dev-docs/          # Phase task files, benchmark notes (gitignored, not public)
 
 ## Current Phase
 
-**Phase 49 — COMPLETE** (Benchmark gap closure: docstrings, BM25, Nuxt synonyms, Kotlin depth)
+**Phase 50 — COMPLETE** (NestJS BM25 fix + Multi-IDE installer)
 
-Tasks 269–273 complete. PC now wins 16/19 P@1 (was 12/19). See `dev-docs/PHASE49_TASKS.md` for detail.
+Tasks 274–278 complete. nestjs P@1 restored 76%→84%. Multi-IDE `install` command added (cursor, windsurf, continue, cline, roo-code, vscode, claude-desktop). See `dev-docs/PHASE50_TASKS.md` for detail.
 
-**Phase 50 — Next** (TBD)
+**Phase 51 — Next** (TBD)
 
 Full phase history: `dev-docs/PHASE*_TASKS.md` files.
 
@@ -139,6 +139,8 @@ Recent significant decisions:
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
+| 2026-05-20 | Phase 50: identityExact scaled for data kinds | Const/type/interface/enum/property symbols now get identityExact=40/N (min 10) in multi-word queries. Prevents STRIPE const or Subscribers struct from dominating when mentioned as context in a longer query. BM25 cap (30% when topBase≥80) kept. Fixes nestjs 76%→84% without breaking listmonk (28%). |
+| 2026-05-20 | Phase 50: Multi-IDE install command | `npx purecontext-mcp install <tool|all>` injects PureContext workflow into Cursor (.cursor/rules/purecontext.mdc), Windsurf (.windsurfrules), Continue (.continue/config.json systemMessage), Cline (.clinerules), Roo Code (.roo/rules-code.md), VS Code (.github/copilot-instructions.md), Claude Desktop (platform config). All writers are idempotent via HTML markers. |
 | 2026-05-19 | Phase 48: Rendering synonyms scoped via RENDERING_ONLY_SYNONYMS | Added set of rendering-only synonym tokens; expandVerbSynonyms/preprocessQuery/toOrFallbackQuery/rankSymbols accept optional `domain` param; search-symbols.ts detects rendering repos by name pattern (mitsuba, render, shader, etc.). Fixes nuxt/airodump/origamicms-frontend regressions. |
 | 2026-05-19 | Phase 48: Claude Code hooks in Node.js | Cross-platform (Windows/Linux/macOS) without bash/PS1 split — Node is already a hard dependency. Three hooks: PostToolUse index hook, PreCompact snapshot, Edit Guard (soft, never blocks). |
 | 2026-05-19 | Phase 48: Negative evidence in `search_symbols` | When 0 results after all fallbacks, return `verdict: "no_match"` to stop agents from re-searching with variant queries. |
@@ -163,6 +165,8 @@ npx purecontext-mcp                    # Start MCP server (stdio)
 npx purecontext-mcp config --init      # Generate default config
 npx purecontext-mcp config --check     # Validate config + prerequisites
 npx purecontext-mcp hooks --install    # Install Claude Code hooks
+npx purecontext-mcp install all        # Auto-detect IDEs and install each
+npx purecontext-mcp install cursor     # Install for a specific IDE
 
 # Claude Code integration
 claude mcp add purecontext-mcp npx purecontext-mcp

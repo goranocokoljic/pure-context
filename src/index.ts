@@ -92,6 +92,7 @@ import { cmdInit, cmdCheck, cmdShow, cmdHealth, cmdExport, cmdImport, cmdFetch, 
 import { runKeysCommand } from './config/keys-cli.js';
 import { runWorkspacesCommand } from './config/workspaces-cli.js';
 import { runHooksCommand } from './cli/hooks.js';
+import { runInstallCommand } from './cli/install.js';
 import { VERSION } from './version.js';
 import { PureContextError, formatErrorBox } from './core/errors.js';
 
@@ -135,6 +136,10 @@ Usage:
   purecontext-mcp detect-antipatterns [--fail-on-critical]  Scan for anti-patterns
   purecontext-mcp hooks --install         Install Claude Code hooks into ~/.claude/hooks/
   purecontext-mcp hooks --list            Show hook installation state
+  purecontext-mcp install <tool>          Install for a specific AI coding IDE
+  purecontext-mcp install all             Auto-detect installed IDEs and install each
+  purecontext-mcp install --list          Show detected IDEs and install state
+  purecontext-mcp install --dry-run all   Preview what would be installed
   purecontext-mcp --version               Print version
   purecontext-mcp --help                  Print this help
 
@@ -245,6 +250,12 @@ async function main(): Promise<void> {
   if (args[0] === 'hooks') {
     runHooksCommand(args.slice(1));
     return;
+  }
+
+  // ── install sub-command ───────────────────────────────────────────────────
+  if (args[0] === 'install') {
+    await runInstallCommand(args.slice(1));
+    process.exit(0);
   }
 
   // ── config sub-command ────────────────────────────────────────────────────

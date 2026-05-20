@@ -10,7 +10,7 @@
  *  100 — exact name match (case-insensitive, entire query = entire name)
  *   60 — name starts with query
  *   40 — name contains query as substring
- *   40 — identity-exact: any single query word exactly equals the symbol name
+ *   40 — identity-exact: any single query word exactly equals the symbol name (10–40 for data kinds, scaled by 40/queryWords.length)
  *   30 — all query words match a word-boundary name part (exact or stem)
  *   20 — any query word matches a word-boundary name part (exact or stem)
  *   15 — method verb bonus: first part of method name matches a query word
@@ -172,9 +172,22 @@ export function rankSymbols(symbols: SymbolRecord[], query: string, debug = fals
     });
   }
 
+  // First pass: compute base scores (without BM25) for all symbols.
+  const baseResults = symbols.map((symbol) => score(symbol, queryLower, queryWords));
+
+  // Cap BM25 bonus to 30% of its computed value when any symbol already has a
+  // dominant name-match score (≥80). This prevents BM25 from overriding a clear
+  // winner (e.g. identityExact+namePrefix+kindBoost on a NestJS *Service method)
+  // while still letting it act as a tiebreaker between similarly-scored symbols.
+  // The 30% scale reduces the maximum BM25 contribution from 50 to 15 points,
+  // ensuring that a ≤2-point base score gap cannot be flipped by content ranking
+  // when the result set already contains a strong name match.
+  const topBaseScore = Math.max(...baseResults.map((r) => r.score));
+  const bm25Scale = topBaseScore >= 80 ? 0.3 : 1.0;
+
   const scored = symbols.map((symbol, originalIndex) => {
-    const baseScore = score(symbol, queryLower, queryWords);
-    const ftsBm25Bonus = bm25Bonuses[originalIndex]!;
+    const baseScore = baseResults[originalIndex]!;
+    const ftsBm25Bonus = Math.round(bm25Bonuses[originalIndex]! * bm25Scale);
     baseScore.debugScore.ftsBm25Bonus = ftsBm25Bonus;
     baseScore.debugScore.total += ftsBm25Bonus;
     return {
@@ -265,8 +278,17 @@ function score(
 
   let identityExact = 0;
   if (queryWords.length > 0 && queryWords.some((w) => w === nameLower)) {
-    identityExact = 40;
-    total += 40;
+    // Data-definition symbols (const, type, interface, enum, property) named after
+    // a single concept (e.g. STRIPE, Subscribers) fire identityExact when that word
+    // appears anywhere in a multi-word query, even as incidental context rather than
+    // the actual search target. Scale the bonus proportionally so the signal weakens
+    // as the query grows: 40/N, minimum 10. Code-definition symbols (function, method,
+    // class, …) keep the full +40 because their name is almost always the target.
+    const DATA_KINDS = new Set<string>(['const', 'type', 'interface', 'enum', 'property']);
+    identityExact = DATA_KINDS.has(symbol.kind) && queryWords.length > 1
+      ? Math.max(10, Math.round(40 / queryWords.length))
+      : 40;
+    total += identityExact;
   }
 
   // ── Word-overlap rules (word-boundary matching against split name parts) ────

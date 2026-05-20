@@ -1365,4 +1365,52 @@ describe('rankSymbols — FTS BM25 bonus', () => {
     const results = rankSymbols([noFts], 'something useful', true);
     expect(results[0].debugScore?.ftsBm25Bonus).toBe(0);
   });
+
+  it('full BM25 bonus applied when all symbols are within 30 points of the top base score', () => {
+    // Both symbols have the same base score (0) — gap = 0 ≤ 30 — full BM25 applies.
+    const bestBm25  = { ...sym('unrelated'), ftsBm25: -4.5 };
+    const worstBm25 = { ...sym('doOther'),   ftsBm25: -0.5 };
+    const results = rankSymbols([worstBm25, bestBm25], 'foo bar baz', true);
+    expect(results[0].symbol.name).toBe('unrelated');
+    expect(results[0].debugScore?.ftsBm25Bonus).toBe(50); // full bonus, not capped
+  });
+
+  it('BM25 capped to 30% for symbol more than 30 points below the top base score — NestJS regression fix', () => {
+    // Reproduces the NestJS regression: a utility function with partial name overlap
+    // and the best BM25 score was outranking a *Service method with a stronger base.
+    //
+    // ProductsService.create (method): wordOverlap(68) + methodVerbBonus(15) + kindBoost(30) = 113
+    // createCartProduct (function):    wordOverlap(70) + no kindBoost = 70
+    //   gap = 113 - 70 = 43 > 30 → BM25 capped at 30%
+    //
+    // Without cap: createCartProduct = 70 + 50(BM25) = 120 > 113 → regression (wrong winner)
+    // With cap:    createCartProduct = 70 + 15(BM25) = 85  < 113 → correct winner
+    const serviceMethod = {
+      ...sym('ProductsService.create', { kind: 'method', signature: 'ProductsService.create: create(dto)' }),
+      ftsBm25: -0.5, // worst BM25 in set
+    };
+    const utilFn = {
+      ...sym('createCartProduct', { kind: 'function' }),
+      ftsBm25: -4.5, // best BM25 in set
+    };
+    const results = rankSymbols([utilFn, serviceMethod], 'create product', true);
+    expect(results[0].symbol.name).toBe('ProductsService.create');
+    // Capped BM25: best BM25 in set gets round(50 * 0.3) = 15 (not 50)
+    const utilResult = results.find((r) => r.symbol.name === 'createCartProduct');
+    expect(utilResult?.debugScore?.ftsBm25Bonus).toBe(15);
+  });
+
+  it('capped BM25 still breaks ties between symbols within 30 points of the top', () => {
+    // The dominant symbol (nameExact=100) is the top base. createFoo/createBar both
+    // have namePrefix=60, gap=40>30 → their BM25 is capped. Despite the cap, the
+    // better-BM25 symbol among the capped group still ranks first within that group.
+    const dominant = { ...sym('create'), ftsBm25: -0.5 }; // worst BM25, base=100
+    const tieLoser  = { ...sym('createFoo'), ftsBm25: -1.0 }; // base=60, gap=40
+    const tieWinner = { ...sym('createBar'), ftsBm25: -4.5 }; // base=60, gap=40, best BM25
+    const results = rankSymbols([tieLoser, tieWinner, dominant], 'create', true);
+    expect(results[0].symbol.name).toBe('create'); // dominant winner unchanged
+    // createBar has better BM25 → ranks above createFoo despite equal base score
+    expect(results[1].symbol.name).toBe('createBar');
+    expect(results[2].symbol.name).toBe('createFoo');
+  });
 });
