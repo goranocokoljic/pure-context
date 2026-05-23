@@ -2,6 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/purecontext-mcp.svg)](https://www.npmjs.com/package/purecontext-mcp)
 [![Stable](https://img.shields.io/badge/stability-stable-brightgreen.svg)](docs/27-api-stability.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Stop burning context tokens reading whole files.** PureContext MCP indexes your codebase and lets AI agents retrieve exactly the code they need — a single function, a class, a route definition — without loading hundreds of irrelevant lines first.
 
@@ -19,11 +20,11 @@ But token savings are the mechanism, not the point. The point is that AI gets be
 
 ```bash
 # 1. Connect to Claude Code (no global install needed)
-claude mcp add purecontext-mcp -- npx purecontext-mcp
+claude mcp add purecontext-mcp -- npx purecontext-mcp@latest
 
 # 2. Inside your project, install the workflow rules
 #    (auto-detects Claude / Cursor / Windsurf / Continue / Cline / Roo Code / VS Code / Claude Desktop)
-npx purecontext-mcp install all
+npx purecontext-mcp@latest install all
 ```
 
 Then in a Claude Code conversation:
@@ -33,6 +34,45 @@ Index my project at /path/to/my-project
 ```
 
 That's it. Claude will index your codebase and you can start navigating it by name, by meaning, or by dependency — without reading files.
+
+---
+
+## What this looks like in practice
+
+A typical "find and understand" conversation, before vs. after:
+
+**Without PureContext**
+
+```
+You:    Where do we handle Stripe webhook signature verification?
+Claude: I'll search the codebase.
+        [reads src/api/webhooks/stripe.ts — 412 lines, ~3,100 tokens]
+        [reads src/lib/stripe-client.ts    — 287 lines, ~2,150 tokens]
+        [reads src/middleware/webhook.ts   — 198 lines, ~1,490 tokens]
+        Verification happens in verifyStripeSignature() at line 87 of stripe.ts.
+        Total context used: ~6,740 tokens
+```
+
+**With PureContext**
+
+```
+You:    Where do we handle Stripe webhook signature verification?
+Claude: search_symbols(query: "stripe webhook signature")
+        → 3 matches, 78 tokens
+        get_symbol_source(symbolId: "verifyStripeSignature")
+        → 32 lines, 180 tokens
+        verifyStripeSignature() at src/api/webhooks/stripe.ts:87.
+        It uses the timing-safe HMAC check from Stripe's SDK with a 5-minute tolerance.
+        Total context used: ~258 tokens — 96% less
+```
+
+The agent stays in the conversation and can keep going (blast radius, related tests, change planning) instead of running out of context after one file read.
+
+---
+
+## Measured search precision
+
+PureContext is benchmarked on **87 real-world open-source projects** with 25 curated ground-truth queries each. Top-rank precision (P@1) reaches 84% on NestJS, 84% on Terraform, 72% on Protobuf and GraphQL, 60% on Nix, 52% on LÖVE (Lua/C++), and 40% on Tokio (Rust). Full per-language tables, methodology, and reproduction steps are in [BENCHMARKS.md](BENCHMARKS.md).
 
 ---
 
@@ -75,9 +115,7 @@ The guide explains what PureContext does, why each feature exists, and how to us
 
 ### Reference Manual
 
-Parameter-level documentation for every tool, configuration option, language, framework adapter, and deployment option.
-
-You should start from docs/README.md.
+Parameter-level documentation for every tool, configuration option, language, framework adapter, and deployment option lives in [`docs/README.md`](docs/README.md). The reference manual is cross-linked with the user guide above — every topic has both a narrative and a reference page where one helps.
 
 ---
 
@@ -223,7 +261,7 @@ Without these instructions, an agent may default to reading entire files rather 
 Run this once inside your project directory:
 
 ```bash
-npx purecontext-mcp install all
+npx purecontext-mcp@latest install all
 ```
 
 This auto-detects which AI coding tools you have set up in the project and writes the PureContext workflow rules to the right place for each. Re-running is safe — every writer is idempotent (managed blocks are marked and replaced rather than appended).
@@ -240,22 +278,22 @@ Where should PureContext be installed?
 Pass `--scope` to skip the prompt:
 
 ```bash
-npx purecontext-mcp install all --scope=local    # this project only
-npx purecontext-mcp install all --scope=global   # user-level, all projects
-npx purecontext-mcp install all --scope=both     # both places at once
+npx purecontext-mcp@latest install all --scope=local    # this project only
+npx purecontext-mcp@latest install all --scope=global   # user-level, all projects
+npx purecontext-mcp@latest install all --scope=both     # both places at once
 ```
 
 For a single tool:
 
 ```bash
-npx purecontext-mcp install <tool> --scope=global
+npx purecontext-mcp@latest install <tool> --scope=global
 ```
 
 To preview without writing files:
 
 ```bash
-npx purecontext-mcp install all --dry-run
-npx purecontext-mcp install --list      # show which IDEs were detected
+npx purecontext-mcp@latest install all --dry-run
+npx purecontext-mcp@latest install --list      # show which IDEs were detected
 ```
 
 Supported tools and where each one writes:
@@ -273,9 +311,29 @@ Supported tools and where each one writes:
 
 ### Manual install
 
-If you'd rather paste the rules yourself, two instruction files are at the repository root:
+If you'd rather paste the rules yourself, three instruction files are at the repository root:
 
-- **`AGENT_INSTRUCTIONS_SHORT.md`** — ~2 KB. Mandatory workflow, tool selection table, core rules.
-- **`AGENT_INSTRUCTIONS.md`** — ~15 KB. Adds parameter notes, decision trees, anti-patterns.
+- **[`AGENT_INSTRUCTIONS_SHORT.md`](AGENT_INSTRUCTIONS_SHORT.md)** — ~2 KB. Mandatory workflow, tool selection table, core rules. Use for agents with limited system-prompt space.
+- **[`AGENT_INSTRUCTIONS.md`](AGENT_INSTRUCTIONS.md)** — ~15 KB. Adds parameter notes, decision trees, anti-patterns.
+- **[`AGENT_REFERENCE.md`](AGENT_REFERENCE.md)** — ~30 KB. Full tool reference with every parameter, every navigation pattern, and every known limitation. Installed automatically by `hooks --install`; read this when an agent needs the canonical answer.
 
 Paste the contents into whatever system prompt, memory, or rules configuration your agent uses.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+## Contributing
+
+Issues and pull requests are welcome at [github.com/goranocokoljic/pure-context](https://github.com/goranocokoljic/pure-context). Before opening a feature PR, please open an issue to discuss the design — the three-layer architecture (Core → Handlers → Adapters) has hard rules about dependency direction that are easy to violate accidentally. See [`CLAUDE.md`](CLAUDE.md) at the project root for the architectural conventions.
+
+For language or framework adapters: pick a real-world repository, add a 25-query ground-truth file in `benchmarks/<project>/queries.json`, and include benchmark numbers (P@1 / P@3 / R@5) in the PR description so reviewers can confirm the change is a net improvement.
+
+## Support
+
+- **Bug reports and feature requests:** [GitHub Issues](https://github.com/goranocokoljic/pure-context/issues)
+- **Questions about MCP integration:** Open a Discussion on the repository
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md)
+- **Stability and semver policy:** [docs/27-api-stability.md](docs/27-api-stability.md)

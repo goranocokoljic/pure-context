@@ -1,209 +1,56 @@
-# Team Setup & Multi-Tenant
+# Team Setup & Multi-Tenant — Reference
 
+This is the reference page: API key permissions, rate-limit configuration, admin API endpoints, and the production hardening checklist.
 
-Run PureContext as a shared server so your whole team queries the same index — no per-developer re-indexing.
-
----
-
-## Overview
-
-```
-Local mode:                        Server mode (shared):
-  Claude Code (each dev)             Claude Code (each dev)
-      ↓ stdio                            ↓ HTTP + API key
-  PureContext (local)                PureContext (shared server)
-      ↓                                  ↓
-  Local SQLite index             Shared SQLite index(es)
-```
-
-**Why a shared server?** Each developer re-indexes the same codebase independently in local mode. A shared server indexes once and serves all team members — consistent results and no redundant work.
+For the **user-friendly walkthrough** — why a shared server matters, deployment options, end-to-end setup with examples — see [`TEAM-SETUP.md`](../TEAM-SETUP.md) at the project root.
 
 ---
 
-## Step 1 — Deploy the server
+## Workspace and key model
 
-### Docker (recommended)
-
-```bash
-mkdir -p ./purecontext-data
-
-docker run -d \
-  --name purecontext \
-  -p 3000:3000 \
-  -v "$(pwd)/purecontext-data:/data" \
-  -e PCTX_ADMIN_KEY="$(openssl rand -hex 32)" \
-  --restart unless-stopped \
-  purecontext/purecontext-mcp:latest
-```
-
-Note your `PCTX_ADMIN_KEY` — you need it to manage workspaces and keys.
-
-### Docker Compose
-
-```yaml
-version: '3.8'
-services:
-  purecontext:
-    image: purecontext/purecontext-mcp:latest
-    ports:
-      - "3000:3000"
-    volumes:
-      - ./data:/data
-    environment:
-      PCTX_ADMIN_KEY: "change-me-before-deploying"
-    restart: unless-stopped
-```
-
-```bash
-docker compose up -d
-```
-
-### npm (no Docker)
-
-```bash
-npm install -g purecontext-mcp
-PCTX_ADMIN_KEY=your-secret purecontext-mcp --server --host 0.0.0.0 --port 3000
-```
-
-### Verify the server is running
-
-```bash
-curl http://localhost:3000/health
-# {"status":"ok","version":"1.x.x","repoCount":0}
-```
+| Concept | Description |
+|---------|-------------|
+| Workspace | The unit of isolation. One team = one workspace. All repos and keys belong to a workspace. |
+| API key | A per-developer credential. Shown once on creation and never displayed again. Stored as a SHA-256 hash. |
+| Admin key | A long-lived secret (`PCTX_ADMIN_KEY`) that authenticates workspace and key management calls. Set via env var only. |
 
 ---
 
-## Step 2 — Create a workspace
-
-A workspace is the unit of isolation — one team = one workspace. All repos and API keys belong to a workspace.
-
-```bash
-export ADMIN_KEY="your-pctx-admin-key"
-export SERVER="http://localhost:3000"
-
-curl -s -X POST "$SERVER/admin/workspaces" \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"name": "my-team", "plan": "team"}' | jq .
-```
-
-Response:
-
-```json
-{"id": "ws_abc123", "name": "my-team", "plan": "team", "created_at": 1714000000}
-```
-
-Save the `id` — you'll use it when creating API keys.
-
----
-
-## Step 3 — Create API keys
-
-Each developer gets their own API key. Keys are shown once on creation and never again.
-
-```bash
-curl -s -X POST "$SERVER/admin/keys" \
-  -H "Authorization: Bearer $ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "label": "alice-macbook",
-    "permissions": ["read", "write"],
-    "workspace_id": "ws_abc123"
-  }' | jq .
-```
-
-**Response (key shown only once):**
-
-```json
-{
-  "key": "pctx_00000000_..._1234",
-  "label": "alice-macbook",
-  "permissions": ["read", "write"],
-  "key_hash_prefix": "deadbeef"
-}
-```
-
-### Permission levels
+## Permission levels
 
 | Permission | Allowed operations |
-|------------|-------------------|
-| `read` | Search symbols, get outlines, get source |
-| `write` | + `index_folder`, `index_repo` |
+|------------|--------------------|
+| `read` | Search symbols, get outlines, fetch source |
+| `write` | + `index_folder`, `index_repo`, `invalidate_cache` |
 | `admin` | + Manage keys and workspaces |
 
-For AI agents that only query (not index), use `read` permission. For CI pipelines that re-index on push, use `write`.
-
----
-
-## Step 4 — Index the shared codebase
-
-Connect Claude Code (step 5) and ask it to index, or call the API directly:
-
-```bash
-curl -s -X POST "$SERVER/mcp/sse" \
-  -H "Authorization: Bearer pctx_yourwritekey" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {"name": "index_folder", "arguments": {"path": "/path/to/repo"}},
-    "id": 1
-  }'
-```
-
----
-
-## Step 5 — Connect each developer
-
-Each developer runs this once:
-
-```bash
-claude mcp add purecontext-remote \
-  --transport http \
-  --url https://purecontext.mycompany.com/mcp/sse \
-  --header "Authorization: Bearer pctx_yourpersonalkey"
-```
-
-After adding, verify in Claude Code:
-
-```
-/mcp
-# Should show purecontext-remote as connected
-
-List my indexed repositories using list_repos
-```
-
----
-
-## Step 6 — Manage keys over time
-
-```bash
-# List all keys (shows label, prefix, permissions — never the raw key)
-curl -s "$SERVER/admin/keys" -H "Authorization: Bearer $ADMIN_KEY" | jq .
-
-# Revoke a key (e.g., when someone leaves the team)
-curl -s -X DELETE "$SERVER/admin/keys/deadbeef" \
-  -H "Authorization: Bearer $ADMIN_KEY"
-
-# Check key usage stats
-curl -s "$SERVER/admin/keys/deadbeef/usage" \
-  -H "Authorization: Bearer $ADMIN_KEY" | jq .
-```
+For AI agents that only query, use `read`. For CI pipelines that re-index on push, use `write`. Never issue `admin` to a developer or agent — keep it on the admin key alone.
 
 ---
 
 ## Rate limiting
 
-HTTP mode uses a token-bucket algorithm to prevent any single client from overwhelming the server:
+HTTP mode uses a token-bucket per API key.
 
-- Each key gets a bucket with capacity `rateLimit.maxTokens` (default: 100)
-- Tokens refill at `rateLimit.refillRate` per second (default: 10)
-- Expensive tools (e.g., `index_folder`) cost more tokens
+| Field | Default | Description |
+|-------|--------:|-------------|
+| `rateLimit.enabled` | `true` | Disable to allow unbounded usage (single-tenant only) |
+| `rateLimit.maxTokens` | `100` | Bucket capacity per key |
+| `rateLimit.refillRate` | `10` | Tokens added per second |
+| `rateLimit.perToolLimits.<tool>` | varies | Per-tool cost override |
 
-When rate limited, responses return `429 Too Many Requests` with a `Retry-After` header.
+Default per-tool costs:
 
-Configure per-tool costs in `config.json`:
+| Tool | Cost |
+|------|-----:|
+| `search_symbols`, `search_text`, `search_semantic` | 1 |
+| `get_symbol_source`, `get_file_outline`, `get_context_bundle` | 1 |
+| `index_folder`, `index_repo` | 10 |
+| `health_radar`, `get_debt_report`, `detect_antipatterns` | 5 |
+
+When a bucket empties, the server returns `429 Too Many Requests` with a `Retry-After` header.
+
+Example config:
 
 ```json
 {
@@ -223,29 +70,52 @@ Configure per-tool costs in `config.json`:
 
 ## Admin API reference
 
-All endpoints require `Authorization: Bearer <PCTX_ADMIN_KEY>`.
+All endpoints require `Authorization: Bearer <PCTX_ADMIN_KEY>`. Base URL: the server's bind address (default `http://localhost:3000`).
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/admin/workspaces` | `POST` | Create workspace |
-| `/admin/workspaces` | `GET` | List workspaces |
-| `/admin/workspaces/:id` | `DELETE` | Delete workspace and all data |
-| `/admin/keys` | `POST` | Create API key |
-| `/admin/keys` | `GET` | List keys |
-| `/admin/keys/:prefix` | `DELETE` | Revoke key |
-| `/admin/keys/:prefix/usage` | `GET` | Key usage stats |
-| `/admin/stats` | `GET` | Server-wide statistics |
+| `/admin/workspaces` | `POST` | Create workspace. Body: `{name, plan}`. Returns `{id, name, plan, created_at}`. |
+| `/admin/workspaces` | `GET` | List workspaces. |
+| `/admin/workspaces/:id` | `DELETE` | Delete workspace and all data. |
+| `/admin/keys` | `POST` | Create API key. Body: `{label, permissions[], workspace_id}`. **Raw key returned once.** |
+| `/admin/keys` | `GET` | List keys (label + prefix + permissions; never raw key). |
+| `/admin/keys/:prefix` | `DELETE` | Revoke key by hash prefix. |
+| `/admin/keys/:prefix/usage` | `GET` | Per-key usage counters. |
+| `/admin/stats` | `GET` | Server-wide statistics. |
+| `/health` | `GET` | Public health check (no auth). Returns `{status, version, repoCount}`. |
 
 ---
 
-## Production checklist
+## Server-mode environment variables
 
-- [ ] `PCTX_ADMIN_KEY` is a long random secret (≥ 32 hex chars), set via env var only — never in a committed config file
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `PCTX_ADMIN_KEY` | yes | Admin secret. Minimum 32 hex chars recommended. |
+| `PCTX_DATA_DIR` | no | Override default `/data` (Docker) or `~/.purecontext` (npm). |
+| `PCTX_BIND_HOST` | no | Default `0.0.0.0` in server mode. |
+| `PCTX_BIND_PORT` | no | Default `3000`. |
+| `PCTX_LOG_LEVEL` | no | `debug` / `info` / `warn` / `error`. |
+
+CLI flags `--server`, `--host`, `--port` take precedence over env vars.
+
+---
+
+## Production hardening checklist
+
+- [ ] `PCTX_ADMIN_KEY` is a ≥32-char random secret, set via env var only — never in a committed config file
 - [ ] Server is behind a reverse proxy (nginx, Caddy) with TLS
-- [ ] Port 3000 is not directly exposed to the internet (terminate TLS at the proxy)
-- [ ] `/data` volume is on a backed-up disk
-- [ ] `restart: unless-stopped` is set in docker-compose
-- [ ] Developers have `read` permission only unless they need to re-index
+- [ ] Port 3000 is not directly exposed to the public internet (terminate TLS at the proxy)
+- [ ] `/data` volume sits on a backed-up disk
+- [ ] `restart: unless-stopped` set in docker-compose
+- [ ] Developers have `read` permission only unless they specifically need to re-index
 - [ ] Admin key is rotated if ever exposed
+- [ ] Rate limiting enabled and tuned for your team size
 
-See [Docker Deployment](16-docker.md) for full reverse proxy examples.
+---
+
+## Related reference
+
+- [Transport Modes](14-transport-modes.md) — stdio vs HTTP/SSE deep dive
+- [Docker Deployment](16-docker.md) — container image, compose examples, reverse-proxy templates
+- [Security](24-security.md) — threat model, API-key storage, path-traversal protections
+- [Configuration](04-configuration.md) — full `config.json` schema

@@ -1,9 +1,14 @@
-# Framework Adapters
+# Framework Adapters — Reference
 
+This is the reference page: detection criteria, extracted symbol kinds, and `frameworkMeta` shape for every adapter.
+
+For the **user-friendly tour** — how adapters change what you see in search results, with examples and "useful for" notes — see [`FRAMEWORK-ADAPTERS.md`](../FRAMEWORK-ADAPTERS.md) at the project root.
+
+---
 
 Framework adapters layer domain-specific symbol extraction on top of language handlers. They are auto-detected from project config files.
 
-## How adapters work
+## The `FrameworkAdapter` interface
 
 Each adapter implements the `FrameworkAdapter` interface:
 
