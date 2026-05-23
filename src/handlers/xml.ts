@@ -104,6 +104,42 @@ function precedingXmlComment(lines: LineInfo[], lineIdx: number): string | null 
   return null;
 }
 
+// ─── Symbol disambiguation ────────────────────────────────────────────────────
+
+const GENERIC_XML_STEMS = new Set(['pom', 'index', 'default', 'config', 'settings']);
+
+/**
+ * Disambiguate an XML symbol name when the same root tag appears in many files.
+ * For depth ≤ 2 elements whose tag name differs from the file-stem, append the
+ * module identifier so `project` in `maven-core/pom.xml` becomes `project@maven-core`.
+ */
+function disambiguateXmlName(tagName: string, filePath: string, depth: number): string {
+  if (depth > 2) return tagName;
+
+  // Compute file-stem and parent directory name
+  const parts = filePath.replace(/\\/g, '/').split('/');
+  const filename = parts[parts.length - 1] ?? '';
+  const dotIdx = filename.lastIndexOf('.');
+  const stem = dotIdx >= 0 ? filename.slice(0, dotIdx) : filename;
+
+  // Only disambiguate when the file lives inside at least one subdirectory.
+  // Root-level files (e.g. the single top-level pom.xml) are unique by definition.
+  if (parts.length < 2) return tagName;
+
+  const parentDir = parts[parts.length - 2]!;
+
+  // Choose disambiguator: use parent dir name when stem is generic
+  const disambiguator = GENERIC_XML_STEMS.has(stem.toLowerCase())
+    ? parentDir
+    : stem;
+
+  if (!disambiguator || disambiguator.toLowerCase() === tagName.toLowerCase()) {
+    return tagName;
+  }
+
+  return `${tagName}@${disambiguator}`;
+}
+
 // ─── Patterns ─────────────────────────────────────────────────────────────────
 
 // Opening tag with optional attributes: <tagName ...
@@ -136,15 +172,19 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
     if (tagMatch && !rootFound) {
       const tagName = tagMatch[1]!;
       rootFound = true;
+      const disambiguated = disambiguateXmlName(tagName, filePath, 1);
+      // Include bare tag name in bodySnippet so FTS still matches plain `project` queries
+      const bodySnippet = disambiguated !== tagName ? tagName : undefined;
       symbols.push({
-        id: makeId(filePath, tagName, 'class'),
-        name: tagName,
+        id: makeId(filePath, disambiguated, 'class'),
+        name: disambiguated,
         kind: 'class',
         filePath,
         startByte: lines[i]!.startByte,
         endByte: lines[lines.length - 1]!.endByte,
         signature: trunc(`<${tagName}>`),
         summary: precedingXmlComment(lines, i) ?? `XML root element: ${tagName}`,
+        ...(bodySnippet && { bodySnippet }),
       });
     }
 

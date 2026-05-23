@@ -1,18 +1,23 @@
 /**
  * `purecontext-mcp hooks --install` / `hooks --list`
+ * `purecontext-mcp hook-pretooluse|hook-posttooluse|hook-precompact|hook-worktree-create|hook-worktree-remove`
  *
- * Installs the three Claude Code hooks into ~/.claude/hooks/ and merges
- * the required entries into ~/.claude/settings.json.
+ * Merges hook entries into ~/.claude/settings.json using CLI-style commands
+ * (npx purecontext-mcp hook-*) so no scripts need to be copied to ~/.claude/hooks/.
  * Also injects PureContext agent instructions into ~/.claude/CLAUDE.md.
  */
 
+import { spawnSync } from 'child_process';
+import { createRequire } from 'module';
 import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
-  copyFileSync,
 } from 'fs';
+import type _BetterSqlite3 from 'better-sqlite3';
+type DatabaseConstructor = typeof _BetterSqlite3;
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
@@ -22,36 +27,45 @@ const __dirname = dirname(__filename);
 
 // ─── Paths ────────────────────────────────────────────────────────────────────
 
-// Package root is two directories up from dist/cli/ (or src/cli/ in dev)
-const PACKAGE_ROOT = join(__dirname, '..', '..');
-const HOOKS_SRC_DIR = join(PACKAGE_ROOT, 'scripts', 'hooks');
 const CLAUDE_DIR = join(homedir(), '.claude');
-const HOOKS_DEST_DIR = join(CLAUDE_DIR, 'hooks');
 const SETTINGS_PATH = join(CLAUDE_DIR, 'settings.json');
 const CLAUDE_MD_PATH = join(CLAUDE_DIR, 'CLAUDE.md');
-const HOOK_CONFIG_PATH = join(HOOKS_DEST_DIR, 'purecontext-config.json');
-
-const HOOK_FILES = [
-  'purecontext-index-hook.mjs',
-  'purecontext-precompact-hook.mjs',
-  'purecontext-edit-guard.mjs',
-] as const;
 
 // ─── Settings entries ─────────────────────────────────────────────────────────
 
 const POST_TOOL_USE_ENTRY = {
   matcher: 'Edit|Write|MultiEdit',
-  hooks: [{ type: 'command', command: `node ${join(HOOKS_DEST_DIR, 'purecontext-index-hook.mjs')}` }],
+  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-posttooluse' }],
 };
 
 const PRE_COMPACT_ENTRY = {
   matcher: '',
-  hooks: [{ type: 'command', command: `node ${join(HOOKS_DEST_DIR, 'purecontext-precompact-hook.mjs')}` }],
+  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-precompact' }],
 };
 
 const PRE_TOOL_USE_ENTRY = {
   matcher: 'Edit|Write|MultiEdit',
-  hooks: [{ type: 'command', command: `node ${join(HOOKS_DEST_DIR, 'purecontext-edit-guard.mjs')}` }],
+  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-pretooluse' }],
+};
+
+const WORKTREE_CREATE_ENTRY = {
+  matcher: '',
+  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-worktree-create' }],
+};
+
+const WORKTREE_REMOVE_ENTRY = {
+  matcher: '',
+  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-worktree-remove' }],
+};
+
+const TASK_COMPLETED_ENTRY = {
+  matcher: '',
+  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-taskcompleted' }],
+};
+
+const SUBAGENT_START_ENTRY = {
+  matcher: '',
+  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-subagentstart' }],
 };
 
 // ─── CLAUDE.md block ──────────────────────────────────────────────────────────
@@ -127,52 +141,40 @@ Do not ignore \`_tokenEstimate\` fields. Use them to decide whether to fetch mor
 Do not re-search when \`search_symbols\` returns \`negative_evidence\`. If the response includes \`verdict: "no_match"\`, the symbol does not exist — report the gap rather than trying five more query variants.
 <!-- purecontext-mcp-end -->`;
 
-// ─── Public commands ──────────────────────────────────────────────────────────
+// ─── Public install/list commands ─────────────────────────────────────────────
 
 export function cmdHooksInstall(): void {
-  mkdirSync(HOOKS_DEST_DIR, { recursive: true });
+  mkdirSync(CLAUDE_DIR, { recursive: true });
 
-  // Copy hook scripts
-  for (const file of HOOK_FILES) {
-    const src = join(HOOKS_SRC_DIR, file);
-    const dest = join(HOOKS_DEST_DIR, file);
-    if (!existsSync(src)) {
-      process.stderr.write(`Warning: hook script not found: ${src}\n`);
-      continue;
-    }
-    copyFileSync(src, dest);
-    console.log(`  Installed: ${dest}`);
-  }
-
-  // Write config for precompact hook (allows it to find better-sqlite3)
-  writeFileSync(HOOK_CONFIG_PATH, JSON.stringify({
-    packageRoot: PACKAGE_ROOT,
-  }, null, 2));
-
-  // Merge settings.json
   mergeSettings();
-
-  // Inject CLAUDE.md block
   injectClaudeMd();
 
   console.log('\nHooks installed. Reopen Claude Code to activate them.\n');
-  console.log('Hooks installed:');
-  console.log('  PostToolUse (index): re-indexes edited files automatically');
-  console.log('  PreCompact (snapshot): injects repo state before context compaction');
-  console.log('  PreToolUse (guard): suggests PureContext read tools before editing');
+  console.log('Hooks registered (via npx purecontext-mcp hook-*):');
+  console.log('  PostToolUse  (hook-posttooluse):       re-indexes edited files automatically');
+  console.log('  PreCompact   (hook-precompact):        injects repo state before context compaction');
+  console.log('  PreToolUse   (hook-pretooluse):        suggests PureContext read tools before editing');
+  console.log('  WorktreeCreate  (hook-worktree-create):  auto-indexes new agent worktrees');
+  console.log('  WorktreeRemove  (hook-worktree-remove):  fires when an agent worktree is removed');
+  console.log('  TaskCompleted   (hook-taskcompleted):    post-task diagnostics and repo summary');
+  console.log('  SubagentStart   (hook-subagentstart):    injects repo orientation for spawned agents');
 }
 
 export function cmdHooksList(): void {
   console.log('\nPureContext Claude Code hooks:\n');
-  for (const file of HOOK_FILES) {
-    const dest = join(HOOKS_DEST_DIR, file);
-    const status = existsSync(dest) ? 'installed' : 'not installed';
-    console.log(`  ${file}: ${status}`);
-  }
 
-  const settingsStatus = areSettingsMerged() ? 'merged' : 'not configured';
-  console.log(`\n  settings.json: ${settingsStatus}`);
-  console.log(`  CLAUDE.md block: ${isClaudeMdInjected() ? 'present' : 'not present'}\n`);
+  const settingsStatus = areSettingsMerged() ? 'registered' : 'not configured';
+  console.log(`  settings.json hooks: ${settingsStatus}`);
+  console.log(`  CLAUDE.md block:     ${isClaudeMdInjected() ? 'present' : 'not present'}\n`);
+
+  if (areSettingsMerged()) {
+    console.log('  Active hooks:');
+    console.log('    PostToolUse   → npx purecontext-mcp hook-posttooluse');
+    console.log('    PreCompact    → npx purecontext-mcp hook-precompact');
+    console.log('    PreToolUse    → npx purecontext-mcp hook-pretooluse');
+    console.log('    WorktreeCreate → npx purecontext-mcp hook-worktree-create');
+    console.log('    WorktreeRemove → npx purecontext-mcp hook-worktree-remove');
+  }
 }
 
 // ─── Settings merge ───────────────────────────────────────────────────────────
@@ -192,17 +194,37 @@ export function mergeSettings(): void {
   hooks.PostToolUse = mergeHookEntry(
     hooks.PostToolUse ?? [],
     POST_TOOL_USE_ENTRY,
-    'purecontext-index-hook.mjs',
+    ['purecontext-index-hook.mjs', 'hook-posttooluse'],
   );
   hooks.PreCompact = mergeHookEntry(
     hooks.PreCompact ?? [],
     PRE_COMPACT_ENTRY,
-    'purecontext-precompact-hook.mjs',
+    ['purecontext-precompact-hook.mjs', 'hook-precompact'],
   );
   hooks.PreToolUse = mergeHookEntry(
     hooks.PreToolUse ?? [],
     PRE_TOOL_USE_ENTRY,
-    'purecontext-edit-guard.mjs',
+    ['purecontext-edit-guard.mjs', 'hook-pretooluse'],
+  );
+  hooks.WorktreeCreate = mergeHookEntry(
+    (hooks.WorktreeCreate ?? []) as unknown[],
+    WORKTREE_CREATE_ENTRY,
+    ['hook-worktree-create'],
+  );
+  hooks.WorktreeRemove = mergeHookEntry(
+    (hooks.WorktreeRemove ?? []) as unknown[],
+    WORKTREE_REMOVE_ENTRY,
+    ['hook-worktree-remove'],
+  );
+  hooks.TaskCompleted = mergeHookEntry(
+    (hooks.TaskCompleted ?? []) as unknown[],
+    TASK_COMPLETED_ENTRY,
+    ['hook-taskcompleted'],
+  );
+  hooks.SubagentStart = mergeHookEntry(
+    (hooks.SubagentStart ?? []) as unknown[],
+    SUBAGENT_START_ENTRY,
+    ['hook-subagentstart'],
   );
 
   settings.hooks = hooks;
@@ -214,14 +236,15 @@ export function mergeSettings(): void {
 function mergeHookEntry(
   existing: unknown[],
   entry: Record<string, unknown>,
-  hookFileName: string,
+  matchStrings: string[],
 ): unknown[] {
-  // Remove any existing purecontext entry for this hook (idempotent)
+  // Remove any existing purecontext entry for this hook type (idempotent).
+  // Matches both old .mjs script paths and current CLI command forms.
   const filtered = existing.filter((e) => {
     const hooks = (e as Record<string, unknown[]>).hooks ?? [];
     return !hooks.some((h) => {
       const cmd = (h as Record<string, string>).command ?? '';
-      return cmd.includes(hookFileName);
+      return matchStrings.some((s) => cmd.includes(s));
     });
   });
   return [...filtered, entry];
@@ -231,7 +254,7 @@ function areSettingsMerged(): boolean {
   if (!existsSync(SETTINGS_PATH)) return false;
   try {
     const text = readFileSync(SETTINGS_PATH, 'utf-8');
-    return text.includes('purecontext-index-hook.mjs');
+    return text.includes('hook-posttooluse') || text.includes('purecontext-index-hook.mjs');
   } catch { return false; }
 }
 
@@ -252,10 +275,8 @@ export function injectClaudeMd(): void {
   const endIdx = content.indexOf(END_MARKER);
 
   if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    // Replace the existing block (idempotent update)
     content = content.slice(0, startIdx) + CLAUDE_MD_BLOCK + content.slice(endIdx + END_MARKER.length);
   } else {
-    // Append at end
     if (!content.endsWith('\n')) content += '\n';
     content += '\n' + CLAUDE_MD_BLOCK + '\n';
   }
@@ -269,6 +290,360 @@ function isClaudeMdInjected(): boolean {
   try {
     return readFileSync(CLAUDE_MD_PATH, 'utf-8').includes('<!-- purecontext-mcp-start -->');
   } catch { return false; }
+}
+
+// ─── Hook command implementations ─────────────────────────────────────────────
+
+const ROOT_MARKERS = ['.git', 'package.json', 'Cargo.toml', 'go.mod', 'pom.xml'];
+
+function findRepoRoot(filePath: string): string | null {
+  let dir = dirname(filePath);
+  while (true) {
+    for (const marker of ROOT_MARKERS) {
+      if (existsSync(join(dir, marker))) return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+function reindexRepo(repoRoot: string): void {
+  spawnSync('npx', ['purecontext-mcp', 'index-folder', '--path', repoRoot], {
+    stdio: 'ignore',
+    timeout: 60_000,
+    shell: process.platform === 'win32',
+  });
+}
+
+async function readStdin(): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return JSON.parse(Buffer.concat(chunks).toString('utf-8')) as Record<string, unknown>;
+}
+
+/** PreToolUse: warn before Edit/Write/MultiEdit. */
+export async function cmdHookPreToolUse(): Promise<void> {
+  if (process.env.PURECONTEXT_ALLOW_RAW_WRITE === '1') process.exit(0);
+
+  try {
+    const input = await readStdin();
+    const toolName = (input.tool_name ?? '') as string;
+
+    if (!['Edit', 'Write', 'MultiEdit'].includes(toolName)) process.exit(0);
+
+    const filePath = ((input.tool_input as Record<string, unknown>)?.file_path ?? '') as string;
+    const target = filePath ? ` ${filePath}` : '';
+    process.stderr.write(
+      `PureContext: before editing${target}, consider:\n` +
+      '  get_symbol_source   → confirm you are editing the right implementation\n' +
+      '  get_blast_radius    → understand what breaks if you change this\n' +
+      '  find_references     → find all call sites that may need updating\n',
+    );
+  } catch { /* never block */ }
+
+  process.exit(0);
+}
+
+/** PostToolUse: re-index the repo after Edit/Write/MultiEdit. */
+export async function cmdHookPostToolUse(): Promise<void> {
+  try {
+    const input = await readStdin();
+    const toolName = (input.tool_name ?? '') as string;
+    const toolInput = (input.tool_input ?? {}) as Record<string, unknown>;
+
+    if (!['Edit', 'Write', 'MultiEdit'].includes(toolName)) process.exit(0);
+
+    const paths: string[] = [];
+    if (toolName === 'Edit' || toolName === 'Write') {
+      const fp = toolInput.file_path as string | undefined;
+      if (fp) paths.push(fp);
+    } else {
+      const edits = (toolInput.edits ?? []) as Array<Record<string, unknown>>;
+      for (const edit of edits) {
+        const fp = edit.file_path as string | undefined;
+        if (fp) paths.push(fp);
+      }
+    }
+
+    const roots = new Set<string>();
+    for (const fp of paths) {
+      const root = findRepoRoot(fp);
+      if (root) roots.add(root);
+    }
+
+    for (const root of roots) reindexRepo(root);
+  } catch { /* never block the edit */ }
+
+  process.exit(0);
+}
+
+interface RepoRow {
+  id: string;
+  root_path: string;
+  file_count: number | null;
+  indexed_at: string | null;
+}
+
+function readIndexedRepos(): RepoRow[] {
+  const base = process.env.PCTX_DATA_DIR ?? join(homedir(), '.purecontext');
+  const indexDir = join(base, 'indexes');
+  if (!existsSync(indexDir)) return [];
+
+  const _require = createRequire(import.meta.url);
+  let Database: DatabaseConstructor | null = null;
+  try {
+    Database = _require('better-sqlite3') as DatabaseConstructor;
+  } catch { return []; }
+  if (!Database) return [];
+
+  const repos: RepoRow[] = [];
+  let files: string[];
+  try {
+    files = readdirSync(indexDir).filter((f) => f.endsWith('.db'));
+  } catch { return []; }
+
+  for (const file of files) {
+    let db: InstanceType<DatabaseConstructor> | undefined;
+    try {
+      db = new Database(join(indexDir, file), { readonly: true });
+      const rows = db.prepare('SELECT id, root_path, file_count, indexed_at FROM repos LIMIT 50').all() as RepoRow[];
+      repos.push(...rows);
+    } catch { /* skip unreadable db */ } finally {
+      try { db?.close(); } catch { /* ignore */ }
+    }
+  }
+  return repos;
+}
+
+function buildSessionSnapshot(repos: RepoRow[]): string {
+  if (repos.length === 0) {
+    return [
+      'PureContext session snapshot:',
+      '- No repos currently indexed.',
+      '- Run index_folder({ path: "/absolute/path/to/project" }) to index a repo.',
+      '- Use list_repos() to check status after indexing.',
+    ].join('\n');
+  }
+
+  const lines = ['PureContext session snapshot:'];
+  for (const r of repos) {
+    const indexed = r.indexed_at
+      ? new Date(r.indexed_at).toISOString().slice(0, 19).replace('T', ' ')
+      : 'unknown';
+    lines.push(`- ${r.id} at ${r.root_path} (${r.file_count ?? '?'} files, last indexed ${indexed})`);
+  }
+  lines.push('- Use list_repos() to re-orient if needed.');
+  return lines.join('\n');
+}
+
+/** PreCompact: inject session snapshot before context compaction. */
+export async function cmdHookPreCompact(): Promise<void> {
+  try {
+    await readStdin(); // consume stdin even if unused
+  } catch { /* ignore */ }
+
+  try {
+    const repos = readIndexedRepos();
+    const message = buildSessionSnapshot(repos);
+    process.stdout.write(JSON.stringify({ systemMessage: message }) + '\n');
+  } catch {
+    process.stdout.write(JSON.stringify({
+      systemMessage: 'PureContext session snapshot unavailable. Use list_repos() to check indexed repos.',
+    }) + '\n');
+  }
+
+  process.exit(0);
+}
+
+/** WorktreeCreate: auto-index a new agent worktree. */
+export async function cmdHookWorktreeCreate(): Promise<void> {
+  try {
+    const input = await readStdin();
+    const worktreePath = (input.worktreePath ?? input.worktree_path) as string | undefined;
+    const cwd = (input.cwd ?? '') as string;
+    const name = (input.name ?? '') as string;
+
+    const targetPath = worktreePath ?? (cwd && name ? join(cwd, '.claude', 'worktrees', name) : null);
+    if (!targetPath) process.exit(0);
+
+    spawnSync('npx', ['purecontext-mcp', 'index-folder', '--path', targetPath], {
+      stdio: 'ignore',
+      timeout: 120_000,
+      shell: process.platform === 'win32',
+    });
+  } catch { /* never block */ }
+
+  process.exit(0);
+}
+
+/** WorktreeRemove: fires when an agent worktree is removed. No-op for now. */
+export async function cmdHookWorktreeRemove(): Promise<void> {
+  try { await readStdin(); } catch { /* ignore */ }
+  process.exit(0);
+}
+
+// ─── Repo stats (for TaskCompleted / SubagentStart) ───────────────────────────
+
+interface RepoStats {
+  repoId: string;
+  rootPath: string;
+  fileCount: number | null;
+  symbolCount: number | null;
+  indexedAt: string | null;
+  highComplexityCount: number;
+  todoCount: number;
+}
+
+function readRepoStats(): RepoStats[] {
+  const base = process.env.PCTX_DATA_DIR ?? join(homedir(), '.purecontext');
+  const indexDir = join(base, 'indexes');
+  if (!existsSync(indexDir)) return [];
+
+  const _require = createRequire(import.meta.url);
+  let Database: DatabaseConstructor | null = null;
+  try {
+    Database = _require('better-sqlite3') as DatabaseConstructor;
+  } catch { return []; }
+  if (!Database) return [];
+
+  let files: string[];
+  try {
+    files = readdirSync(indexDir).filter((f) => f.endsWith('.db'));
+  } catch { return []; }
+
+  const stats: RepoStats[] = [];
+
+  for (const file of files) {
+    let db: InstanceType<DatabaseConstructor> | undefined;
+    try {
+      db = new Database(join(indexDir, file), { readonly: true });
+
+      const repo = db.prepare(
+        'SELECT id, root_path, file_count, indexed_at FROM repos LIMIT 1',
+      ).get() as { id: string; root_path: string; file_count: number | null; indexed_at: string | null } | undefined;
+      if (!repo) continue;
+
+      const symRow = db.prepare(
+        'SELECT COUNT(*) AS cnt FROM symbols WHERE repo_id = ?',
+      ).get(repo.id) as { cnt: number };
+
+      const highRow = db.prepare(
+        'SELECT COUNT(*) AS cnt FROM symbols WHERE repo_id = ? AND cyclomatic_complexity > 5',
+      ).get(repo.id) as { cnt: number };
+
+      // Count TODO/FIXME occurrences across all file summaries stored in symbols
+      const todoRow = db.prepare(
+        "SELECT COUNT(*) AS cnt FROM symbols WHERE repo_id = ? AND (UPPER(summary) LIKE '%TODO%' OR UPPER(summary) LIKE '%FIXME%' OR UPPER(summary) LIKE '%HACK%')",
+      ).get(repo.id) as { cnt: number };
+
+      stats.push({
+        repoId: repo.id,
+        rootPath: repo.root_path,
+        fileCount: repo.file_count,
+        symbolCount: symRow.cnt,
+        indexedAt: repo.indexed_at,
+        highComplexityCount: highRow.cnt,
+        todoCount: todoRow.cnt,
+      });
+    } catch { /* skip unreadable db */ } finally {
+      try { db?.close(); } catch { /* ignore */ }
+    }
+  }
+
+  return stats;
+}
+
+/** TaskCompleted: surface post-task diagnostics and remind about available tools. */
+export async function cmdHookTaskCompleted(): Promise<void> {
+  try { await readStdin(); } catch { /* ignore */ }
+
+  try {
+    const repos = readRepoStats();
+    if (repos.length === 0) {
+      process.exit(0);
+    }
+
+    const lines: string[] = ['## PureContext Post-Task Summary\n'];
+
+    lines.push('**Indexed repos:**');
+    for (const r of repos) {
+      const indexed = r.indexedAt
+        ? new Date(r.indexedAt).toISOString().slice(0, 19).replace('T', ' ')
+        : 'unknown';
+      lines.push(`- \`${r.repoId}\` → \`${r.rootPath}\``);
+      lines.push(`  ${r.fileCount ?? '?'} files · ${r.symbolCount ?? '?'} symbols · indexed ${indexed}`);
+      if (r.highComplexityCount > 0) {
+        lines.push(`  ⚠ ${r.highComplexityCount} high-complexity symbols (cyclomatic > 5)`);
+      }
+      if (r.todoCount > 0) {
+        lines.push(`  📝 ${r.todoCount} symbols with TODO/FIXME/HACK in their summary`);
+      }
+    }
+
+    lines.push('');
+    lines.push('**Post-task diagnostic tools:**');
+    lines.push('- `find_dead_code`          → orphaned exports with no importers');
+    lines.push('- `find_untested_symbols`   → exported symbols with no test coverage');
+    lines.push('- `get_todos`               → all TODO/FIXME/HACK comments in the codebase');
+    lines.push('- `get_complexity_hotspots` → most complex functions to review');
+    lines.push('- `health_radar`            → overall codebase health score');
+
+    process.stdout.write(JSON.stringify({ systemMessage: lines.join('\n') }) + '\n');
+  } catch {
+    // Never block task completion
+  }
+
+  process.exit(0);
+}
+
+/** SubagentStart: inject condensed repo orientation for spawned subagents. */
+export async function cmdHookSubagentStart(): Promise<void> {
+  try { await readStdin(); } catch { /* ignore */ }
+
+  try {
+    const repos = readRepoStats();
+
+    const lines: string[] = ['## PureContext Repo Orientation\n'];
+
+    if (repos.length === 0) {
+      lines.push('No repos indexed yet.');
+      lines.push('Run `index_folder({ path: "/absolute/path" })` before navigating code.');
+    } else {
+      lines.push('**Indexed repos (use these repoIds with all tools):**');
+      for (const r of repos) {
+        const indexed = r.indexedAt
+          ? new Date(r.indexedAt).toISOString().slice(0, 19).replace('T', ' ')
+          : 'unknown';
+        lines.push(`- repoId \`${r.repoId}\` → \`${r.rootPath}\``);
+        lines.push(`  ${r.fileCount ?? '?'} files · ${r.symbolCount ?? '?'} symbols · indexed ${indexed}`);
+      }
+    }
+
+    lines.push('');
+    lines.push('**Mandatory workflow — follow this order:**');
+    lines.push('1. `list_repos()` — always run first to confirm repoId');
+    lines.push('2. Navigate by symbol, not by file:');
+    lines.push('   | Goal | Tool |');
+    lines.push('   |------|------|');
+    lines.push('   | Find function/class by name | `search_symbols` |');
+    lines.push('   | Find code by what it does | `search_semantic` |');
+    lines.push('   | See all symbols in a file | `get_file_outline` |');
+    lines.push('   | Read a specific symbol | `get_symbol_source` |');
+    lines.push('   | Understand dependencies | `get_context_bundle` |');
+    lines.push('   | Know what breaks if I change X | `get_blast_radius` |');
+    lines.push('   | Find all call sites | `find_references` |');
+    lines.push('   | Non-symbol content (imports, config) | `get_file_content` with startLine/endLine |');
+    lines.push('3. Read `summary` and `signature` before fetching source — only fetch what you will edit.');
+    lines.push('');
+    lines.push('**Never:** read whole files · use `search_text` for symbol lookups · skip `list_repos()`');
+
+    process.stdout.write(JSON.stringify({ systemMessage: lines.join('\n') }) + '\n');
+  } catch {
+    // Never block the subagent from starting
+  }
+
+  process.exit(0);
 }
 
 // ─── CLI dispatcher ───────────────────────────────────────────────────────────

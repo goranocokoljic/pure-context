@@ -9,10 +9,10 @@ import { createEmbeddingProvider } from '../../semantic/embedding-provider.js';
 import { VectorStore } from '../../semantic/vector-store.js';
 import { HybridSearcher } from '../../semantic/hybrid-search.js';
 import { logger } from '../../core/logger.js';
-import { preprocessQuery, toOrFallbackQuery } from '../../core/search/query-preprocessor.js';
+import { preprocessQuery, toOrFallbackQuery, isStopWord } from '../../core/search/query-preprocessor.js';
 import { rankSymbols, isLibraryPath } from '../../core/search/relevance-ranker.js';
 import { resolveRepoScope } from '../../core/db/repo-scope.js';
-import type { ScoredSymbol } from '../../core/search/relevance-ranker.js';
+import type { ScoredSymbol, RankOptions } from '../../core/search/relevance-ranker.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SymbolRecord } from '../../core/types.js';
 
@@ -213,12 +213,15 @@ export async function handler(args: {
   // rust: Only enable Rust async/serde synonyms (future→poll, spawn→tokio, etc.)
   // for Rust repos — prevents 'future→poll' from making FutureBase::poll outscore
   // folly::Future in C++ repos like facebook-folly.
-  const RENDERING_REPO_PATTERN = /render|shader|scene|material|graphic|mitsuba|pbr|tracer|opengl|vulkan|cuda|opencl/i;
+  const RENDERING_REPO_PATTERN = /render|draw|shader|scene|material|graphic|mitsuba|pbr|tracer|opengl|vulkan|cuda|opencl/i;
   const RUST_REPO_PATTERN = /\brust\b|tokio|serde|actix|axum|hyper|warp|rocket|cargo/i;
+  const JAVA_GROOVY_REPO_PATTERN = /\bjenkins\b|\bgradle\b|\bspring\b|\bmaven\b|\bgroovy\b/i;
   const domain = repos.some((r) => RENDERING_REPO_PATTERN.test(r.name))
     ? 'rendering'
     : repos.some((r) => RUST_REPO_PATTERN.test(r.name))
     ? 'rust'
+    : repos.some((r) => JAVA_GROOVY_REPO_PATTERN.test(r.name))
+    ? 'java'
     : undefined;
 
   // ── Determine effective mode using first repo with a semantic index ─────────
@@ -402,10 +405,14 @@ export async function handler(args: {
           // doesn't appear in ProductsService.create's FTS content).
           // Also fire when ALL AND results are library code (system/, vendor/, etc.)
           // — in that case application symbols can only enter via the OR pool.
+          // Also fire when query asks for a React hook (use*/hook) but AND pool has
+          // no use[A-Z] symbols — hook names rarely satisfy all AND terms.
+          const isHookQuery = hasReactHookQuery(args.query);
           const needsOrFallback =
             symbols.length === 0 ||
             !hasServiceMethodCandidate(symbols) ||
-            symbols.every((s) => isLibraryPath(s.filePath));
+            symbols.every((s) => isLibraryPath(s.filePath)) ||
+            (isHookQuery && !symbols.some((s) => /^use[A-Z]/.test(s.name)));
           if (needsOrFallback) {
             const orQuery = toOrFallbackQuery(ftsQuery, domain);
             if (orQuery !== ftsQuery) {
@@ -475,7 +482,15 @@ export async function handler(args: {
         searchMode = 'like_fallback';
       }
 
-      const ranked: ScoredSymbol[] = rankSymbols(symbols, args.query, args.debug, domain);
+      const rankOpts: RankOptions = {
+        isMixedMonorepo: detectMixedMonorepo(symbols),
+        hasReactHookQuery: hasReactHookQuery(args.query),
+        isJavaGroovyMixed: detectJavaGroovyMixed(symbols),
+        isAngularRepo: symbols.some(
+          (s) => s.filePath.endsWith('.component.ts') || s.filePath.endsWith('.module.ts'),
+        ),
+      };
+      const ranked: ScoredSymbol[] = rankSymbols(symbols, args.query, args.debug, domain, rankOpts);
 
       const uniqueFiles = [...new Set(ranked.map((r) => r.symbol.filePath))];
       const fileSizes = getFileSizesBatch(db, repo.id, uniqueFiles);
@@ -559,6 +574,62 @@ export async function handler(args: {
 
 function round4(n: number): number {
   return Math.round(n * 10000) / 10000;
+}
+
+/**
+ * Return true when the query is asking for a React hook: the first meaningful
+ * token starts with 'use' and has ≥ 4 chars (filters out the English word
+ * "use"), OR the query contains the word 'hook' / 'hooks'.
+ */
+function hasReactHookQuery(query: string): boolean {
+  const words = query.toLowerCase().split(/[\s-]+/).filter(Boolean);
+  const firstMeaningful = words.find((w) => !isStopWord(w) && w.length >= 2);
+  if (firstMeaningful && firstMeaningful.startsWith('use') && firstMeaningful.length >= 4) return true;
+  return words.includes('hook') || words.includes('hooks');
+}
+
+/**
+ * Return true when the candidate symbol pool contains symbols from both a
+ * frontend app path (apps/dashboard/, apps/web/, etc.) and a backend app path
+ * (apps/api/, apps/server/, etc.), indicating a mixed frontend+backend monorepo.
+ *
+ * Uses the already-fetched FTS5 candidate pool — no extra DB queries.
+ */
+function detectMixedMonorepo(symbols: SymbolRecord[]): boolean {
+  let hasFrontend = false;
+  let hasBackend = false;
+  for (const s of symbols) {
+    const p = '/' + s.filePath.replace(/\\/g, '/');
+    if (
+      p.includes('/apps/dashboard/') ||
+      p.includes('/apps/web/') ||
+      p.includes('/apps/frontend/') ||
+      p.includes('/apps/client/')
+    ) hasFrontend = true;
+    if (
+      p.includes('/apps/api/') ||
+      p.includes('/apps/server/') ||
+      p.includes('/apps/backend/')
+    ) hasBackend = true;
+    if (hasFrontend && hasBackend) return true;
+  }
+  return false;
+}
+
+/**
+ * Return true when the candidate pool contains both .java and .groovy symbols,
+ * indicating a mixed Java+Groovy repo (gradle, jenkins, groovy) where Groovy
+ * `def` methods may be outranked by numerically-dominant Java methods.
+ */
+function detectJavaGroovyMixed(symbols: SymbolRecord[]): boolean {
+  let hasJava = false;
+  let hasGroovy = false;
+  for (const s of symbols) {
+    if (s.filePath.endsWith('.java')) hasJava = true;
+    else if (s.filePath.endsWith('.groovy')) hasGroovy = true;
+    if (hasJava && hasGroovy) return true;
+  }
+  return false;
 }
 
 /**

@@ -13,6 +13,8 @@ import { homedir } from 'os';
 import { cmdHooksInstall } from './hooks.js';
 import { getClaudeDesktopConfigPath } from './install-detect.js';
 
+export type Scope = 'local' | 'global' | 'both';
+
 // ─── Shared markers ───────────────────────────────────────────────────────────
 
 export const START_MARKER = '<!-- purecontext-mcp-start -->';
@@ -88,130 +90,186 @@ function writeIdempotent(filePath: string, content: string): void {
 // ─── Per-IDE installers ───────────────────────────────────────────────────────
 
 /**
- * Install for Claude Code — delegates to the existing hooks installer which
- * handles CLAUDE.md injection and hook registration.
+ * Install for Claude Code.
+ * local  → writes instruction block to <project>/CLAUDE.md
+ * global → writes hooks + ~/.claude/CLAUDE.md (existing behaviour)
+ * both   → both of the above
  */
-export async function installClaude(_projectRoot: string): Promise<void> {
-  cmdHooksInstall();
-}
-
-/**
- * Write `.cursor/rules/purecontext.mdc` with MDC frontmatter.
- * Creates `.cursor/rules/` if missing.
- */
-export async function installCursor(projectRoot: string): Promise<void> {
-  const filePath = join(projectRoot, '.cursor', 'rules', 'purecontext.mdc');
-  ensureDir(filePath);
-
-  const mdcContent = getPureContextInstructions('mdc');
-
-  if (existsSync(filePath)) {
-    const existing = readFileSync(filePath, 'utf-8');
-    if (existing.includes(START_MARKER)) {
-      // Replace just the instruction block inside the file
-      writeFileSync(filePath, replaceMarkerBlock(existing, markedBlock(MARKDOWN_CONTENT)), 'utf-8');
-      return;
+export async function installClaude(projectRoot: string, scope: Scope): Promise<void> {
+  if (scope === 'local' || scope === 'both') {
+    const filePath = join(projectRoot, 'CLAUDE.md');
+    const block = markedBlock(getPureContextInstructions('markdown'));
+    if (existsSync(filePath)) {
+      const existing = readFileSync(filePath, 'utf-8');
+      writeFileSync(filePath, replaceMarkerBlock(existing, block), 'utf-8');
+    } else {
+      writeIdempotent(filePath, block + '\n');
     }
   }
-
-  writeIdempotent(filePath, mdcContent + '\n');
-}
-
-/**
- * Append/update a marked block in `.windsurfrules`.
- * Creates the file if missing.
- */
-export async function installWindsurf(projectRoot: string): Promise<void> {
-  const filePath = join(projectRoot, '.windsurfrules');
-  const block = markedBlock(getPureContextInstructions('markdown'));
-
-  if (existsSync(filePath)) {
-    const existing = readFileSync(filePath, 'utf-8');
-    writeFileSync(filePath, replaceMarkerBlock(existing, block), 'utf-8');
-  } else {
-    writeIdempotent(filePath, block + '\n');
+  if (scope === 'global' || scope === 'both') {
+    cmdHooksInstall();
   }
 }
 
 /**
- * Merge a `systemMessage` field into `.continue/config.json`.
- * Creates a minimal config if the file does not exist.
- * Never overwrites other config fields.
+ * Write `purecontext.mdc` with MDC frontmatter.
+ * local  → <project>/.cursor/rules/
+ * global → ~/.cursor/rules/
  */
-export async function installContinue(projectRoot: string): Promise<void> {
-  const filePath = join(projectRoot, '.continue', 'config.json');
-  ensureDir(filePath);
-
-  const instructions = getPureContextInstructions('json-system');
-
-  let config: Record<string, unknown> = {};
-  if (existsSync(filePath)) {
-    try {
-      config = JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
-    } catch {
-      config = {};
+export async function installCursor(projectRoot: string, scope: Scope): Promise<void> {
+  const writeMdc = (filePath: string) => {
+    ensureDir(filePath);
+    const mdcContent = getPureContextInstructions('mdc');
+    if (existsSync(filePath)) {
+      const existing = readFileSync(filePath, 'utf-8');
+      if (existing.includes(START_MARKER)) {
+        writeFileSync(filePath, replaceMarkerBlock(existing, markedBlock(MARKDOWN_CONTENT)), 'utf-8');
+        return;
+      }
     }
-  }
+    writeIdempotent(filePath, mdcContent + '\n');
+  };
 
-  config['systemMessage'] = instructions;
-  writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  if (scope === 'local' || scope === 'both') {
+    writeMdc(join(projectRoot, '.cursor', 'rules', 'purecontext.mdc'));
+  }
+  if (scope === 'global' || scope === 'both') {
+    writeMdc(join(homedir(), '.cursor', 'rules', 'purecontext.mdc'));
+  }
+}
+
+/**
+ * Write `purecontext.md` into the Windsurf rules directory.
+ * local  → <project>/.windsurf/rules/purecontext.md
+ * global → ~/.windsurf/rules/purecontext.md
+ */
+export async function installWindsurf(projectRoot: string, scope: Scope): Promise<void> {
+  const writeLocal = (filePath: string) => {
+    ensureDir(filePath);
+    writeFileSync(filePath, getPureContextInstructions('markdown') + '\n', 'utf-8');
+  };
+
+  const writeGlobal = (filePath: string) => {
+    const block = markedBlock(getPureContextInstructions('markdown'));
+    ensureDir(filePath);
+    if (existsSync(filePath)) {
+      const existing = readFileSync(filePath, 'utf-8');
+      writeFileSync(filePath, replaceMarkerBlock(existing, block), 'utf-8');
+    } else {
+      writeFileSync(filePath, block + '\n', 'utf-8');
+    }
+  };
+
+  if (scope === 'local' || scope === 'both') {
+    writeLocal(join(projectRoot, '.windsurf', 'rules', 'purecontext.md'));
+  }
+  if (scope === 'global' || scope === 'both') {
+    writeGlobal(join(homedir(), '.windsurf', 'rules', 'purecontext.md'));
+  }
+}
+
+/**
+ * Merge a `systemMessage` field into a Continue `config.json`.
+ * local  → <project>/.continue/config.json
+ * global → ~/.continue/config.json
+ */
+export async function installContinue(projectRoot: string, scope: Scope): Promise<void> {
+  const writeConfig = (filePath: string) => {
+    ensureDir(filePath);
+    const instructions = getPureContextInstructions('json-system');
+    let config: Record<string, unknown> = {};
+    if (existsSync(filePath)) {
+      try {
+        config = JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
+      } catch {
+        config = {};
+      }
+    }
+    config['systemMessage'] = instructions;
+    writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+  };
+
+  if (scope === 'local' || scope === 'both') {
+    writeConfig(join(projectRoot, '.continue', 'config.json'));
+  }
+  if (scope === 'global' || scope === 'both') {
+    writeConfig(join(homedir(), '.continue', 'config.json'));
+  }
 }
 
 /**
  * Write `.clinerules` with a marked block.
- * Idempotent via markers.
+ * local only — Cline has no known global config path.
  */
-export async function installCline(projectRoot: string): Promise<void> {
+export async function installCline(projectRoot: string, scope: Scope): Promise<void> {
+  if (scope === 'global') {
+    console.log('  cline: no known global config path — skipped');
+    return;
+  }
   const filePath = join(projectRoot, '.clinerules');
   const block = markedBlock(getPureContextInstructions('markdown'));
-
   if (existsSync(filePath)) {
     const existing = readFileSync(filePath, 'utf-8');
     writeFileSync(filePath, replaceMarkerBlock(existing, block), 'utf-8');
   } else {
     writeIdempotent(filePath, block + '\n');
+  }
+  if (scope === 'both') {
+    console.log('  cline: no known global config path — global install skipped');
   }
 }
 
 /**
  * Write `.roo/rules-code.md` with a marked block.
- * Creates `.roo/` if missing.
+ * local only — Roo Code has no known global config path.
  */
-export async function installRooCode(projectRoot: string): Promise<void> {
+export async function installRooCode(projectRoot: string, scope: Scope): Promise<void> {
+  if (scope === 'global') {
+    console.log('  roo-code: no known global config path — skipped');
+    return;
+  }
   const filePath = join(projectRoot, '.roo', 'rules-code.md');
   const block = markedBlock(getPureContextInstructions('markdown'));
   ensureDir(filePath);
-
   if (existsSync(filePath)) {
     const existing = readFileSync(filePath, 'utf-8');
     writeFileSync(filePath, replaceMarkerBlock(existing, block), 'utf-8');
   } else {
     writeFileSync(filePath, block + '\n', 'utf-8');
+  }
+  if (scope === 'both') {
+    console.log('  roo-code: no known global config path — global install skipped');
   }
 }
 
 /**
  * Write `.github/copilot-instructions.md` with a marked block.
- * Creates `.github/` if missing.
+ * local only — GitHub Copilot has no standard global instructions path.
  */
-export async function installVSCode(projectRoot: string): Promise<void> {
+export async function installCopilot(projectRoot: string, scope: Scope): Promise<void> {
+  if (scope === 'global') {
+    console.log('  copilot: no known global config path — skipped');
+    return;
+  }
   const filePath = join(projectRoot, '.github', 'copilot-instructions.md');
   const block = markedBlock(getPureContextInstructions('markdown'));
   ensureDir(filePath);
-
   if (existsSync(filePath)) {
     const existing = readFileSync(filePath, 'utf-8');
     writeFileSync(filePath, replaceMarkerBlock(existing, block), 'utf-8');
   } else {
     writeFileSync(filePath, block + '\n', 'utf-8');
   }
+  if (scope === 'both') {
+    console.log('  copilot: no known global config path — global install skipped');
+  }
 }
 
 /**
  * Merge the PureContext MCP server entry into the Claude Desktop config JSON.
- * Reads from the platform-specific config path; skips if already present.
+ * Always global — scope parameter is accepted for API consistency but ignored.
  */
-export async function installClaudeDesktop(_projectRoot: string): Promise<void> {
+export async function installClaudeDesktop(_projectRoot: string, _scope: Scope): Promise<void> {
   const configPath = getClaudeDesktopConfigPath();
   if (!configPath) {
     throw new Error('Cannot determine Claude Desktop config path for this platform');
@@ -247,13 +305,13 @@ export async function installClaudeDesktop(_projectRoot: string): Promise<void> 
 
 // ─── Dispatch table ───────────────────────────────────────────────────────────
 
-export const INSTALL_WRITERS: Record<string, (projectRoot: string) => Promise<void>> = {
+export const INSTALL_WRITERS: Record<string, (projectRoot: string, scope: Scope) => Promise<void>> = {
   'claude': installClaude,
   'cursor': installCursor,
   'windsurf': installWindsurf,
   'continue': installContinue,
   'cline': installCline,
   'roo-code': installRooCode,
-  'vscode': installVSCode,
+  'copilot': installCopilot,
   'claude-desktop': installClaudeDesktop,
 };

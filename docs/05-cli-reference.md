@@ -37,6 +37,95 @@ purecontext-mcp config --check
 purecontext-mcp config
 ```
 
+### `install`
+
+Write PureContext workflow rules into the conventions file each AI tool expects.
+
+```bash
+# Auto-detect installed tools and install rules for all of them
+npx purecontext-mcp install all
+
+# Install for a specific tool
+npx purecontext-mcp install cursor
+npx purecontext-mcp install windsurf
+npx purecontext-mcp install continue
+npx purecontext-mcp install cline
+npx purecontext-mcp install roo-code
+npx purecontext-mcp install vscode
+npx purecontext-mcp install claude
+npx purecontext-mcp install claude-desktop
+```
+
+When no `--scope` flag is given, the CLI prompts interactively:
+
+```
+Where should PureContext be installed?
+  1) Local  — this project only
+  2) Global — all projects (user-level config)
+  3) Both
+```
+
+Pass `--scope` to skip the prompt:
+
+```bash
+npx purecontext-mcp install all --scope=global   # user-level for all IDEs
+npx purecontext-mcp install cursor --scope=both  # project + home dir
+npx purecontext-mcp install all --scope=local    # this project only
+```
+
+Useful flags:
+
+```bash
+npx purecontext-mcp install --list              # show detection state, write nothing
+npx purecontext-mcp install all --dry-run       # preview which writers would run
+npx purecontext-mcp install all --scope=global  # install globally without prompt
+```
+
+**Scope behaviour per tool:**
+
+| Tool | Local | Global |
+|------|-------|--------|
+| `claude` | `CLAUDE.md` in project | `~/.claude/CLAUDE.md` + hooks |
+| `cursor` | `.cursor/rules/purecontext.mdc` | `~/.cursor/rules/purecontext.mdc` |
+| `windsurf` | `.windsurfrules` | `~/.windsurfrules` |
+| `continue` | `.continue/config.json` | `~/.continue/config.json` |
+| `cline` | `.clinerules` | local only (no global path) |
+| `roo-code` | `.roo/rules-code.md` | local only (no global path) |
+| `vscode` | `.github/copilot-instructions.md` | local only (no global path) |
+| `claude-desktop` | always global | always global |
+
+All writers are idempotent: re-running updates the marked block in place without touching anything outside it.
+
+### `hooks`
+
+Install or inspect Claude Code hook registrations.
+
+```bash
+# Register all PureContext hooks in ~/.claude/settings.json
+npx purecontext-mcp hooks --install
+
+# List current hook registration status
+npx purecontext-mcp hooks --list
+```
+
+Hooks are registered as CLI commands in `~/.claude/settings.json`. Re-running `--install` is safe — it replaces existing PureContext entries (including any old `.mjs`-path style entries from earlier versions) while leaving other tools' hooks untouched.
+
+### `hook-*` (Claude Code hook handlers)
+
+These are the hook handlers invoked by Claude Code. They are not meant to be called directly; they are registered by `hooks --install` and executed automatically by Claude Code as events fire.
+
+| Command | Hook event | What it does |
+|---------|-----------|--------------|
+| `hook-posttooluse` | `PostToolUse` | Re-indexes files modified by Edit/Write/MultiEdit |
+| `hook-pretooluse` | `PreToolUse` | Soft edit guard — suggests read tools before editing |
+| `hook-precompact` | `PreCompact` | Injects the list of indexed repos before context compaction |
+| `hook-worktree-create` | `WorktreeCreate` | Auto-indexes a newly created agent worktree |
+| `hook-worktree-remove` | `WorktreeRemove` | Fires when an agent worktree is removed (no-op, reserved) |
+| `hook-taskcompleted` | `TaskCompleted` | Post-task diagnostics: complexity hotspots, TODO count, tool suggestions |
+| `hook-subagentstart` | `SubagentStart` | Injects condensed repo orientation for newly spawned subagents |
+
+All handlers read from stdin (the JSON payload Claude Code sends) and write a `systemMessage` JSON object to stdout when they have context to inject. They always exit 0 and never block tool execution.
+
 ### `keys`
 
 Manage API keys for hosted deployments.

@@ -53,6 +53,13 @@ import { erlangHandler } from '../handlers/erlang.js';
 import { gleamHandler } from '../handlers/gleam.js';
 import { gdscriptHandler } from '../handlers/gdscript.js';
 import { xmlHandler } from '../handlers/xml.js';
+import { fortranHandler } from '../handlers/fortran.js';
+import { scssHandler } from '../handlers/scss.js';
+import { lessHandler } from '../handlers/less.js';
+import { cssHandler } from '../handlers/css.js';
+import { objectiveCHandler } from '../handlers/objective-c.js';
+import { hclHandler } from '../handlers/hcl.js';
+import { angularHtmlHandler } from '../handlers/angular-html.js';
 
 registerHandler(typescriptHandler);
 registerHandler(tsxHandler);
@@ -87,6 +94,13 @@ registerHandler(erlangHandler);
 registerHandler(gleamHandler);
 registerHandler(gdscriptHandler);
 registerHandler(xmlHandler);
+registerHandler(fortranHandler);
+registerHandler(scssHandler);
+registerHandler(lessHandler);
+registerHandler(cssHandler);
+registerHandler(objectiveCHandler);
+registerHandler(hclHandler);
+registerHandler(angularHtmlHandler);
 
 // ─── Adapter self-registration ────────────────────────────────────────────────
 // Workers have their own module instance — adapters must be imported here so

@@ -175,6 +175,33 @@ service UserService {
     expect(names).toContain('UserService.GetUser');
   });
 
+  // ── frameworkMeta.serviceName on RPC methods ─────────────────────────────
+
+  it('stores serviceName in frameworkMeta for rpc methods', () => {
+    const { tree, buf } = parse(`
+service Spanner {
+  rpc Read(ReadRequest) returns (ResultSet);
+  rpc Commit(CommitRequest) returns (CommitResponse);
+}
+`);
+    const syms = protobufHandler.extractSymbols(tree, buf, 'spanner.proto');
+    const read = syms.find((s) => s.name === 'Spanner.Read');
+    const commit = syms.find((s) => s.name === 'Spanner.Commit');
+    expect(read!.frameworkMeta?.['serviceName']).toBe('Spanner');
+    expect(commit!.frameworkMeta?.['serviceName']).toBe('Spanner');
+  });
+
+  it('service symbols do not have frameworkMeta.serviceName', () => {
+    const { tree, buf } = parse(`
+service MyService {
+  rpc Foo(FooReq) returns (FooResp);
+}
+`);
+    const syms = protobufHandler.extractSymbols(tree, buf, 'svc.proto');
+    const svc = syms.find((s) => s.name === 'MyService');
+    expect(svc!.frameworkMeta).toBeUndefined();
+  });
+
   // ── byte offsets are set ─────────────────────────────────────────────────
 
   it('sets non-zero startByte and endByte', () => {

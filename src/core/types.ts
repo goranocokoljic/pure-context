@@ -163,6 +163,22 @@ export interface IndexOptions {
    * Useful in tests that need a repo indexed without any git history.
    */
   skipGit?: boolean;
+  /**
+   * Skip the test-mapper pass after indexing.
+   * Use in benchmark runs to avoid the O(symbols×testFiles) cost on large repos.
+   */
+  skipTestMapper?: boolean;
+  /**
+   * Bare filenames (no extension) to discover and index.
+   * e.g. ["functions"] to pick up dokku plugin `functions` files.
+   * Routed to handlers via shebang detection in the file processor.
+   */
+  extensionlessFilenames?: string[];
+  /**
+   * Override the per-file size cap. Default: 1 MB.
+   * Raise this when indexing repos containing large spec files (OpenAPI, GraphQL schemas).
+   */
+  maxFileSizeBytes?: number;
 }
 
 export interface IndexResult {

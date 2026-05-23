@@ -1,15 +1,54 @@
 /**
- * `purecontext-mcp install <tool|all>  [--dry-run]  [--list]`
+ * `purecontext-mcp install <tool|all>  [--scope=local|global|both]  [--dry-run]  [--list]`
  *
  * Installs PureContext agent instructions into the conventions file of the
  * specified AI coding IDE.  `install all` auto-detects installed tools and
  * installs each in sequence.  `install --list` shows detection state without
  * writing anything.
+ *
+ * If `--scope` is omitted the user is prompted interactively.  In
+ * non-interactive environments (piped stdin) the prompt is skipped and
+ * `local` is used as a safe default.
  */
 
+import { createInterface } from 'readline';
 import { join } from 'path';
 import { detectInstalledIDEs } from './install-detect.js';
-import { INSTALL_WRITERS } from './install-writers.js';
+import { INSTALL_WRITERS, type Scope } from './install-writers.js';
+
+// ─── Scope helpers ────────────────────────────────────────────────────────────
+
+const VALID_SCOPES = ['local', 'global', 'both'] as const;
+
+function parseScope(args: string[]): Scope | undefined {
+  // --scope=local  or  --scope local
+  const eqForm = args.find((a) => a.startsWith('--scope='))?.split('=')[1];
+  if (eqForm) return VALID_SCOPES.includes(eqForm as Scope) ? (eqForm as Scope) : undefined;
+  const idx = args.indexOf('--scope');
+  if (idx !== -1 && args[idx + 1]) {
+    const val = args[idx + 1];
+    return VALID_SCOPES.includes(val as Scope) ? (val as Scope) : undefined;
+  }
+  return undefined;
+}
+
+async function promptScope(): Promise<Scope> {
+  if (!process.stdin.isTTY) return 'local';
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    console.log('\nWhere should PureContext be installed?');
+    console.log('  1) Local  — this project only');
+    console.log('  2) Global — all projects (user-level config)');
+    console.log('  3) Both\n');
+    rl.question('Choice [1/2/3]: ', (answer) => {
+      rl.close();
+      const trimmed = answer.trim();
+      if (trimmed === '2') resolve('global');
+      else if (trimmed === '3') resolve('both');
+      else resolve('local');
+    });
+  });
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -20,7 +59,7 @@ const KNOWN_TOOLS = [
   'continue',
   'cline',
   'roo-code',
-  'vscode',
+  'copilot',
   'claude-desktop',
 ] as const;
 
@@ -32,17 +71,17 @@ function isKnownTool(tool: string): tool is KnownTool {
   return (KNOWN_TOOLS as readonly string[]).includes(tool);
 }
 
-async function runInstall(tool: string, projectRoot: string, dryRun: boolean): Promise<boolean> {
+async function runInstall(tool: string, projectRoot: string, dryRun: boolean, scope: Scope): Promise<boolean> {
   const writer = INSTALL_WRITERS[tool];
   if (!writer) return false;
 
   if (dryRun) {
-    console.log(`  [dry-run] Would install: ${tool}`);
+    console.log(`  [dry-run] Would install: ${tool} (${scope})`);
     return true;
   }
 
   try {
-    await writer(projectRoot);
+    await writer(projectRoot, scope);
     return true;
   } catch (err) {
     process.stderr.write(`  Error installing ${tool}: ${(err as Error).message}\n`);
@@ -52,7 +91,7 @@ async function runInstall(tool: string, projectRoot: string, dryRun: boolean): P
 
 // ─── Sub-commands ─────────────────────────────────────────────────────────────
 
-async function cmdInstallOne(tool: string, projectRoot: string, dryRun: boolean): Promise<void> {
+async function cmdInstallOne(tool: string, projectRoot: string, dryRun: boolean, scope: Scope): Promise<void> {
   if (!isKnownTool(tool)) {
     process.stderr.write(
       `Unknown tool: "${tool}"\nValid tools: ${KNOWN_TOOLS.join(', ')}\n`,
@@ -60,13 +99,13 @@ async function cmdInstallOne(tool: string, projectRoot: string, dryRun: boolean)
     process.exit(1);
   }
 
-  const ok = await runInstall(tool, projectRoot, dryRun);
+  const ok = await runInstall(tool, projectRoot, dryRun, scope);
   if (ok && !dryRun) {
-    console.log(`\nInstalled for ${tool}.`);
+    console.log(`\nInstalled for ${tool} (${scope}).`);
   }
 }
 
-async function cmdInstallAll(projectRoot: string, dryRun: boolean): Promise<void> {
+async function cmdInstallAll(projectRoot: string, dryRun: boolean, scope: Scope): Promise<void> {
   const detected = await detectInstalledIDEs(projectRoot);
 
   if (detected.length === 0) {
@@ -87,7 +126,7 @@ async function cmdInstallAll(projectRoot: string, dryRun: boolean): Promise<void
 
   for (const tool of toInstall) {
     const label = `Installing ${tool}...`.padEnd(24);
-    const ok = await runInstall(tool, projectRoot, dryRun);
+    const ok = await runInstall(tool, projectRoot, dryRun, scope);
     console.log(`${label} ${ok ? '✓' : '✗'}`);
   }
 
@@ -121,14 +160,18 @@ export async function runInstallCommand(args: string[]): Promise<void> {
   }
 
   if (!toolArg) {
-    process.stderr.write('Usage: purecontext-mcp install <tool|all>  [--dry-run]  [--list]\n');
+    process.stderr.write(
+      'Usage: purecontext-mcp install <tool|all>  [--scope=local|global|both]  [--dry-run]  [--list]\n',
+    );
     process.stderr.write(`Supported tools: ${KNOWN_TOOLS.join(', ')}\n`);
     process.exit(1);
   }
 
+  const scope: Scope = parseScope(args) ?? (await promptScope());
+
   if (toolArg === 'all') {
-    await cmdInstallAll(projectRoot, dryRun);
+    await cmdInstallAll(projectRoot, dryRun, scope);
   } else {
-    await cmdInstallOne(toolArg, projectRoot, dryRun);
+    await cmdInstallOne(toolArg, projectRoot, dryRun, scope);
   }
 }

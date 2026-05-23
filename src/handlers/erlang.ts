@@ -179,6 +179,8 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
   const specs = new Map<string, string>();
   // Track emitted function keys to collapse multiple clauses into one symbol
   const emitted = new Set<string>();
+  // Current module name (set when -module(name) is encountered)
+  let currentModule: string | undefined;
 
   // ── First pass: collect -spec attributes ────────────────────────────────────
   for (let j = 0; j < lines.length; j++) {
@@ -212,6 +214,7 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
     const modMatch = MODULE_RE.exec(text);
     if (modMatch) {
       const name = modMatch[1]!;
+      currentModule = name;
       const end = findErlangFormEnd(lines, i);
       symbols.push({
         id: makeId(filePath, name, 'class'),
@@ -284,15 +287,18 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
       if (!emitted.has(key)) {
         emitted.add(key);
         const sig = specs.get(key) ?? trunc(`${fnName}/${arity}`);
+        const meta: Record<string, unknown> = { arity };
+        if (currentModule) meta['module'] = currentModule;
         symbols.push({
           id: makeId(filePath, key, 'function'),
-          name: key,
+          name: fnName,
           kind: 'function',
           filePath,
           startByte: lines[i]!.startByte,
           endByte: lines[end]!.endByte,
           signature: sig,
           summary: precedingErlangComment(lines, i) ?? `Erlang function: ${fnName}/${arity}`,
+          frameworkMeta: meta,
         });
       }
 

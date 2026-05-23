@@ -41,7 +41,14 @@ export async function processFile(
     imports = result.imports;
   } else {
     // Normal handler path
-    const handler = getHandler(relPath);
+    let handler = getHandler(relPath);
+    // Extensionless file fallback: detect bash/sh scripts by shebang
+    if (!handler && !relPath.includes('.')) {
+      const firstLine = content.slice(0, 256).toString('utf8').split('\n')[0] ?? '';
+      if (/^#!.*\b(bash|sh|zsh)\b/.test(firstLine)) {
+        handler = getHandlerByLanguage('bash');
+      }
+    }
     if (!handler) return { symbols: [], imports: [] };
 
     // Content-based detection gate: handlers with detect() may claim ambiguous
@@ -64,6 +71,25 @@ export async function processFile(
         ...imp,
         sourceFile: relPath,
       }));
+    }
+
+    // C/ObjC header fallback: the ObjC handler returns 0 symbols for pure-C headers
+    // (its detection guard skips files without @interface/@protocol markers). When
+    // that happens, re-process the file with the C handler so that #define macros,
+    // typedef structs, and forward declarations in C headers are still indexed.
+    if (symbols.length === 0 && relPath.endsWith('.h')) {
+      const cFallback = getHandlerByLanguage('c');
+      if (cFallback && cFallback !== handler) {
+        const cTree = await parseFile(content, cFallback);
+        const cSymbols = cFallback.extractSymbols(cTree, content, relPath);
+        if (cSymbols.length > 0) {
+          symbols = cSymbols;
+          imports = cFallback.extractImports(cTree, content).map((imp) => ({
+            ...imp,
+            sourceFile: relPath,
+          }));
+        }
+      }
     }
   }
 

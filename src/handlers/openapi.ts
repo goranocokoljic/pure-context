@@ -64,6 +64,29 @@ interface OpenApiSpec {
 const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace'] as const;
 type HttpMethod = (typeof HTTP_METHODS)[number];
 
+// ─── Path summary enrichment (Task 435) ──────────────────────────────────────
+
+const METHOD_VERBS: Readonly<Record<string, readonly string[]>> = {
+  POST:    ['create', 'add', 'submit'],
+  GET:     ['retrieve', 'fetch', 'list', 'read'],
+  PUT:     ['update', 'replace', 'modify'],
+  PATCH:   ['update', 'modify', 'patch'],
+  DELETE:  ['delete', 'remove', 'destroy'],
+};
+
+/**
+ * Enrich a path operation summary with HTTP-verb semantics and path tokens so
+ * natural-language queries ("retrieve customers", "create payment intent") find
+ * the relevant endpoint via FTS even when the operation has no summary text.
+ */
+function enrichPathSummary(method: string, path: string, op: OpenApiOperation): string {
+  const verbs = METHOD_VERBS[method] ?? [];
+  const baseSummary = op.summary ?? op.description ?? '';
+  // Tokenise the URL path: drop leading slash, split on / { }
+  const pathTokens = path.replace(/^\//, '').split(/[/{}]/).filter(Boolean).join(' ');
+  return [verbs.join(' '), baseSummary, pathTokens].filter(Boolean).join(' — ').slice(0, 200);
+}
+
 // ─── Byte-offset helpers ──────────────────────────────────────────────────────
 
 /**
@@ -113,7 +136,7 @@ function extractPaths(spec: OpenApiSpec, source: Buffer, filePath: string): Symb
         ? op.operationId
         : `${methodUpper} ${path}`.slice(0, 120);
 
-      const summary = op.summary ?? op.description ?? signature;
+      const summary = enrichPathSummary(methodUpper, path, op);
 
       const startByte = findKeyOffset(source, path);
       const endByte = startByte + Buffer.byteLength(path, 'utf8');
@@ -229,16 +252,21 @@ export const openApiHandler: LanguageHandler = {
   },
 
   detect(content: Buffer): boolean {
-    // Quick byte-scan before full parse — look for openapi: or swagger: near the top.
+    // Quick byte-scan — look for openapi: or swagger: near the top.
     // YAML: key appears at line-start (bare or quoted).
     // JSON: key appears as "openapi": or "swagger": anywhere in the first chunk.
-    const head = content.slice(0, 4096).toString('utf8');
-    return (
+    const head = content.slice(0, 8192).toString('utf8');
+    if (
       /^\s*["']?openapi["']?\s*:/m.test(head) ||
       /^\s*["']?swagger["']?\s*:/m.test(head) ||
       /"openapi"\s*:/.test(head) ||
       /"swagger"\s*:/.test(head)
-    );
+    ) return true;
+
+    // Full-parse fallback for large spec files (e.g. Stripe, Kubernetes) where
+    // the version key appears after a large schemas/definitions block.
+    const spec = parseSpec(content);
+    return !!spec && isOpenApiSpec(spec);
   },
 
   extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRecord[] {

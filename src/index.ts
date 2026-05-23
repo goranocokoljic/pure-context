@@ -54,6 +54,8 @@ import { fortranHandler } from './handlers/fortran.js';
 import { scssHandler } from './handlers/scss.js';
 import { lessHandler } from './handlers/less.js';
 import { cssHandler } from './handlers/css.js';
+import { hclHandler } from './handlers/hcl.js';
+import { angularHtmlHandler } from './handlers/angular-html.js';
 import { getConfig } from './config/config-loader.js';
 // Framework adapters — imported for side-effect self-registration
 import './adapters/vue.js';
@@ -91,10 +93,12 @@ import { startServer } from './server/mcp-server.js';
 import { cmdInit, cmdCheck, cmdShow, cmdHealth, cmdExport, cmdImport, cmdFetch, cmdListPublic, cmdIndexFolder, cmdAnalyzeDiff, cmdDetectAntipatterns } from './config/cli.js';
 import { runKeysCommand } from './config/keys-cli.js';
 import { runWorkspacesCommand } from './config/workspaces-cli.js';
-import { runHooksCommand } from './cli/hooks.js';
+import { runHooksCommand, cmdHookPreToolUse, cmdHookPostToolUse, cmdHookPreCompact, cmdHookWorktreeCreate, cmdHookWorktreeRemove, cmdHookTaskCompleted, cmdHookSubagentStart } from './cli/hooks.js';
 import { runInstallCommand } from './cli/install.js';
 import { VERSION } from './version.js';
 import { PureContextError, formatErrorBox } from './core/errors.js';
+import { computeRepoId, openDatabase } from './core/db/schema.js';
+import { invalidateCache } from './core/db/symbol-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -134,12 +138,20 @@ Usage:
   purecontext-mcp index-folder [--path <dir>]   Index a folder (defaults to cwd)
   purecontext-mcp analyze-diff --diff-file <f>  Analyze PR diff, print JSON impact report
   purecontext-mcp detect-antipatterns [--fail-on-critical]  Scan for anti-patterns
-  purecontext-mcp hooks --install         Install Claude Code hooks into ~/.claude/hooks/
-  purecontext-mcp hooks --list            Show hook installation state
+  purecontext-mcp hooks --install         Register Claude Code hooks in ~/.claude/settings.json
+  purecontext-mcp hooks --list            Show hook registration state
+  purecontext-mcp hook-pretooluse         PreToolUse hook handler (called by Claude Code)
+  purecontext-mcp hook-posttooluse        PostToolUse hook handler (called by Claude Code)
+  purecontext-mcp hook-precompact         PreCompact hook handler (called by Claude Code)
+  purecontext-mcp hook-worktree-create    WorktreeCreate hook handler (called by Claude Code)
+  purecontext-mcp hook-worktree-remove    WorktreeRemove hook handler (called by Claude Code)
+  purecontext-mcp hook-taskcompleted      TaskCompleted hook handler (called by Claude Code)
+  purecontext-mcp hook-subagentstart      SubagentStart hook handler (called by Claude Code)
   purecontext-mcp install <tool>          Install for a specific AI coding IDE
   purecontext-mcp install all             Auto-detect installed IDEs and install each
   purecontext-mcp install --list          Show detected IDEs and install state
   purecontext-mcp install --dry-run all   Preview what would be installed
+  purecontext-mcp delete-index [<path>]   Delete the stored index for a project
   purecontext-mcp --version               Print version
   purecontext-mcp --help                  Print this help
 
@@ -206,6 +218,9 @@ async function bootstrap(): Promise<void> {
   if (cfg.indexing.cssVariables) {
     registerHandler(cssHandler);
   }
+  // HCL/Terraform and Angular HTML template handlers
+  registerHandler(hclHandler);
+  registerHandler(angularHtmlHandler);
 
   // Initialise tree-sitter (loads WASM runtime + grammars lazily on first use)
   await initParser();
@@ -249,6 +264,36 @@ async function main(): Promise<void> {
   // ── hooks sub-command ────────────────────────────────────────────────────
   if (args[0] === 'hooks') {
     runHooksCommand(args.slice(1));
+    return;
+  }
+
+  // ── hook event sub-commands (called by Claude Code hooks) ─────────────────
+  if (args[0] === 'hook-pretooluse') {
+    await cmdHookPreToolUse();
+    return;
+  }
+  if (args[0] === 'hook-posttooluse') {
+    await cmdHookPostToolUse();
+    return;
+  }
+  if (args[0] === 'hook-precompact') {
+    await cmdHookPreCompact();
+    return;
+  }
+  if (args[0] === 'hook-worktree-create') {
+    await cmdHookWorktreeCreate();
+    return;
+  }
+  if (args[0] === 'hook-worktree-remove') {
+    await cmdHookWorktreeRemove();
+    return;
+  }
+  if (args[0] === 'hook-taskcompleted') {
+    await cmdHookTaskCompleted();
+    return;
+  }
+  if (args[0] === 'hook-subagentstart') {
+    await cmdHookSubagentStart();
     return;
   }
 
@@ -324,6 +369,24 @@ async function main(): Promise<void> {
   if (args[0] === 'detect-antipatterns') {
     await bootstrap();
     await cmdDetectAntipatterns(args.slice(1));
+    process.exit(0);
+  }
+
+  // ── delete-index sub-command ──────────────────────────────────────────────
+  if (args[0] === 'delete-index') {
+    const targetPath = args[1] ? resolve(args[1]) : resolve(process.cwd());
+    const repoId = computeRepoId(targetPath);
+    const db = openDatabase(repoId);
+    const result = invalidateCache(db, repoId);
+    db.close();
+    if (!result) {
+      process.stderr.write(`No index found for: ${targetPath}\n`);
+      process.stderr.write(`(repoId: ${repoId})\n`);
+      process.exit(1);
+    }
+    process.stdout.write(`Deleted index for: ${result.repoPath}\n`);
+    process.stdout.write(`  Symbols removed: ${result.symbolsDeleted}\n`);
+    process.stdout.write(`  Files removed:   ${result.filesDeleted}\n`);
     process.exit(0);
   }
 

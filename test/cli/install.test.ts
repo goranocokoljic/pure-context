@@ -39,7 +39,7 @@ describe('install cursor', () => {
     process.chdir(root);
     try {
       const { runInstallCommand } = await import('../../src/cli/install.js');
-      await runInstallCommand(['cursor']);
+      await runInstallCommand(['cursor', '--scope=local']);
       const filePath = join(root, '.cursor', 'rules', 'purecontext.mdc');
       expect(existsSync(filePath)).toBe(true);
     } finally {
@@ -62,9 +62,9 @@ describe('install all', () => {
     process.chdir(root);
     try {
       const { runInstallCommand } = await import('../../src/cli/install.js');
-      await runInstallCommand(['all']);
+      await runInstallCommand(['all', '--scope=local']);
       expect(existsSync(join(root, '.cursor', 'rules', 'purecontext.mdc'))).toBe(true);
-      expect(existsSync(join(root, '.windsurfrules'))).toBe(true);
+      expect(existsSync(join(root, '.windsurf', 'rules', 'purecontext.md'))).toBe(true);
     } finally {
       process.chdir(origCwd);
       cleanup(root);
@@ -79,7 +79,7 @@ describe('install all', () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       const { runInstallCommand } = await import('../../src/cli/install.js');
-      await runInstallCommand(['all']);
+      await runInstallCommand(['all', '--scope=local']);
       // Should have printed a message (even if claude was detected from home)
       expect(consoleSpy).toHaveBeenCalled();
     } finally {
@@ -102,7 +102,7 @@ describe('install --dry-run', () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       const { runInstallCommand } = await import('../../src/cli/install.js');
-      await runInstallCommand(['cursor', '--dry-run']);
+      await runInstallCommand(['cursor', '--dry-run', '--scope=local']);
       expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('dry-run'));
       expect(existsSync(join(root, '.cursor'))).toBe(false);
     } finally {
@@ -149,7 +149,7 @@ describe('install unknown tool', () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code) => { throw new Error('exit'); });
     try {
       const { runInstallCommand } = await import('../../src/cli/install.js');
-      await runInstallCommand(['notarealthing']).catch(() => {});
+      await runInstallCommand(['notarealthing', '--scope=local']).catch(() => {});
       expect(exitSpy).toHaveBeenCalledWith(1);
       const allOutput = stderrSpy.mock.calls.map((c) => c[0]).join('');
       expect(allOutput).toContain('Unknown tool');

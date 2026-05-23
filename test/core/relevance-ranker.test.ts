@@ -1437,3 +1437,596 @@ describe('rankSymbols — FTS BM25 bonus', () => {
     expect(results[2].symbol.name).toBe('createFoo');
   });
 });
+
+// ─── Phase 71: Library path penalty extensions (Task 413) ─────────────────────
+
+describe('isLibraryPath — Phase 71 extensions', () => {
+  it('engine/ directory gets library penalty', () => {
+    expect(isLibraryPath('engine/lib/foo.cc')).toBe(true);
+  });
+
+  it('nested engine/ directory gets library penalty', () => {
+    expect(isLibraryPath('flutter/engine/src/rendering/compositor.cc')).toBe(true);
+  });
+
+  it('erts/ directory gets library penalty', () => {
+    expect(isLibraryPath('erts/emulator/beam/erl_process.c')).toBe(true);
+  });
+
+  it('lib/wx/ multi-segment path gets library penalty', () => {
+    expect(isLibraryPath('lib/wx/src/gen/wx_object.erl')).toBe(true);
+  });
+
+  it('unstable-core-do-not-import/ is NOT a library penalty (tRPC canonical core path)', () => {
+    expect(isLibraryPath('packages/server/src/unstable-core-do-not-import/router.ts')).toBe(false);
+  });
+
+  it('contrib/ directory gets library penalty', () => {
+    expect(isLibraryPath('contrib/autoconf/config.guess')).toBe(true);
+  });
+
+  it('BLAS/ directory gets library penalty (case-insensitive)', () => {
+    expect(isLibraryPath('deps/BLAS/dgemm.f')).toBe(true);
+  });
+
+  it('lapack/ lowercase also gets library penalty', () => {
+    expect(isLibraryPath('deps/lapack/src/dgesv.f')).toBe(true);
+  });
+
+  it('core/src/main/java/ does NOT get library penalty', () => {
+    expect(isLibraryPath('core/src/main/java/hudson/model/Run.java')).toBe(false);
+  });
+
+  it('engine_room/ does NOT match — engine must be a separate directory segment', () => {
+    expect(isLibraryPath('engine_room/boiler.ts')).toBe(false);
+  });
+});
+
+describe('rankSymbols — Phase 71 library path penalty extends to new paths', () => {
+  it('symbol in engine/ gets -35 penalty', () => {
+    const dartWidget = sym('StatefulWidget', { filePath: 'packages/flutter/lib/widgets/framework.dart' });
+    const cppEngine = sym('StatefulWidget', { filePath: 'engine/src/flutter/runtime/dart_vm.cc' });
+    const results = rankSymbols([cppEngine, dartWidget], 'stateful widget');
+    expect(results[0].symbol.filePath).toBe('packages/flutter/lib/widgets/framework.dart');
+  });
+
+  it('symbol in unstable-core-do-not-import/ is NOT penalized (tRPC canonical core path)', () => {
+    // tRPC's core API lives in unstable-core-do-not-import — penalizing it hurts expected results
+    const unstableSymbol = sym('ProcedureBuilder', { filePath: 'packages/server/src/unstable-core-do-not-import/procedureBuilder.ts' });
+    const otherSymbol = sym('ProcedureBuilder', { filePath: 'packages/server/src/core/procedureBuilder.ts' });
+    const results = rankSymbols([unstableSymbol, otherSymbol], 'procedure builder');
+    // Both should score equally (no penalty on either); first insertion order wins
+    expect(results.length).toBe(2);
+    const scores = results.map((r) => r.score);
+    expect(scores[0]).toBe(scores[1]);
+  });
+});
+
+// ─── Phase 71: Java/Groovy core-path boost (Task 414) ─────────────────────────
+
+describe('rankSymbols — Phase 71 Java core-path boost', () => {
+  it('symbol in core/src/main/java/ gets +15 corePathBoost in java domain', () => {
+    const coreMethod = sym('Run.isBuilding', {
+      kind: 'method',
+      filePath: 'core/src/main/java/hudson/model/Run.java',
+    });
+    const results = rankSymbols([coreMethod], 'is building', true, 'java');
+    expect(results[0].debugScore?.corePathBoost).toBe(15);
+  });
+
+  it('symbol in /main/java/ also gets +15 corePathBoost', () => {
+    const mavenMethod = sym('OrderService.create', {
+      kind: 'method',
+      filePath: 'src/main/java/com/example/OrderService.java',
+    });
+    const results = rankSymbols([mavenMethod], 'create order', true, 'java');
+    expect(results[0].debugScore?.corePathBoost).toBe(15);
+  });
+
+  it('symbol in plugins/ gets -35 corePathBoost (plugin penalty) in java domain', () => {
+    const pluginMethod = sym('FooStep.perform', {
+      kind: 'method',
+      filePath: 'plugins/build-step/src/main/java/FooStep.java',
+    });
+    const results = rankSymbols([pluginMethod], 'perform step', true, 'java');
+    expect(results[0].debugScore?.corePathBoost).toBe(-35);
+  });
+
+  it('core path boost does NOT fire outside java domain', () => {
+    const tsMethod = sym('OrderService.create', {
+      kind: 'method',
+      filePath: 'src/main/typescript/OrderService.ts',
+    });
+    const results = rankSymbols([tsMethod], 'create order', true, undefined);
+    expect(results[0].debugScore?.corePathBoost).toBe(0);
+  });
+
+  it('core path boost and library penalty are mutually exclusive', () => {
+    // vendor/ triggers library penalty, so corePathBoost must not double-penalise
+    const vendorMethod = sym('Run.isBuilding', {
+      kind: 'method',
+      filePath: 'vendor/core/src/main/java/Run.java',
+    });
+    const results = rankSymbols([vendorMethod], 'is building', true, 'java');
+    expect(results[0].debugScore?.libraryPenalty).toBe(-35);
+    expect(results[0].debugScore?.corePathBoost).toBe(0);
+  });
+
+  it('core method in java domain outranks plugin override', () => {
+    const coreMethod = sym('isBuilding', {
+      kind: 'method',
+      filePath: 'core/src/main/java/hudson/model/Run.java',
+      signature: 'Run.isBuilding: boolean',
+    });
+    const pluginMethod = sym('isBuilding', {
+      kind: 'method',
+      filePath: 'plugins/my-plugin/src/main/java/PluginRun.java',
+      signature: 'PluginRun.isBuilding: boolean',
+    });
+    const results = rankSymbols([pluginMethod, coreMethod], 'is building', false, 'java');
+    expect(results[0].symbol.filePath).toBe('core/src/main/java/hudson/model/Run.java');
+  });
+});
+
+// ─── Phase 71: Frontend path boost (Task 415) ─────────────────────────────────
+
+describe('rankSymbols — Phase 71 frontend path boost', () => {
+  it('frontend symbol gets +20 in mixed monorepo with hook query', () => {
+    const hook = sym('useCreateWorkflow', {
+      kind: 'function',
+      filePath: 'apps/dashboard/src/hooks/useCreateWorkflow.ts',
+    });
+    const results = rankSymbols([hook], 'use create workflow hook', true, undefined, {
+      isMixedMonorepo: true,
+      hasReactHookQuery: false,
+    });
+    expect(results[0].debugScore?.frontendPathBoost).toBe(20);
+  });
+
+  it('frontend symbol gets no boost when NOT a mixed monorepo', () => {
+    const hook = sym('useCreateWorkflow', {
+      kind: 'function',
+      filePath: 'apps/dashboard/src/hooks/useCreateWorkflow.ts',
+    });
+    const results = rankSymbols([hook], 'use create workflow hook', true, undefined, {
+      isMixedMonorepo: false,
+    });
+    expect(results[0].debugScore?.frontendPathBoost).toBe(0);
+  });
+
+  it('backend symbol gets no frontend boost even in mixed monorepo with hook query', () => {
+    const backendMethod = sym('WorkflowService.create', {
+      kind: 'method',
+      filePath: 'apps/api/src/workflow/workflow.service.ts',
+    });
+    const results = rankSymbols([backendMethod], 'use create workflow', true, undefined, {
+      isMixedMonorepo: true,
+    });
+    expect(results[0].debugScore?.frontendPathBoost).toBe(0);
+  });
+
+  it('non-hook query does not trigger frontend boost', () => {
+    const hook = sym('WorkflowService.create', {
+      kind: 'method',
+      filePath: 'apps/dashboard/src/services/WorkflowService.ts',
+    });
+    const results = rankSymbols([hook], 'create workflow in database', true, undefined, {
+      isMixedMonorepo: true,
+    });
+    expect(results[0].debugScore?.frontendPathBoost).toBe(0);
+  });
+
+  it('frontend hook outranks backend service method in mixed monorepo for hook query', () => {
+    const dashboardHook = sym('useCreateWorkflow', {
+      kind: 'function',
+      filePath: 'apps/dashboard/src/hooks/useCreateWorkflow.ts',
+    });
+    const apiService = sym('WorkflowService.createWorkflowMap', {
+      kind: 'method',
+      filePath: 'apps/api/src/workflow/workflow.service.ts',
+    });
+    const results = rankSymbols([apiService, dashboardHook], 'use create workflow', false, undefined, {
+      isMixedMonorepo: true,
+      hasReactHookQuery: true,
+    });
+    expect(results[0].symbol.name).toBe('useCreateWorkflow');
+  });
+});
+
+// ─── Phase 71: use* hook bonus (Task 416) ─────────────────────────────────────
+
+describe('rankSymbols — Phase 71 use/hook bonus', () => {
+  it('use[A-Z] symbol gets +20 useHookBonus when hasReactHookQuery is true', () => {
+    const hook = sym('useBookingFilters', { kind: 'function' });
+    const results = rankSymbols([hook], 'use booking filters', true, undefined, {
+      hasReactHookQuery: true,
+    });
+    expect(results[0].debugScore?.useHookBonus).toBe(20);
+  });
+
+  it('symbol NOT starting with use[A-Z] gets no useHookBonus', () => {
+    const service = sym('BookingService.getFilters', { kind: 'method' });
+    const results = rankSymbols([service], 'use booking filters', true, undefined, {
+      hasReactHookQuery: true,
+    });
+    expect(results[0].debugScore?.useHookBonus).toBe(0);
+  });
+
+  it('useHookBonus does not fire when hasReactHookQuery is false', () => {
+    const hook = sym('useBookingFilters', { kind: 'function' });
+    const results = rankSymbols([hook], 'booking filters', true, undefined, {
+      hasReactHookQuery: false,
+    });
+    expect(results[0].debugScore?.useHookBonus).toBe(0);
+  });
+
+  it('lowercase use does not trigger bonus (useSomething without upper: userService)', () => {
+    // 'userService' starts with 'user', not 'use[A-Z]'
+    const notHook = sym('userService', { kind: 'class' });
+    const results = rankSymbols([notHook], 'user service', true, undefined, {
+      hasReactHookQuery: true,
+    });
+    expect(results[0].debugScore?.useHookBonus).toBe(0);
+  });
+
+  it('useHookBonus lifts useBookingFilters above BookingService.list', () => {
+    const hook = sym('useBookingFilters', { kind: 'function' });
+    const service = sym('BookingService.list', { kind: 'method' });
+    const results = rankSymbols([service, hook], 'use booking filters', false, undefined, {
+      hasReactHookQuery: true,
+    });
+    expect(results[0].symbol.name).toBe('useBookingFilters');
+  });
+});
+
+// ─── Phase 71: Path proximity boost (Task 417) ───────────────────────────────
+
+describe('rankSymbols — Phase 71 path proximity boost', () => {
+  it('boost goes to candidate whose file-path overlaps with query when >= 3 share the name', () => {
+    const platformerSpawn = sym('spawn_count', { filePath: 'platformer/enemy_spawner.gd' });
+    const spaceSpawn     = sym('spawn_count', { filePath: 'space_invader/enemy_spawner.gd' });
+    const rpgSpawn       = sym('spawn_count', { filePath: 'rpg/enemy_spawner.gd' });
+    // query has "space" and "invader" → only spaceSpawn's path overlaps
+    const results = rankSymbols([platformerSpawn, rpgSpawn, spaceSpawn], 'enemy spawn count space invader');
+    expect(results[0].symbol.filePath).toBe('space_invader/enemy_spawner.gd');
+  });
+
+  it('path proximity boost NOT applied when fewer than 3 candidates share the name', () => {
+    const hookA = sym('useCreateWorkflow', { filePath: 'apps/dashboard/src/hooks/useCreateWorkflow.ts' });
+    const hookB = sym('useCreateWorkflow', { filePath: 'apps/web/src/hooks/useCreateWorkflow.ts' });
+    // Only 2 symbols with the same name → path proximity boost suppressed
+    const results = rankSymbols([hookA, hookB], 'create workflow dashboard', true);
+    for (const r of results) {
+      expect(r.debugScore?.pathProximityBoost).toBe(0);
+    }
+  });
+
+  it('common path segments (src, lib, app) do not count towards proximity overlap', () => {
+    // "src" and "lib" in filePath should be excluded from scoring
+    const a = sym('programs', { filePath: 'modules/programs/bash.nix' });
+    const b = sym('programs', { filePath: 'modules/programs/git.nix' });
+    const c = sym('programs', { filePath: 'modules/programs/zsh.nix' });
+    const results = rankSymbols([a, b, c], 'bash configuration program', true);
+    // "bash" appears in a's path (bash.nix) but not b or c
+    expect(results[0].symbol.filePath).toBe('modules/programs/bash.nix');
+    // proximity boost should be positive for the bash one
+    expect(results[0].debugScore?.pathProximityBoost).toBeGreaterThan(0);
+  });
+
+  it('unique-name symbol (only 1 in pool) gets no path proximity boost', () => {
+    const unique = sym('useCreateWorkflow', { filePath: 'apps/dashboard/src/hooks/useCreateWorkflow.ts' });
+    const other  = sym('useDeleteWorkflow', { filePath: 'apps/dashboard/src/hooks/useDeleteWorkflow.ts' });
+    const results = rankSymbols([unique, other], 'create workflow dashboard', true);
+    // useCreateWorkflow is the only one with that name → no proximity boost
+    const target = results.find((r) => r.symbol.name === 'useCreateWorkflow')!;
+    expect(target.debugScore?.pathProximityBoost).toBe(0);
+  });
+});
+
+// ─── Groovy source boost (Task 423) ───────────────────────────────────────────
+
+describe('rankSymbols — groovy source boost', () => {
+  it('applies +10 to .groovy symbols when isJavaGroovyMixed is true', () => {
+    const groovySym = sym('buildScript', { filePath: 'build.groovy', kind: 'function' });
+    const javaSym   = sym('buildScript', { filePath: 'src/main/java/Build.java', kind: 'method' });
+    const results = rankSymbols(
+      [javaSym, groovySym],
+      'build script',
+      true,
+      'java',
+      { isJavaGroovyMixed: true },
+    );
+    const groovyResult = results.find((r) => r.symbol.filePath === 'build.groovy')!;
+    expect(groovyResult.debugScore?.groovySourceBoost).toBe(10);
+  });
+
+  it('does NOT apply groovy boost when isJavaGroovyMixed is false', () => {
+    const groovySym = sym('buildScript', { filePath: 'build.groovy' });
+    const results = rankSymbols([groovySym], 'build script', true, 'java', { isJavaGroovyMixed: false });
+    const result = results[0]!;
+    expect(result.debugScore?.groovySourceBoost).toBe(0);
+  });
+
+  it('does NOT apply groovy boost to .java files even in mixed repo', () => {
+    const javaSym = sym('buildScript', { filePath: 'src/Build.java' });
+    const results = rankSymbols([javaSym], 'build script', true, 'java', { isJavaGroovyMixed: true });
+    expect(results[0]!.debugScore?.groovySourceBoost).toBe(0);
+  });
+
+  it('groovy symbol ranks above equally-scored java symbol in mixed repo', () => {
+    // Both symbols have identical names and content — only the groovy boost differentiates them
+    const groovySym = sym('configure', { filePath: 'src/main/groovy/Configure.groovy' });
+    const javaSym   = sym('configure', { filePath: 'src/main/java/Configure.java' });
+    const results = rankSymbols(
+      [javaSym, groovySym],
+      'configure task',
+      false,
+      'java',
+      { isJavaGroovyMixed: true },
+    );
+    expect(results[0]!.symbol.filePath).toBe('src/main/groovy/Configure.groovy');
+  });
+});
+
+// ─── Task 426: Angular lifecycle method boost ─────────────────────────────────
+
+describe('rankSymbols — angular lifecycle boost (Task 426)', () => {
+  it('ngOnInit gets +10 for "initialization" query in Angular repo', () => {
+    const lifecycle = sym('VaultFilterComponent.ngOnInit', { kind: 'method' });
+    const other     = sym('VaultFilterComponent.filterSearchText', { kind: 'method' });
+    const results   = rankSymbols([other, lifecycle], 'vault filter component initialization', true, undefined, { isAngularRepo: true });
+    const lcResult  = results.find((r) => r.symbol.name === 'VaultFilterComponent.ngOnInit')!;
+    expect(lcResult.debugScore?.angularLifecycleBoost).toBe(10);
+  });
+
+  it('ngOnInit gets no boost when isAngularRepo is false', () => {
+    const lifecycle = sym('VaultFilterComponent.ngOnInit', { kind: 'method' });
+    const results   = rankSymbols([lifecycle], 'component initialization', true, undefined, { isAngularRepo: false });
+    expect(results[0]!.debugScore?.angularLifecycleBoost).toBe(0);
+  });
+
+  it('non-lifecycle method gets no boost even in Angular repo with lifecycle query', () => {
+    const other   = sym('AppComponent.handleClick', { kind: 'method' });
+    const results = rankSymbols([other], 'component initialization', true, undefined, { isAngularRepo: true });
+    expect(results[0]!.debugScore?.angularLifecycleBoost).toBe(0);
+  });
+
+  it('ngOnInit gets no boost without lifecycle vocabulary', () => {
+    const lifecycle = sym('AppComponent.ngOnInit', { kind: 'method' });
+    const results   = rankSymbols([lifecycle], 'app component route', true, undefined, { isAngularRepo: true });
+    expect(results[0]!.debugScore?.angularLifecycleBoost).toBe(0);
+  });
+});
+
+// ─── Task 427: React rendering verb compound boost ────────────────────────────
+
+describe('rankSymbols — rendering compound boost (Task 427)', () => {
+  it('renderSelectionElement gets +15 for "render canvas selection" in rendering domain', () => {
+    const compound = sym('renderSelectionElement', { kind: 'function' });
+    const bare     = sym('render', { kind: 'function' });
+    const results  = rankSymbols([bare, compound], 'render canvas selection element', true, 'rendering');
+    const compResult = results.find((r) => r.symbol.name === 'renderSelectionElement')!;
+    expect(compResult.debugScore?.renderingCompoundBoost).toBe(15);
+  });
+
+  it('bare render function gets no compound boost (no shared noun)', () => {
+    const bare    = sym('render', { kind: 'function' });
+    const results = rankSymbols([bare], 'render canvas selection element', true, 'rendering');
+    expect(results[0]!.debugScore?.renderingCompoundBoost).toBe(0);
+  });
+
+  it('rendering compound boost does NOT fire outside rendering domain', () => {
+    const compound = sym('renderSelectionElement', { kind: 'function' });
+    const results  = rankSymbols([compound], 'render canvas selection element', true, undefined);
+    expect(results[0]!.debugScore?.renderingCompoundBoost).toBe(0);
+  });
+
+  it('non-function rendering symbol gets no compound boost', () => {
+    const cls     = sym('SelectionRenderer', { kind: 'class' });
+    const results = rankSymbols([cls], 'render selection element', true, 'rendering');
+    expect(results[0]!.debugScore?.renderingCompoundBoost).toBe(0);
+  });
+});
+
+// ─── Task 428: React Query mutation hook boost ────────────────────────────────
+
+describe('rankSymbols — react query hook boost (Task 428)', () => {
+  it('useCreateSecretV3 in queries.ts gets +25 for "create" query', () => {
+    const hook    = sym('useCreateSecretV3', { kind: 'function', filePath: 'src/hooks/api/secrets/queries.ts' });
+    const results = rankSymbols([hook], 'create secret api hook', true);
+    expect(results[0]!.debugScore?.reactQueryHookBoost).toBe(25);
+  });
+
+  it('use-hook in non-queries file gets no boost', () => {
+    const hook    = sym('useCreateSecretV3', { kind: 'function', filePath: 'src/components/SecretForm.tsx' });
+    const results = rankSymbols([hook], 'create secret', true);
+    expect(results[0]!.debugScore?.reactQueryHookBoost).toBe(0);
+  });
+
+  it('non-use function in queries file gets no boost', () => {
+    const fn      = sym('createSecretHelper', { kind: 'function', filePath: 'src/api/queries.ts' });
+    const results = rankSymbols([fn], 'create secret', true);
+    expect(results[0]!.debugScore?.reactQueryHookBoost).toBe(0);
+  });
+
+  it('hook in mutations file also gets boost', () => {
+    const hook    = sym('useDeleteOrgMember', { kind: 'function', filePath: 'src/hooks/api/mutations.ts' });
+    const results = rankSymbols([hook], 'delete organization member', true);
+    expect(results[0]!.debugScore?.reactQueryHookBoost).toBe(25);
+  });
+});
+
+// ─── Task 429: Interceptor / resolver / guard boost ───────────────────────────
+
+describe('rankSymbols — interceptor boost (Task 429)', () => {
+  it('tokenInterceptor gets +15 for "interceptor" query', () => {
+    const interceptor = sym('tokenInterceptor', { kind: 'function' });
+    const results     = rankSymbols([interceptor], 'interceptor that attaches JWT token', true);
+    expect(results[0]!.debugScore?.interceptorBoost).toBe(30);
+  });
+
+  it('bankAccountResolve gets +15 for "resolver" query', () => {
+    const resolver = sym('bankAccountResolve', { kind: 'function' });
+    const results  = rankSymbols([resolver], 'bank account resolver route', true);
+    expect(results[0]!.debugScore?.interceptorBoost).toBe(30);
+  });
+
+  it('LoginService gets no boost for "intercept" query (no Interceptor suffix)', () => {
+    const service = sym('LoginService', { kind: 'class' });
+    const results = rankSymbols([service], 'intercept login request', true);
+    expect(results[0]!.debugScore?.interceptorBoost).toBe(0);
+  });
+
+  it('authGuard class gets +15 for "guard" query', () => {
+    const guard   = sym('authGuard', { kind: 'class' });
+    const results = rankSymbols([guard], 'auth guard route protection', true);
+    expect(results[0]!.debugScore?.interceptorBoost).toBe(30);
+  });
+});
+
+// ─── Task 430: Perl/R package-context boost ───────────────────────────────────
+
+describe('rankSymbols — package context boost (Task 430)', () => {
+  it('Mojolicious::Controller::render in .pm file gets +8 for "mojolicious" query word', () => {
+    const sym1    = sym('Mojolicious::Controller::render', { kind: 'function', filePath: 'lib/Mojolicious/Controller.pm' });
+    const results = rankSymbols([sym1], 'mojolicious render response', true);
+    expect(results[0]!.debugScore?.packageContextBoost).toBeGreaterThanOrEqual(4);
+  });
+
+  it('bare render function in .pl file gets no package boost (no package prefix)', () => {
+    const fn      = sym('render', { kind: 'function', filePath: 'script/app.pl' });
+    const results = rankSymbols([fn], 'mojolicious render response', true);
+    expect(results[0]!.debugScore?.packageContextBoost).toBe(0);
+  });
+
+  it('R function Rcpp.package.skeleton gets boost when "rcpp" in query', () => {
+    const fn      = sym('Rcpp.package.skeleton', { kind: 'function', filePath: 'R/rcpp.R' });
+    const results = rankSymbols([fn], 'rcpp package skeleton', true);
+    expect(results[0]!.debugScore?.packageContextBoost).toBeGreaterThanOrEqual(4);
+  });
+
+  it('TypeScript function gets no package boost even if named with dots', () => {
+    const fn      = sym('Mojo.render', { kind: 'function', filePath: 'src/mojo.ts' });
+    const results = rankSymbols([fn], 'mojo render', true);
+    expect(results[0]!.debugScore?.packageContextBoost).toBe(0);
+  });
+
+  it('generic MVC segments (controller, action) are filtered — TestApp::Controller::Action gets no boost', () => {
+    const fn      = sym('TestApp::Controller::Action::new', { kind: 'function', filePath: 'lib/TestApp/Controller/Action.pm' });
+    const results = rankSymbols([fn], 'catalyst action controller wrap method', true);
+    expect(results[0]!.debugScore?.packageContextBoost).toBe(0);
+  });
+});
+
+describe('rankSymbols — Perl t/lib/ test-fixture penalty', () => {
+  it('TestApp symbol in t/lib/ gets -25 library penalty', () => {
+    const fn      = sym('TestApp::Controller::Action::Action', { kind: 'class', filePath: 't/lib/TestApp/Controller/Action/Action.pm' });
+    const results = rankSymbols([fn], 'dispatch action execution', true);
+    expect(results[0]!.debugScore?.libraryPenalty).toBe(-25);
+  });
+
+  it('Catalyst symbol in lib/ does NOT get the t/lib/ penalty', () => {
+    const fn      = sym('Catalyst::Action', { kind: 'class', filePath: 'lib/Catalyst/Action.pm' });
+    const results = rankSymbols([fn], 'dispatch action execution', true);
+    expect(results[0]!.debugScore?.libraryPenalty).toBe(0);
+  });
+
+  it('TestApp symbol with Windows backslash path also gets -25 penalty', () => {
+    const fn      = sym('TestApp::Controller::Action::Action', { kind: 'class', filePath: 't\\lib\\TestApp\\Controller\\Action\\Action.pm' });
+    const results = rankSymbols([fn], 'dispatch action execution', true);
+    expect(results[0]!.debugScore?.libraryPenalty).toBe(-25);
+  });
+});
+
+// ─── Task 432: tRPC prefix boost ─────────────────────────────────────────────
+
+describe('rankSymbols — tRPC prefix boost (Task 432)', () => {
+  it('createTRPCReact gets +20 for "trpc" query', () => {
+    const fn      = sym('createTRPCReact', { kind: 'function' });
+    const results = rankSymbols([fn], 'react trpc client', true);
+    expect(results[0]!.debugScore?.trpcPrefixBoost).toBe(20);
+  });
+
+  it('ProcedureBuilder.query gets +20 for "procedure" query', () => {
+    const fn      = sym('ProcedureBuilder.query', { kind: 'method' });
+    const results = rankSymbols([fn], 'trpc procedure builder query', true);
+    expect(results[0]!.debugScore?.trpcPrefixBoost).toBe(20);
+  });
+
+  it('non-tRPC function gets no boost', () => {
+    const fn      = sym('createRouter', { kind: 'function' });
+    const results = rankSymbols([fn], 'trpc router', true);
+    expect(results[0]!.debugScore?.trpcPrefixBoost).toBe(0);
+  });
+});
+
+// ─── Task 433: Compound underscore identityExact ──────────────────────────────
+
+describe('rankSymbols — compound underscore boost (Task 433)', () => {
+  it('payment_intent gets +30 for "create payment intent" (both parts in query)', () => {
+    const schema  = sym('payment_intent', { kind: 'class' });
+    const results = rankSymbols([schema], 'create payment intent', true);
+    expect(results[0]!.debugScore?.compoundUnderscoreBoost).toBe(30);
+  });
+
+  it('payment_intent_v2 gets no boost when only 2 of 3 parts match "payment intent"', () => {
+    const schema  = sym('payment_intent_v2', { kind: 'class' });
+    const results = rankSymbols([schema], 'create payment intent', true);
+    expect(results[0]!.debugScore?.compoundUnderscoreBoost).toBe(0);
+  });
+
+  it('no compound boost when identityExact already fires (whole name = query word)', () => {
+    const schema  = sym('payment', { kind: 'class' });
+    const results = rankSymbols([schema], 'payment intent', true);
+    // identityExact fires for "payment" word match; compound doesn't fire for single-part
+    expect(results[0]!.debugScore?.compoundUnderscoreBoost).toBe(0);
+  });
+
+  it('compound boost fires for non-data kinds too (e.g. function with underscore name)', () => {
+    const fn      = sym('get_user', { kind: 'function' });
+    const results = rankSymbols([fn], 'get user profile', true);
+    expect(results[0]!.debugScore?.compoundUnderscoreBoost).toBe(30);
+  });
+});
+
+// ─── Task 434: Single-token exact-name boost ──────────────────────────────────
+
+describe('rankSymbols — single token exact boost (Task 434)', () => {
+  it('Pod gets +50 for single-token query "pod"', () => {
+    const pod     = sym('Pod', { kind: 'class' });
+    const results = rankSymbols([pod], 'Pod', true);
+    expect(results[0]!.debugScore?.singleTokenExactBoost).toBe(50);
+  });
+
+  it('PodSpec does NOT get single-token exact boost for query "pod"', () => {
+    const podSpec = sym('PodSpec', { kind: 'class' });
+    const results = rankSymbols([podSpec], 'Pod', true);
+    expect(results[0]!.debugScore?.singleTokenExactBoost).toBe(0);
+  });
+
+  it('Pod beats PodSpec for single-token query "Pod"', () => {
+    const pod     = sym('Pod', { kind: 'class' });
+    const podSpec = sym('PodSpec', { kind: 'class' });
+    const results = rankSymbols([podSpec, pod], 'Pod', false);
+    expect(results[0]!.symbol.name).toBe('Pod');
+  });
+
+  it('multi-token query gets no single-token boost', () => {
+    const pod     = sym('Pod', { kind: 'class' });
+    const results = rankSymbols([pod], 'pod spec', true);
+    expect(results[0]!.debugScore?.singleTokenExactBoost).toBe(0);
+  });
+
+  it('dot-qualified name gets +40 when query matches last segment', () => {
+    const pod     = sym('io.k8s.api.core.v1.Pod', { kind: 'class' });
+    const results = rankSymbols([pod], 'Pod', true);
+    expect(results[0]!.debugScore?.singleTokenExactBoost).toBe(40);
+  });
+
+  it('dot-qualified PodSpec does NOT get last-segment boost for query "pod"', () => {
+    const podSpec = sym('io.k8s.api.core.v1.PodSpec', { kind: 'class' });
+    const results = rankSymbols([podSpec], 'Pod', true);
+    expect(results[0]!.debugScore?.singleTokenExactBoost).toBe(0);
+  });
+});
+

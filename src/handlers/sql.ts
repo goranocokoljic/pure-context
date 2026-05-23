@@ -97,7 +97,7 @@ function extractDdlMatches(preprocessed: string): SqlMatch[] {
   }
 
   // ,  cte_name  AS  (  — chained CTEs after the first
-  const chainedCteRe = /,\s*(\w+)\s+AS\s*\(/g;
+  const chainedCteRe = /,\s*(\w+)\s+AS\s*\(/gi;
   while ((m = chainedCteRe.exec(preprocessed)) !== null) {
     matches.push({
       name: m[1],
@@ -173,8 +173,14 @@ export const sqlHandler: LanguageHandler = {
     const macroMatches = extractMacroMatches(originalText);
     const allMatches = [...ddlMatches, ...macroMatches];
 
+    // Detect dbt model files: they use {{ ref(...) }} or {{ source(...) }} Jinja refs.
+    // Always emit the file stem for these so the model is findable by name even when
+    // the file also contains CTE symbols (e.g. stg_orders.sql has WITH source AS ...).
+    const isDbtModel = /\{\{-?\s*(?:ref|source)\s*\(/i.test(originalText);
+    const stem = basename(filePath, extname(filePath));
+
     if (allMatches.length > 0) {
-      return allMatches.map((match) => ({
+      const records: SymbolRecord[] = allMatches.map((match) => ({
         id: makeId(filePath, match.name, match.kind),
         name: match.name,
         kind: match.kind,
@@ -184,24 +190,39 @@ export const sqlHandler: LanguageHandler = {
         signature: match.signature.slice(0, 120),
         summary: match.signature.slice(0, 200),
       }));
+      if (isDbtModel) {
+        records.push({
+          id: makeId(filePath, stem, 'function'),
+          name: stem,
+          kind: 'function',
+          filePath,
+          startByte: 0,
+          endByte: source.length,
+          signature: `dbt model ${stem}`,
+          summary: `dbt model ${stem}`,
+          frameworkMeta: { isDbtModel: true },
+        });
+      }
+      return records;
     }
 
-    // No DDL or macros found — this is a dbt model file (SELECT-only).
-    // Emit one symbol named after the file stem to make the model searchable.
-    const stem = basename(filePath, extname(filePath));
-    return [
-      {
-        id: makeId(filePath, stem, 'function'),
-        name: stem,
-        kind: 'function',
-        filePath,
-        startByte: 0,
-        endByte: source.length,
-        signature: `dbt model ${stem}`,
-        summary: `dbt model ${stem}`,
-        frameworkMeta: { isDbtModel: true },
-      },
-    ];
+    if (isDbtModel) {
+      return [
+        {
+          id: makeId(filePath, stem, 'function'),
+          name: stem,
+          kind: 'function',
+          filePath,
+          startByte: 0,
+          endByte: source.length,
+          signature: `dbt model ${stem}`,
+          summary: `dbt model ${stem}`,
+          frameworkMeta: { isDbtModel: true },
+        },
+      ];
+    }
+
+    return [];
   },
 
   extractImports(_tree: Tree, source: Buffer): ImportRecord[] {

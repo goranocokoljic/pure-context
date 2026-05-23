@@ -56,7 +56,7 @@ describe('Erlang handler — extractSymbols', () => {
 
   // ── function extraction ───────────────────────────────────────────────────
 
-  it('extracts function with arity in name: name/arity', () => {
+  it('extracts function with bare name (no arity suffix)', () => {
     const { tree, buf } = parse(`
 -module(math_utils).
 
@@ -64,31 +64,34 @@ add(A, B) ->
     A + B.
 `);
     const syms = erlangHandler.extractSymbols(tree, buf, 'math_utils.erl');
-    const sym = syms.find((s) => s.name === 'add/2');
+    const sym = syms.find((s) => s.name === 'add');
     expect(sym).toBeDefined();
     expect(sym!.kind).toBe('function');
     expect(sym!.signature).toContain('add/2');
+    expect(sym!.frameworkMeta?.['arity']).toBe(2);
   });
 
-  it('extracts zero-arity function as name/0', () => {
+  it('extracts zero-arity function with arity 0 in frameworkMeta', () => {
     const { tree, buf } = parse(`
 start() ->
     ok.
 `);
     const syms = erlangHandler.extractSymbols(tree, buf, 'app.erl');
-    const sym = syms.find((s) => s.name === 'start/0');
+    const sym = syms.find((s) => s.name === 'start');
     expect(sym).toBeDefined();
     expect(sym!.kind).toBe('function');
+    expect(sym!.frameworkMeta?.['arity']).toBe(0);
   });
 
-  it('extracts function with complex params and correct arity', () => {
+  it('extracts function with complex params and correct arity in frameworkMeta', () => {
     const { tree, buf } = parse(`
 create_user(Name, Email, Role) ->
     #user{name=Name, email=Email, role=Role}.
 `);
     const syms = erlangHandler.extractSymbols(tree, buf, 'user.erl');
-    const sym = syms.find((s) => s.name === 'create_user/3');
+    const sym = syms.find((s) => s.name === 'create_user');
     expect(sym).toBeDefined();
+    expect(sym!.frameworkMeta?.['arity']).toBe(3);
   });
 
   // ── multiple clauses → single symbol ─────────────────────────────────────
@@ -100,7 +103,7 @@ classify(X) when X < 0 -> negative;
 classify(0) -> zero.
 `);
     const syms = erlangHandler.extractSymbols(tree, buf, 'classify.erl');
-    const fns = syms.filter((s) => s.name === 'classify/1');
+    const fns = syms.filter((s) => s.name === 'classify');
     expect(fns).toHaveLength(1);
   });
 
@@ -113,8 +116,10 @@ greet(Name) ->
     "Hello, " ++ Name ++ "!".
 `);
     const syms = erlangHandler.extractSymbols(tree, buf, 'greet.erl');
-    expect(syms.find((s) => s.name === 'greet/0')).toBeDefined();
-    expect(syms.find((s) => s.name === 'greet/1')).toBeDefined();
+    const greet0 = syms.find((s) => s.name === 'greet' && s.frameworkMeta?.['arity'] === 0);
+    const greet1 = syms.find((s) => s.name === 'greet' && s.frameworkMeta?.['arity'] === 1);
+    expect(greet0).toBeDefined();
+    expect(greet1).toBeDefined();
   });
 
   // ── -spec used as signature ───────────────────────────────────────────────
@@ -126,7 +131,7 @@ get_user(Id) ->
     db:lookup(users, Id).
 `);
     const syms = erlangHandler.extractSymbols(tree, buf, 'user.erl');
-    const sym = syms.find((s) => s.name === 'get_user/1');
+    const sym = syms.find((s) => s.name === 'get_user');
     expect(sym).toBeDefined();
     expect(sym!.signature).toContain('get_user');
     expect(sym!.signature).toContain('integer()');
@@ -139,7 +144,7 @@ send_email(To, Subject, Body) ->
     mailer:send(To, Subject, Body).
 `);
     const syms = erlangHandler.extractSymbols(tree, buf, 'mailer.erl');
-    const sym = syms.find((s) => s.name === 'send_email/3');
+    const sym = syms.find((s) => s.name === 'send_email');
     expect(sym).toBeDefined();
     expect(sym!.signature).toContain('binary()');
   });
@@ -151,7 +156,7 @@ send_email(To, Subject, Body) ->
       `%% @doc Returns the user record for the given ID.\nget_user(Id) ->\n    db:find(Id).\n`,
     );
     const syms = erlangHandler.extractSymbols(tree, buf, 'user.erl');
-    const sym = syms.find((s) => s.name === 'get_user/1');
+    const sym = syms.find((s) => s.name === 'get_user');
     expect(sym!.summary).toContain('Returns the user record');
   });
 
@@ -160,7 +165,7 @@ send_email(To, Subject, Body) ->
       `%% Validates the input parameters.\nvalidate(X) ->\n    X > 0.\n`,
     );
     const syms = erlangHandler.extractSymbols(tree, buf, 'val.erl');
-    const sym = syms.find((s) => s.name === 'validate/1');
+    const sym = syms.find((s) => s.name === 'validate');
     expect(sym!.summary).toContain('Validates the input');
   });
 
@@ -172,8 +177,34 @@ lookup(Key) ->
     ets:lookup(cache, Key).
 `);
     const syms = erlangHandler.extractSymbols(tree, buf, 'cache.erl');
-    const sym = syms.find((s) => s.name === 'lookup/1');
+    const sym = syms.find((s) => s.name === 'lookup');
     expect(sym!.summary).toContain('Looks up a key');
+  });
+
+  // ── frameworkMeta — arity and module ─────────────────────────────────────
+
+  it('stores arity in frameworkMeta', () => {
+    const { tree, buf } = parse(`publish(Msg, Chan) -> ok.\n`);
+    const syms = erlangHandler.extractSymbols(tree, buf, 'chan.erl');
+    const sym = syms.find((s) => s.name === 'publish');
+    expect(sym!.frameworkMeta?.['arity']).toBe(2);
+  });
+
+  it('stores module name in frameworkMeta when -module is present', () => {
+    const { tree, buf } = parse(`
+-module(rabbit_channel).
+publish(Msg, Chan) -> ok.
+`);
+    const syms = erlangHandler.extractSymbols(tree, buf, 'rabbit_channel.erl');
+    const sym = syms.find((s) => s.name === 'publish');
+    expect(sym!.frameworkMeta?.['module']).toBe('rabbit_channel');
+  });
+
+  it('does not set module in frameworkMeta when no -module present', () => {
+    const { tree, buf } = parse(`publish(Msg) -> ok.\n`);
+    const syms = erlangHandler.extractSymbols(tree, buf, 'chan.erl');
+    const sym = syms.find((s) => s.name === 'publish');
+    expect(sym!.frameworkMeta?.['module']).toBeUndefined();
   });
 
   // ── complete module example ───────────────────────────────────────────────
@@ -205,16 +236,22 @@ list_users() ->
     expect(names).toContain('user_service');  // module
     expect(names).toContain('user');           // record
     expect(names).toContain('user_id');        // type
-    expect(names).toContain('get_user/1');
-    expect(names).toContain('create_user/2');
-    expect(names).toContain('list_users/0');
+    expect(names).toContain('get_user');
+    expect(names).toContain('create_user');
+    expect(names).toContain('list_users');
+    // Verify arities stored in frameworkMeta
+    expect(syms.find((s) => s.name === 'get_user')!.frameworkMeta?.['arity']).toBe(1);
+    expect(syms.find((s) => s.name === 'create_user')!.frameworkMeta?.['arity']).toBe(2);
+    expect(syms.find((s) => s.name === 'list_users')!.frameworkMeta?.['arity']).toBe(0);
+    // Module stored in every function's frameworkMeta
+    expect(syms.find((s) => s.name === 'get_user')!.frameworkMeta?.['module']).toBe('user_service');
   });
 
   // ── byte offsets ──────────────────────────────────────────────────────────
 
   it('sets non-zero startByte and endByte for functions', () => {
     const { tree, buf } = parse(`\nfoo(X) ->\n    X + 1.\n`);
-    const sym = erlangHandler.extractSymbols(tree, buf, 'foo.erl').find((s) => s.name === 'foo/1')!;
+    const sym = erlangHandler.extractSymbols(tree, buf, 'foo.erl').find((s) => s.name === 'foo')!;
     expect(sym.startByte).toBeGreaterThan(0);
     expect(sym.endByte).toBeGreaterThan(sym.startByte);
   });
@@ -223,10 +260,10 @@ list_users() ->
 
   it('generates a deterministic 16-char hex ID', () => {
     const { tree, buf } = parse(`add(A, B) -> A + B.\n`);
-    const sym = erlangHandler.extractSymbols(tree, buf, 'math.erl').find((s) => s.name === 'add/2')!;
+    const sym = erlangHandler.extractSymbols(tree, buf, 'math.erl').find((s) => s.name === 'add')!;
     expect(sym.id).toHaveLength(16);
     expect(sym.id).toMatch(/^[0-9a-f]+$/);
-    const sym2 = erlangHandler.extractSymbols(tree, buf, 'math.erl').find((s) => s.name === 'add/2')!;
+    const sym2 = erlangHandler.extractSymbols(tree, buf, 'math.erl').find((s) => s.name === 'add')!;
     expect(sym2.id).toBe(sym.id);
   });
 });

@@ -198,17 +198,32 @@ function processDeclaration(
         if (child.type !== 'variable_declarator') continue;
         const name = getChildText(child, sourceStr, 'identifier');
         if (!name) continue;
-        const hasArrow = child.children.some((c) => c.type === 'arrow_function');
+        const directArrowNode = child.children.find((c) => c.type === 'arrow_function');
+        // HOC-wrapped: React.memo(fn), forwardRef(fn), connect(mapState)(fn), etc.
+        // Arrow may be a direct child of call_expression OR inside its 'arguments' node.
+        const wrappedArrowNode = !directArrowNode
+          ? (() => {
+              const callExpr = child.children.find((c) => c.type === 'call_expression');
+              if (!callExpr) return undefined;
+              const direct = callExpr.children.find(
+                (c) => c.type === 'arrow_function' || c.type === 'function_expression',
+              );
+              if (direct) return direct;
+              const argsNode = callExpr.children.find((c) => c.type === 'arguments');
+              return argsNode?.children.find(
+                (c) => c.type === 'arrow_function' || c.type === 'function_expression',
+              );
+            })()
+          : undefined;
+        const hasArrow = !!directArrowNode || !!wrappedArrowNode;
         const kind: SymbolKind = hasArrow ? 'function' : 'const';
         const summary = extractDocstring(declNode) ?? '';
-        // For arrow functions, try to find a block body for the snippet
+        // Extract body snippet from the arrow/function node (direct or wrapped)
         let arrowBodySnippet: string | undefined;
-        if (hasArrow) {
-          const arrowNode = child.children.find((c) => c.type === 'arrow_function');
-          if (arrowNode) {
-            const arrowBody = arrowNode.children.find((c) => BODY_NODE_TYPES.has(c.type));
-            if (arrowBody) arrowBodySnippet = extractBodySnippet(arrowBody, sourceStr);
-          }
+        const arrowNode = directArrowNode ?? wrappedArrowNode;
+        if (arrowNode) {
+          const arrowBody = arrowNode.children.find((c) => BODY_NODE_TYPES.has(c.type));
+          if (arrowBody) arrowBodySnippet = extractBodySnippet(arrowBody, sourceStr);
         }
         symbols.push({
           id: makeId(filePath, name, kind),

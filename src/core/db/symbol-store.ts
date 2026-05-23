@@ -118,10 +118,30 @@ function splitCamelParts(token: string): string[] {
 function buildFtsContent(s: SymbolRecord): string {
   const parts = [s.name, splitNameForFts(s.name), getFileStem(s.filePath), s.signature, s.summary, s.bodySnippet ?? ''];
   // For namespace-qualified C++ names, also add the bare local name as a standalone token.
-  // This improves BM25 ranking when searching for the unqualified name (e.g. "Future").
   if (s.name.includes('::')) {
     const localName = s.name.split('::').pop()!;
     if (localName && localName !== s.name) parts.push(localName);
+  }
+  // For XML-disambiguated names (e.g. project@maven-core), add the bare tag name as a standalone token.
+  if (s.name.includes('@')) {
+    const tagName = s.name.split('@')[0]!;
+    if (tagName && tagName !== s.name) parts.push(tagName);
+  }
+  // Erlang: add module name as standalone FTS token so queries like "rabbit_channel publish"
+  // can match functions indexed with frameworkMeta.module.
+  if (s.frameworkMeta?.['module'] && typeof s.frameworkMeta['module'] === 'string') {
+    const mod = s.frameworkMeta['module'] as string;
+    parts.push(mod);
+    parts.push(mod.replace(/_/g, ' ')); // split "rabbit_channel" → "rabbit channel"
+  }
+  // Protobuf: add service name as standalone FTS token so "spanner read" matches
+  // Spanner.Read above other services that also have a Read method.
+  if (s.frameworkMeta?.['serviceName'] && typeof s.frameworkMeta['serviceName'] === 'string') {
+    parts.push(s.frameworkMeta['serviceName'] as string);
+  }
+  // Neovim: add vim.api alias so queries using the Lua-qualified form match C API functions.
+  if (s.frameworkMeta?.['luaApiAlias'] && typeof s.frameworkMeta['luaApiAlias'] === 'string') {
+    parts.push(s.frameworkMeta['luaApiAlias'] as string);
   }
   return parts.filter(Boolean).join(' ');
 }

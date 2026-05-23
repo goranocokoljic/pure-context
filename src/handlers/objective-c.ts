@@ -2,14 +2,17 @@
  * Objective-C language handler — regex-based extraction.
  *
  * Handles Objective-C and Objective-C++ source files (.m, .mm) and headers (.h).
+ * Pure-C headers (no @interface / @protocol markers) are returned with 0 symbols
+ * so the dispatcher can fall back to the C handler.
  *
  * Symbols extracted:
  *   @interface Name : SuperClass           → kind: 'class'
- *   @interface Name (Category)             → kind: 'class'
+ *   @interface Name (Category)             → kind: 'class', name: 'Name+Category'
+ *   @interface Name ()  (extension)        → kind: 'class', frameworkMeta.classExtension=true
  *   @protocol Name                         → kind: 'interface'
- *   - (ReturnType)methodName:(Type)arg     → kind: 'method'
- *   + (ReturnType)classMethod              → kind: 'method'
- *   @property (...) Type name             → kind: 'const'
+ *   - (ReturnType)methodName:(T)a kw:(T)b  → kind: 'method', name: 'methodName:kw:'
+ *   + (ReturnType)classMethod              → kind: 'method', frameworkMeta.isClassMethod=true
+ *   @property (...) Type name             → kind: 'property'
  *
  * Docstrings: preceding `/** ... *\/` or `///` comment block.
  * Imports: `#import "File.h"` and `#import <Framework/Header.h>` → ImportRecord.
@@ -129,17 +132,28 @@ function precedingComment(lines: LineInfo[], lineIdx: number): string | null {
   return null;
 }
 
+// ─── ObjC detection guard ────────────────────────────────────────────────────
+
+/** Returns true if the buffer looks like an Objective-C header (has @interface or @protocol). */
+function isObjCHeader(source: Buffer): boolean {
+  const peek = source.slice(0, 16 * 1024).toString('utf8');
+  return /@interface\b/.test(peek) || /@protocol\b/.test(peek);
+}
+
 // ─── Patterns ─────────────────────────────────────────────────────────────────
 
-// @interface Name : SuperClass or @interface Name <Protocol> or @interface Name (Category)
-const INTERFACE_RE = /^\s*@interface\s+(\w+)(\s*[:(< ].*)?$/;
+// @interface ClassName : SuperClass <P1, P2>  or  @interface ClassName (Category)
+// Groups: (1) className, (2) superclass, (3) protocols, (4) category name (undef if none, '' if anonymous)
+const INTERFACE_RE =
+  /^\s*@interface\s+(\w+)(?:\s*:\s*(\w+))?(?:\s*<([^>]+)>)?(?:\s*\((\w*)\))?/;
+
 // @protocol Name
 const PROTOCOL_RE = /^\s*@protocol\s+(\w+)\b/;
 // @implementation Name or @implementation Name (Category)
 const IMPL_RE = /^\s*@implementation\s+(\w+)(?:\s*\((\w+)\))?/;
-// Instance method: - (ReturnType)methodName or - (ReturnType)methodName:(Type)arg
+// Instance method: - (ReturnType)methodName...
 const INST_METHOD_RE = /^\s*-\s*\(([^)]+)\)\s*(\w+)/;
-// Class method: + (ReturnType)methodName
+// Class method: + (ReturnType)methodName...
 const CLASS_METHOD_RE = /^\s*\+\s*\(([^)]+)\)\s*(\w+)/;
 // @property (...) Type *?name
 const PROPERTY_RE = /^\s*@property\s*(?:\([^)]*\)\s*)?([\w\s*<>]+?)\s+\*?(\w+)\s*;/;
@@ -148,9 +162,55 @@ const IMPORT_RE = /^\s*#\s*import\s+["<]([^">]+)[">]/;
 // #include "File.h" or #include <File.h>
 const INCLUDE_RE = /^\s*#\s*include\s+["<]([^">]+)[">]/;
 
+// ─── Selector builder ─────────────────────────────────────────────────────────
+
+/**
+ * Build the full Objective-C method selector from the declaration text.
+ * - `- (void)setObject:(id)obj forKey:(id)key;` → `setObject:forKey:`
+ * - `- (NSString *)name;` → `name`
+ */
+function buildSelector(lines: LineInfo[], startLine: number): { selector: string; endLine: number } {
+  // Collect declaration text until ; or { (up to 10 lines for long signatures)
+  let text = '';
+  let endLine = startLine;
+  for (let k = startLine; k < Math.min(startLine + 10, lines.length); k++) {
+    const lineText = lines[k]!.text;
+    text += ' ' + lineText;
+    if (/[;{]/.test(lineText)) { endLine = k; break; }
+    endLine = k;
+  }
+
+  // Strip leading - or + and the return type parenthetical
+  const afterReturn = text.replace(/^\s*[+-]\s*\([^)]*\)\s*/, '');
+
+  // Find all `word:` keyword segments (each becomes part of the selector)
+  const keywordRe = /(\w+)\s*:/g;
+  const parts: string[] = [];
+  let m;
+  while ((m = keywordRe.exec(afterReturn)) !== null) {
+    // Stop at method body start or comment
+    if (afterReturn.slice(0, m.index).includes('//') ||
+        afterReturn.slice(0, m.index).includes('/*')) break;
+    parts.push(m[1]! + ':');
+  }
+
+  if (parts.length === 0) {
+    // No colons → method has no arguments
+    const noArgMatch = /^(\w+)/.exec(afterReturn);
+    return { selector: noArgMatch ? noArgMatch[1]! : '', endLine };
+  }
+
+  return { selector: parts.join(''), endLine };
+}
+
 // ─── Symbol extraction ────────────────────────────────────────────────────────
 
 function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRecord[] {
+  // Detection guard: skip pure-C headers (no ObjC markers)
+  if (filePath.endsWith('.h') && !isObjCHeader(source)) {
+    return [];
+  }
+
   const lines = buildLineIndex(source);
   const symbols: SymbolRecord[] = [];
 
@@ -163,24 +223,50 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
     const lineText = raw.trim();
 
     // ── @interface → 'class' ─────────────────────────────────────────────────
-    const ifaceMatch = INTERFACE_RE.exec(lineText);
-    if (ifaceMatch && lineText.startsWith('@interface')) {
-      const name = ifaceMatch[1]!;
-      const end = findAtEnd(lines, i);
-      const summary = precedingComment(lines, i) ?? `Objective-C interface: ${name}`;
-      symbols.push({
-        id: makeId(filePath, name, 'class'),
-        name,
-        kind: 'class',
-        filePath,
-        startByte: lines[i]!.startByte,
-        endByte: lines[end]!.endByte,
-        signature: trunc(lineText),
-        summary,
-      });
-      currentClass = name;
-      i++;
-      continue;
+    if (lineText.startsWith('@interface')) {
+      const ifaceMatch = INTERFACE_RE.exec(lineText);
+      if (ifaceMatch) {
+        const className = ifaceMatch[1]!;
+        const superclass = ifaceMatch[2] ?? null;
+        const protocolsStr = ifaceMatch[3] ?? null;
+        const categoryName = ifaceMatch[4]; // undefined = no parens; '' = anonymous; 'Name' = category
+
+        let name: string;
+        const meta: Record<string, unknown> = {};
+
+        if (categoryName !== undefined) {
+          if (categoryName === '') {
+            // Anonymous class extension @interface Foo ()
+            name = className;
+            meta['classExtension'] = true;
+          } else {
+            // Named category @interface Foo (Bar)
+            name = `${className}+${categoryName}`;
+            meta['category'] = categoryName;
+          }
+        } else {
+          name = className;
+          if (superclass) meta['superclass'] = superclass;
+          if (protocolsStr) meta['protocols'] = protocolsStr.split(',').map((p) => p.trim());
+        }
+
+        const end = findAtEnd(lines, i);
+        const summary = precedingComment(lines, i) ?? `Objective-C interface: ${className}`;
+        symbols.push({
+          id: makeId(filePath, name, 'class'),
+          name,
+          kind: 'class',
+          filePath,
+          startByte: lines[i]!.startByte,
+          endByte: lines[end]!.endByte,
+          signature: trunc(lineText),
+          summary,
+          frameworkMeta: Object.keys(meta).length > 0 ? meta : undefined,
+        });
+        currentClass = className;
+        i++;
+        continue;
+      }
     }
 
     // ── @protocol → 'interface' ───────────────────────────────────────────────
@@ -222,19 +308,8 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
     const instMatch = INST_METHOD_RE.exec(lineText);
     if (instMatch) {
       const returnType = instMatch[1]!.trim();
-      const methodName = instMatch[2]!;
-      const qualifiedName = currentClass ? `${currentClass}:${methodName}` : methodName;
-
-      // Build full Objective-C method signature (may span multiple lines)
-      let sig = lineText;
-      // Find end of declaration (line with ';' or '{')
-      let end = i;
-      for (let k = i; k < Math.min(i + 6, lines.length); k++) {
-        const t = lines[k]!.text;
-        if (t.includes(';') || t.includes('{')) { end = k; break; }
-        sig += ' ' + t.trim();
-        end = k;
-      }
+      const { selector, endLine } = buildSelector(lines, i);
+      const qualifiedName = currentClass ? `${currentClass}:${selector}` : selector;
 
       symbols.push({
         id: makeId(filePath, qualifiedName, 'method'),
@@ -242,12 +317,12 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
         kind: 'method',
         filePath,
         startByte: lines[i]!.startByte,
-        endByte: lines[end]!.endByte,
-        signature: trunc(`- (${returnType})${methodName}`),
-        summary: precedingComment(lines, i) ?? `Instance method: ${methodName}`,
+        endByte: lines[endLine]!.endByte,
+        signature: trunc(`- (${returnType})${selector}`),
+        summary: precedingComment(lines, i) ?? `Instance method: ${selector}`,
         frameworkMeta: { isClassMethod: false },
       });
-      i = end + 1;
+      i = endLine + 1;
       continue;
     }
 
@@ -255,15 +330,8 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
     const classMatch = CLASS_METHOD_RE.exec(lineText);
     if (classMatch) {
       const returnType = classMatch[1]!.trim();
-      const methodName = classMatch[2]!;
-      const qualifiedName = currentClass ? `${currentClass}::${methodName}` : methodName;
-
-      let end = i;
-      for (let k = i; k < Math.min(i + 6, lines.length); k++) {
-        const t = lines[k]!.text;
-        if (t.includes(';') || t.includes('{')) { end = k; break; }
-        end = k;
-      }
+      const { selector, endLine } = buildSelector(lines, i);
+      const qualifiedName = currentClass ? `${currentClass}::${selector}` : selector;
 
       symbols.push({
         id: makeId(filePath, qualifiedName, 'method'),
@@ -271,24 +339,24 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
         kind: 'method',
         filePath,
         startByte: lines[i]!.startByte,
-        endByte: lines[end]!.endByte,
-        signature: trunc(`+ (${returnType})${methodName}`),
-        summary: precedingComment(lines, i) ?? `Class method: ${methodName}`,
+        endByte: lines[endLine]!.endByte,
+        signature: trunc(`+ (${returnType})${selector}`),
+        summary: precedingComment(lines, i) ?? `Class method: ${selector}`,
         frameworkMeta: { isClassMethod: true },
       });
-      i = end + 1;
+      i = endLine + 1;
       continue;
     }
 
-    // ── @property → 'const' ───────────────────────────────────────────────────
+    // ── @property → 'property' ────────────────────────────────────────────────
     const propMatch = PROPERTY_RE.exec(lineText);
     if (propMatch) {
       const propName = propMatch[2]!;
       const qualifiedName = currentClass ? `${currentClass}.${propName}` : propName;
       symbols.push({
-        id: makeId(filePath, qualifiedName, 'const'),
+        id: makeId(filePath, qualifiedName, 'property'),
         name: qualifiedName,
-        kind: 'const',
+        kind: 'property',
         filePath,
         startByte: lines[i]!.startByte,
         endByte: lines[i]!.endByte,
@@ -354,7 +422,7 @@ function extractDocstring(_node: SyntaxNode): string | null {
 // ─── Handler export ───────────────────────────────────────────────────────────
 
 export const objectiveCHandler: LanguageHandler = {
-  extensions: () => ['.m', '.mm'],
+  extensions: () => ['.m', '.mm', '.h'],
   grammarPath: () => null, // no pre-built WASM; uses regex extraction
   extractSymbols,
   extractImports,

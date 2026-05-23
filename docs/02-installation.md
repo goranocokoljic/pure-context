@@ -189,10 +189,27 @@ npx purecontext-mcp install all
 
 This auto-detects which AI tools are configured in the project (by looking for marker files such as `.cursor/`, `.windsurfrules`, `CLAUDE.md`, `.continue/`, etc.) and installs the rules for each.
 
+When no `--scope` flag is given, the CLI prompts you to choose where to install:
+
+```
+Where should PureContext be installed?
+  1) Local  — this project only
+  2) Global — all projects (user-level config)
+  3) Both
+```
+
+Pass `--scope` to skip the prompt:
+
+```bash
+npx purecontext-mcp install all --scope=local    # this project only
+npx purecontext-mcp install all --scope=global   # user-level, all projects
+npx purecontext-mcp install all --scope=both     # both places at once
+```
+
 For a single tool:
 
 ```bash
-npx purecontext-mcp install cursor
+npx purecontext-mcp install cursor --scope=global
 npx purecontext-mcp install windsurf
 npx purecontext-mcp install continue
 # ...etc.
@@ -207,16 +224,38 @@ npx purecontext-mcp install all --dry-run    # preview which writers would run
 
 ### Supported tools
 
-| Tool | What gets written | Notes |
-|------|-------------------|-------|
-| `claude` | `CLAUDE.md` injection + Claude Code hooks | Equivalent to `purecontext-mcp hooks --install`. Installs PostToolUse re-index, PreCompact snapshot, and a soft edit guard. |
-| `cursor` | `.cursor/rules/purecontext.mdc` | MDC frontmatter with `alwaysApply: true` so the rule is always loaded. |
-| `windsurf` | `.windsurfrules` | Marked block appended or replaced in place. |
-| `continue` | `.continue/config.json` → `systemMessage` field | JSON-aware merge; other fields are preserved. |
-| `cline` | `.clinerules` | Marked block at root of file. |
-| `roo-code` | `.roo/rules-code.md` | Roo Code's code-mode rule slot. |
-| `vscode` | `.github/copilot-instructions.md` | Picked up by GitHub Copilot in VS Code (also respected by some other Copilot-compatible tools). |
-| `claude-desktop` | Platform-specific `claude_desktop_config.json` | Merges the MCP server entry; leaves any other servers untouched. |
+| Tool | Local | Global | Notes |
+|------|-------|--------|-------|
+| `claude` | `CLAUDE.md` in project | `~/.claude/CLAUDE.md` + hooks | Global registers seven hook events — see [Claude Code hooks](#claude-code-hooks) below. |
+| `cursor` | `.cursor/rules/purecontext.mdc` | `~/.cursor/rules/purecontext.mdc` | MDC frontmatter with `alwaysApply: true`. |
+| `windsurf` | `.windsurfrules` | `~/.windsurfrules` | Marked block appended or replaced in place. |
+| `continue` | `.continue/config.json` | `~/.continue/config.json` | JSON-aware merge; other fields are preserved. |
+| `cline` | `.clinerules` | local only | No known global config path. |
+| `roo-code` | `.roo/rules-code.md` | local only | No known global config path. |
+| `vscode` | `.github/copilot-instructions.md` | local only | Picked up by GitHub Copilot in VS Code. |
+| `claude-desktop` | always global | always global | Merges MCP server entry; leaves other servers untouched. |
+
+### Claude Code hooks
+
+When you run `npx purecontext-mcp install claude` (or the standalone `npx purecontext-mcp hooks --install`), PureContext registers seven hook events in `~/.claude/settings.json`. Each hook is a CLI-style command — no scripts are copied to `~/.claude/hooks/`; the hook logic lives inside the installed package and updates automatically when you upgrade.
+
+| Hook event | Command | What it does |
+|------------|---------|--------------|
+| `PostToolUse` | `hook-posttooluse` | Re-indexes files modified by Edit/Write/MultiEdit |
+| `PreToolUse` | `hook-pretooluse` | Soft edit guard — suggests read tools before editing unread files |
+| `PreCompact` | `hook-precompact` | Injects the list of indexed repos before context is compacted |
+| `WorktreeCreate` | `hook-worktree-create` | Auto-indexes a newly created agent worktree |
+| `WorktreeRemove` | `hook-worktree-remove` | Fires when an agent worktree is removed (reserved for cleanup) |
+| `TaskCompleted` | `hook-taskcompleted` | Post-task diagnostics: complexity hotspots, TODO count, suggested tools |
+| `SubagentStart` | `hook-subagentstart` | Injects a condensed repo orientation for newly spawned subagents |
+
+Running `hooks --install` more than once is safe. It replaces existing PureContext entries (including old `.mjs`-path style entries from versions prior to 1.8.0) while leaving other tools' hooks untouched.
+
+To see the current registration status without making changes:
+
+```bash
+npx purecontext-mcp hooks --list
+```
 
 ### Idempotency
 

@@ -163,6 +163,14 @@ const VERB_SYNONYMS: Readonly<Record<string, ReadonlyArray<string>>> = {
   'trigger':        ['run', 'start', 'build', 'execute'],       // "trigger build pipeline" → buildNuxt
   'append':         ['add', 'push', 'register'],                // "append plugin" → addVitePlugin
   'composable':     ['use'],                                     // Vue composables all start with "use"
+  // Crypto / security vocabulary (Task 431)
+  'cipher':         ['encrypt', 'encode'],
+  'encrypt':        ['cipher', 'encode'],
+  'decrypt':        ['decipher', 'decode'],
+  'decipher':       ['decrypt', 'decode'],
+  'secret':         ['key', 'credential'],
+  'credential':     ['key', 'secret', 'token'],
+  'token':          ['key', 'credential'],
 };
 
 // Synonyms that are only relevant in rendering/graphics/PBR codebases.
@@ -212,7 +220,12 @@ export function expandVerbSynonyms(
   const lower = token.toLowerCase();
   if (RENDERING_ONLY_SYNONYMS.has(lower) && domain !== 'rendering') return [];
   if (RUST_ONLY_SYNONYMS.has(lower) && domain !== 'rust') return [];
-  return VERB_SYNONYMS[lower] ?? [];
+  // Use hasOwnProperty to avoid prototype-chain collisions (e.g. "constructor"
+  // resolves to Object.prototype.constructor which has .length===1 but is not iterable).
+  const entry = Object.prototype.hasOwnProperty.call(VERB_SYNONYMS, lower)
+    ? VERB_SYNONYMS[lower]
+    : undefined;
+  return entry ?? [];
 }
 
 // ─── Abbreviation dictionaries ────────────────────────────────────────────────

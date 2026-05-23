@@ -228,10 +228,27 @@ npx purecontext-mcp install all
 
 This auto-detects which AI coding tools you have set up in the project and writes the PureContext workflow rules to the right place for each. Re-running is safe — every writer is idempotent (managed blocks are marked and replaced rather than appended).
 
+When no `--scope` flag is given, the CLI prompts you to choose where to install:
+
+```
+Where should PureContext be installed?
+  1) Local  — this project only
+  2) Global — all projects (user-level config)
+  3) Both
+```
+
+Pass `--scope` to skip the prompt:
+
+```bash
+npx purecontext-mcp install all --scope=local    # this project only
+npx purecontext-mcp install all --scope=global   # user-level, all projects
+npx purecontext-mcp install all --scope=both     # both places at once
+```
+
 For a single tool:
 
 ```bash
-npx purecontext-mcp install <tool>
+npx purecontext-mcp install <tool> --scope=global
 ```
 
 To preview without writing files:
@@ -243,16 +260,16 @@ npx purecontext-mcp install --list      # show which IDEs were detected
 
 Supported tools and where each one writes:
 
-| Tool | Target file |
-|------|-------------|
-| `claude` | `CLAUDE.md` + Claude Code hooks (PostToolUse re-index, PreCompact snapshot, edit guard) |
-| `cursor` | `.cursor/rules/purecontext.mdc` (MDC frontmatter, `alwaysApply: true`) |
-| `windsurf` | `.windsurfrules` |
-| `continue` | `.continue/config.json` (merges `systemMessage`, preserves other fields) |
-| `cline` | `.clinerules` |
-| `roo-code` | `.roo/rules-code.md` |
-| `vscode` | `.github/copilot-instructions.md` (GitHub Copilot in VS Code) |
-| `claude-desktop` | Platform-specific Claude Desktop config (merges MCP server entry) |
+| Tool | Local | Global |
+|------|-------|--------|
+| `claude` | `CLAUDE.md` in project | `~/.claude/CLAUDE.md` + hooks |
+| `cursor` | `.cursor/rules/purecontext.mdc` | `~/.cursor/rules/purecontext.mdc` |
+| `windsurf` | `.windsurfrules` | `~/.windsurfrules` |
+| `continue` | `.continue/config.json` | `~/.continue/config.json` |
+| `cline` | `.clinerules` | local only |
+| `roo-code` | `.roo/rules-code.md` | local only |
+| `vscode` | `.github/copilot-instructions.md` | local only |
+| `claude-desktop` | always global | always global |
 
 ### Manual install
 

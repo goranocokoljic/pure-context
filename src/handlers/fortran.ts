@@ -302,7 +302,7 @@ function extractDocstring(_node: SyntaxNode): string | null {
 // ─── Handler export ───────────────────────────────────────────────────────────
 
 export const fortranHandler: LanguageHandler = {
-  extensions: () => ['.f90', '.f95', '.f03', '.f08', '.for', '.f'],
+  extensions: () => ['.f90', '.f95', '.f03', '.f08', '.for', '.f', '.F90', '.F95', '.F03', '.F08', '.FOR', '.F'],
   grammarPath: () => null, // no pre-built WASM; uses regex extraction
   extractSymbols,
   extractImports,

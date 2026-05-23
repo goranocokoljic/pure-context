@@ -94,14 +94,25 @@ export async function indexFolder(
     extensions: allExtensions,
     fileLimit: effectiveFileLimit,
     extraExcludePatterns: options.excludePatterns,
+    ...(options.maxFileSizeBytes !== undefined && { maxFileSizeBytes: options.maxFileSizeBytes }),
+    ...(options.extensionlessFilenames && { extensionlessFilenames: options.extensionlessFilenames }),
   });
 
   // ── 3b. Filter to files with known language handlers OR active adapters ──
   const supportedExts = new Set(getSupportedExtensions());
   const adapterExts = new Set(getAdapterExtensions(adapters));
+  // Extensionless files: basename → routed via shebang in file-processor
+  const extensionlessAllowlist = options.extensionlessFilenames
+    ? new Set(options.extensionlessFilenames)
+    : null; // null = allow all extensionless files (shebang detection handles them)
   const supportedFiles = discovered.filter((df) => {
     const dot = df.path.lastIndexOf('.');
-    const ext = dot >= 0 ? df.path.slice(dot) : '';
+    const ext = dot >= 0 ? df.path.slice(dot).toLowerCase() : '';
+    if (ext === '') {
+      if (extensionlessAllowlist === null) return true; // allow all; shebang detection filters
+      const base = df.path.split('/').pop() ?? df.path;
+      return extensionlessAllowlist.has(base);
+    }
     return supportedExts.has(ext) || adapterExts.has(ext);
   });
 
@@ -329,11 +340,13 @@ export async function indexFolder(
   // ── 10e. Test coverage mapping ────────────────────────────────────────────
   // Heuristic: find which production symbols are referenced in test files.
   // Runs after symbols are indexed; errors never abort indexing.
-  try {
-    const mappedCount = buildTestMappings(repoId, db);
-    logger.info(`Test mapper: ${mappedCount} production symbols mapped`);
-  } catch (err) {
-    logger.warn(`Test mapper failed: ${err}`);
+  if (!options.skipTestMapper) {
+    try {
+      const mappedCount = buildTestMappings(repoId, db);
+      logger.info(`Test mapper: ${mappedCount} production symbols mapped`);
+    } catch (err) {
+      logger.warn(`Test mapper failed: ${err}`);
+    }
   }
 
   // ── 10f. Git metadata capture ─────────────────────────────────────────────

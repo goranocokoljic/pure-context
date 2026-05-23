@@ -191,6 +191,7 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
             endByte: lines[j]!.endByte,
             signature: trunc(`rpc ${rpcName}(${streamIn}${inputType}) returns (${streamOut}${outputType})`),
             summary: precedingComment(lines, j) ?? `RPC method: ${rpcName}`,
+            frameworkMeta: { serviceName: svcName },
           });
         }
       }

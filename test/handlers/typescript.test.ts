@@ -284,6 +284,55 @@ describe('TypeScript handler — real fixture files', () => {
   });
 });
 
+// ─── Phase 74: HOC-wrapped arrow function detection ──────────────────────────
+
+describe('TypeScript handler — HOC-wrapped arrows (Phase 74)', () => {
+  it('React.memo-wrapped component is emitted as kind=function', async () => {
+    const src = `export const Button = React.memo((props: ButtonProps) => { return null; });`;
+    const { tree, buf } = await parse(src);
+    const syms = typescriptHandler.extractSymbols(tree, buf, 'src/Button.ts');
+    const btn = syms.find((s) => s.name === 'Button')!;
+    expect(btn).toBeDefined();
+    expect(btn.kind).toBe('function');
+  });
+
+  it('React.forwardRef-wrapped component is emitted as kind=function', async () => {
+    const src = `export const Input = React.forwardRef<HTMLInputElement, InputProps>((props, ref) => { return null; });`;
+    const { tree, buf } = await parse(src);
+    const syms = typescriptHandler.extractSymbols(tree, buf, 'src/Input.ts');
+    const inp = syms.find((s) => s.name === 'Input')!;
+    expect(inp).toBeDefined();
+    expect(inp.kind).toBe('function');
+  });
+
+  it('plain HOC-wrapped hook is emitted as kind=function', async () => {
+    const src = `export const useAuth = withErrorBoundary(() => { return useState(null); });`;
+    const { tree, buf } = await parse(src);
+    const syms = typescriptHandler.extractSymbols(tree, buf, 'src/useAuth.ts');
+    const hook = syms.find((s) => s.name === 'useAuth')!;
+    expect(hook).toBeDefined();
+    expect(hook.kind).toBe('function');
+  });
+
+  it('plain data const (no arrow inside call) stays kind=const', async () => {
+    const src = `export const config = createConfig({ key: 'value' });`;
+    const { tree, buf } = await parse(src);
+    const syms = typescriptHandler.extractSymbols(tree, buf, 'src/config.ts');
+    const cfg = syms.find((s) => s.name === 'config')!;
+    expect(cfg).toBeDefined();
+    expect(cfg.kind).toBe('const');
+  });
+
+  it('wrapped function_expression is also detected as kind=function', async () => {
+    const src = `export const render = React.memo(function RenderFn(props: Props) { return null; });`;
+    const { tree, buf } = await parse(src);
+    const syms = typescriptHandler.extractSymbols(tree, buf, 'src/render.ts');
+    const fn = syms.find((s) => s.name === 'render')!;
+    expect(fn).toBeDefined();
+    expect(fn.kind).toBe('function');
+  });
+});
+
 // ─── TSX handler ─────────────────────────────────────────────────────────────
 
 describe('TSX handler', () => {

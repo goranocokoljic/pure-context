@@ -211,6 +211,31 @@ describe('sqlHandler — dbt model (SELECT-only)', () => {
     );
     expect(syms[0].name).toBe('stg_customers');
   });
+
+  it('emits file stem AND CTE symbols when a dbt model has CTEs', () => {
+    const sql = `
+with
+
+source as (
+    select * from {{ source('ecom', 'raw_orders') }}
+),
+
+renamed as (
+    select id as order_id from source
+)
+
+select * from renamed
+`.trimStart();
+    const buf = Buffer.from(sql);
+    const syms = sqlHandler.extractSymbols(null as unknown as Tree, buf, 'models/staging/stg_orders.sql');
+    const names = syms.map((s) => s.name);
+    expect(names).toContain('stg_orders');
+    expect(names).toContain('source');
+    expect(names).toContain('renamed');
+    const stem = syms.find((s) => s.name === 'stg_orders')!;
+    expect(stem.kind).toBe('function');
+    expect(stem.frameworkMeta).toMatchObject({ isDbtModel: true });
+  });
 });
 
 // ─── dbt macro file ───────────────────────────────────────────────────────────

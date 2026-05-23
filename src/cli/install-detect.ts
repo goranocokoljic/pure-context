@@ -67,9 +67,9 @@ export async function detectInstalledIDEs(projectRoot: string): Promise<string[]
     detected.push('roo-code');
   }
 
-  // VS Code Copilot — .vscode/ directory exists
+  // GitHub Copilot — .vscode/ directory exists
   if (existsSync(join(projectRoot, '.vscode'))) {
-    detected.push('vscode');
+    detected.push('copilot');
   }
 
   // Claude Desktop — platform config path

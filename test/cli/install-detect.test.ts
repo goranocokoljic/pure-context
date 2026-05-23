@@ -67,13 +67,13 @@ describe('detectInstalledIDEs', () => {
     }
   });
 
-  it('detects cline and vscode independently when .vscode/ exists', async () => {
-    const root = makeTempDir('detect-vscode');
+  it('detects cline and copilot independently when .vscode/ exists', async () => {
+    const root = makeTempDir('detect-copilot');
     mkdirSync(join(root, '.vscode'));
     try {
       const result = await detectInstalledIDEs(root);
       expect(result).toContain('cline');
-      expect(result).toContain('vscode');
+      expect(result).toContain('copilot');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -126,7 +126,7 @@ describe('detectInstalledIDEs', () => {
       expect(result).toContain('cursor');
       expect(result).toContain('windsurf');
       expect(result).toContain('cline');
-      expect(result).toContain('vscode');
+      expect(result).toContain('copilot');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

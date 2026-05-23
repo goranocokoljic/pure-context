@@ -231,6 +231,23 @@ function extractDocstring(node: SyntaxNode): string | null {
   return null;
 }
 
+// ─── Neovim Lua API alias ─────────────────────────────────────────────────────
+
+const NVIM_API_RE = /^nvim_[a-z_][a-z0-9_]*$/;
+
+/**
+ * When a C function is a Neovim API function (name matches nvim_* AND the file
+ * lives inside a nvim/ directory), return the Lua-qualified alias `vim.api.<name>`.
+ * This alias is added to FTS content so queries using the Lua form (`vim.api.nvim_open_win`)
+ * can match the C implementation.
+ */
+function maybeNvimLuaAlias(name: string, filePath: string): string | null {
+  if (!NVIM_API_RE.test(name)) return null;
+  const normalised = filePath.replace(/\\/g, '/');
+  if (!normalised.includes('/nvim/')) return null;
+  return `vim.api.${name}`;
+}
+
 // ─── Symbol extraction ────────────────────────────────────────────────────────
 
 /**
@@ -243,6 +260,7 @@ function collectTopLevelNodes(nodes: SyntaxNode[]): SyntaxNode[] {
   for (const node of nodes) {
     if (
       node.type === 'preproc_ifdef' ||
+      node.type === 'preproc_ifndef' ||
       node.type === 'preproc_if' ||
       node.type === 'preproc_else' ||
       node.type === 'preproc_elif'
@@ -282,6 +300,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
 
         const sig = buildFunctionSignature(node, src);
         const doc = extractDocstring(node);
+        const luaAlias = maybeNvimLuaAlias(name, filePath);
         symbols.push({
           id: makeId(filePath, name, 'function'),
           name,
@@ -291,6 +310,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
           endByte: node.endIndex,
           signature: sig,
           summary: doc ?? `C function: ${name}`,
+          ...(luaAlias ? { frameworkMeta: { luaApiAlias: luaAlias } } : {}),
         });
         break;
       }

@@ -200,9 +200,12 @@ describe('openApiHandler — OpenAPI 3.x path extraction', () => {
     expect(s).toBeDefined();
   });
 
-  it('sets summary from operation.summary', () => {
+  it('sets summary from operation.summary (enriched with HTTP verb tokens)', () => {
     const s = syms().find((x) => x.name === 'GET /users');
-    expect(s!.summary).toBe('List all users');
+    // Summary is enriched with HTTP-verb synonyms and path tokens (Task 435)
+    expect(s!.summary).toContain('List all users');
+    expect(s!.summary).toContain('retrieve');
+    expect(s!.summary).toContain('users');
   });
 
   it('sets signature from operationId', () => {

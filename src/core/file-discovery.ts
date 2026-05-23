@@ -45,6 +45,12 @@ export interface DiscoveryOptions {
   extraExcludePatterns?: string[];
   /** Maximum file size in bytes — files larger than this are skipped. Default: 1 MB. */
   maxFileSizeBytes?: number;
+  /**
+   * Bare filenames (no extension) to include during discovery.
+   * e.g. ["functions", "Makefile"] to discover dokku plugin `functions` files.
+   * When undefined, extensionless files are skipped (default behaviour).
+   */
+  extensionlessFilenames?: string[];
 }
 
 export interface DiscoveryResult {
@@ -64,12 +70,14 @@ export function discoverFiles(
     fileLimit = DEFAULT_FILE_LIMIT,
     extraExcludePatterns = [],
     maxFileSizeBytes = DEFAULT_MAX_FILE_BYTES,
+    extensionlessFilenames,
   } = options;
 
   const ig = buildIgnoreFilter(rootPath, extraExcludePatterns);
   const results: DiscoveredFile[] = [];
+  const extensionlessSet = extensionlessFilenames ? new Set(extensionlessFilenames) : undefined;
 
-  walk(rootPath, rootPath, ig, extensions, maxFileSizeBytes, results);
+  walk(rootPath, rootPath, ig, extensions, maxFileSizeBytes, results, extensionlessSet);
 
   results.sort((a, b) => {
     if (b.priority !== a.priority) return b.priority - a.priority;
@@ -106,6 +114,7 @@ function walk(
   extensions: string[] | undefined,
   maxFileSizeBytes: number,
   results: DiscoveredFile[],
+  extensionlessFilenames?: Set<string>,
 ): void {
   let entries;
   try {
@@ -119,10 +128,13 @@ function walk(
     // Relative path from root, using forward slashes (ignore package expects /)
     const relPath = relative(rootPath, absPath).split(sep).join('/');
 
-    if (ig.ignores(relPath)) continue;
+    // For directories, check with trailing slash so that negation patterns like
+    // !/deps/rabbit/ (after /deps/*) correctly un-ignore the directory.
+    const checkPath = entry.isDirectory() ? relPath + '/' : relPath;
+    if (ig.ignores(checkPath)) continue;
 
     if (entry.isDirectory()) {
-      walk(rootPath, absPath, ig, extensions, maxFileSizeBytes, results);
+      walk(rootPath, absPath, ig, extensions, maxFileSizeBytes, results, extensionlessFilenames);
       continue;
     }
 
@@ -130,9 +142,14 @@ function walk(
 
     if (extensions) {
       const dot = entry.name.lastIndexOf('.');
-      if (dot === -1) continue;
-      const ext = entry.name.slice(dot);
-      if (!extensions.includes(ext)) continue;
+      if (dot === -1) {
+        // No extension: include if name is in the allowlist OR no allowlist is set
+        // (shebang detection in file-processor.ts routes the file or returns 0 symbols)
+        if (extensionlessFilenames && !extensionlessFilenames.has(entry.name)) continue;
+      } else {
+        const ext = entry.name.slice(dot);
+        if (!extensions.includes(ext.toLowerCase())) continue;
+      }
     }
 
     // Skip files matching credential/secret patterns

@@ -201,3 +201,64 @@ describe('XML handler — extractImports', () => {
     expect(specs).toContain('app.js');
   });
 });
+
+// ─── XML symbol disambiguation ────────────────────────────────────────────────
+
+describe('XML handler — symbol disambiguation', () => {
+
+  it('appends parent dir name when file-stem is generic (pom)', () => {
+    const { tree, buf } = parse(`<project>\n  <name>Core</name>\n</project>\n`);
+    const syms = xmlHandler.extractSymbols(tree, buf, 'maven-core/pom.xml');
+    const sym = syms.find((s) => s.kind === 'class');
+    expect(sym).toBeDefined();
+    expect(sym!.name).toBe('project@maven-core');
+    // Bare tag name preserved in bodySnippet for FTS fallback
+    expect(sym!.bodySnippet).toBe('project');
+  });
+
+  it('two pom.xml files in different modules get distinct names', () => {
+    const { tree: t1, buf: b1 } = parse(`<project></project>`);
+    const { tree: t2, buf: b2 } = parse(`<project></project>`);
+    const syms1 = xmlHandler.extractSymbols(t1, b1, 'maven-core/pom.xml');
+    const syms2 = xmlHandler.extractSymbols(t2, b2, 'maven-plugin-api/pom.xml');
+    expect(syms1[0]!.name).toBe('project@maven-core');
+    expect(syms2[0]!.name).toBe('project@maven-plugin-api');
+    expect(syms1[0]!.id).not.toBe(syms2[0]!.id);
+  });
+
+  it('root-level pom.xml (no parent dir) stays bare — unique at root', () => {
+    const { tree, buf } = parse(`<project></project>`);
+    const syms = xmlHandler.extractSymbols(tree, buf, 'pom.xml');
+    // Only one path segment → never disambiguated
+    expect(syms[0]!.name).toBe('project');
+  });
+
+  it('uses file-stem as disambiguator when stem is non-generic and file is in subdir', () => {
+    const { tree, buf } = parse(`<project></project>`);
+    const syms = xmlHandler.extractSymbols(tree, buf, 'some-dir/application.xml');
+    // stem = 'application', tag = 'project' → project@application
+    expect(syms[0]!.name).toBe('project@application');
+  });
+
+  it('no disambiguation when file-stem matches tag name', () => {
+    const { tree, buf } = parse(`<project></project>`);
+    const syms = xmlHandler.extractSymbols(tree, buf, 'some-dir/project.xml');
+    // stem == tagName → no disambiguation
+    expect(syms[0]!.name).toBe('project');
+  });
+
+  it('generic stem (config) in subdir uses parent dir name', () => {
+    const { tree, buf } = parse(`<beans></beans>`);
+    const syms = xmlHandler.extractSymbols(tree, buf, 'src/config.xml');
+    // stem = 'config' (generic) → use parent dir 'src'
+    expect(syms[0]!.name).toBe('beans@src');
+  });
+
+  it('no bodySnippet when name is not disambiguated', () => {
+    const { tree, buf } = parse(`<beans></beans>`);
+    const syms = xmlHandler.extractSymbols(tree, buf, 'src/beans.xml');
+    // stem = 'beans', matches tag → no disambiguation, no bodySnippet
+    expect(syms[0]!.name).toBe('beans');
+    expect(syms[0]!.bodySnippet).toBeUndefined();
+  });
+});

@@ -33,17 +33,49 @@ describe('Objective-C handler — extractSymbols', () => {
 @end
 `);
     const syms = objectiveCHandler.extractSymbols(tree, buf, 'MyView.h');
-    expect(syms.find((s) => s.name === 'MyView' && s.kind === 'class')).toBeDefined();
+    const cls = syms.find((s) => s.name === 'MyView' && s.kind === 'class');
+    expect(cls).toBeDefined();
+    expect(cls!.frameworkMeta?.['protocols']).toEqual(['UITableViewDelegate']);
   });
 
-  it('extracts @interface category as "class"', () => {
+  it('extracts @interface with superclass into frameworkMeta', () => {
     const { tree, buf } = parse(`
-@interface NSString (MyCategory)
+@interface NSArray : NSObject <NSCopying>
+@end
+`);
+    const syms = objectiveCHandler.extractSymbols(tree, buf, 'NSArray.h');
+    const cls = syms.find((s) => s.name === 'NSArray');
+    expect(cls).toBeDefined();
+    expect(cls!.frameworkMeta?.['superclass']).toBe('NSObject');
+    expect(cls!.frameworkMeta?.['protocols']).toEqual(['NSCopying']);
+  });
+
+  // ── category → 'class' with ClassName+CategoryName ──────────────────────
+
+  it('extracts named category as "ClassName+CategoryName"', () => {
+    const { tree, buf } = parse(`
+@interface NSString (Hashing)
 - (BOOL)isPalindrome;
 @end
 `);
-    const syms = objectiveCHandler.extractSymbols(tree, buf, 'NSString+MyCategory.h');
-    expect(syms.find((s) => s.name === 'NSString' && s.kind === 'class')).toBeDefined();
+    const syms = objectiveCHandler.extractSymbols(tree, buf, 'NSString+Hashing.h');
+    const cls = syms.find((s) => s.kind === 'class');
+    expect(cls).toBeDefined();
+    expect(cls!.name).toBe('NSString+Hashing');
+    expect(cls!.frameworkMeta?.['category']).toBe('Hashing');
+  });
+
+  it('extracts anonymous class extension with classExtension: true', () => {
+    const { tree, buf } = parse(`
+@interface MyClass ()
+@property (nonatomic, strong) NSString *secret;
+@end
+`);
+    const syms = objectiveCHandler.extractSymbols(tree, buf, 'MyClass.m');
+    const cls = syms.find((s) => s.kind === 'class');
+    expect(cls).toBeDefined();
+    expect(cls!.name).toBe('MyClass');
+    expect(cls!.frameworkMeta?.['classExtension']).toBe(true);
   });
 
   // ── @protocol → 'interface' ──────────────────────────────────────────────
@@ -86,6 +118,30 @@ describe('Objective-C handler — extractSymbols', () => {
     expect(method!.name).toBe('Dog:bark');
   });
 
+  it('builds full multi-segment ObjC selector with colons', () => {
+    const { tree, buf } = parse(`
+@interface Store : NSObject
+- (void)setObject:(id)obj forKey:(id)key;
+@end
+`);
+    const syms = objectiveCHandler.extractSymbols(tree, buf, 'Store.h');
+    const method = syms.find((s) => s.kind === 'method');
+    expect(method).toBeDefined();
+    expect(method!.name).toBe('Store:setObject:forKey:');
+  });
+
+  it('builds single-segment selector with colon for one-argument method', () => {
+    const { tree, buf } = parse(`
+@interface Obj : NSObject
++ (instancetype)personWithName:(NSString *)name;
+@end
+`);
+    const syms = objectiveCHandler.extractSymbols(tree, buf, 'Obj.h');
+    const method = syms.find((s) => s.kind === 'method' && s.name.includes('personWithName'));
+    expect(method).toBeDefined();
+    expect(method!.name).toBe('Obj::personWithName:');
+  });
+
   // ── class methods → 'method' with isClassMethod ──────────────────────────
 
   it('extracts class method with isClassMethod: true', () => {
@@ -101,16 +157,16 @@ describe('Objective-C handler — extractSymbols', () => {
     expect(method!.name).toContain('Person::personWithName');
   });
 
-  // ── @property → 'const' ──────────────────────────────────────────────────
+  // ── @property → 'property' ────────────────────────────────────────────────
 
-  it('extracts @property as kind "const"', () => {
+  it('extracts @property as kind "property"', () => {
     const { tree, buf } = parse(`
 @interface Person : NSObject
 @property (nonatomic, strong) NSString *name;
 @end
 `);
     const syms = objectiveCHandler.extractSymbols(tree, buf, 'Person.h');
-    const prop = syms.find((s) => s.kind === 'const');
+    const prop = syms.find((s) => s.kind === 'property');
     expect(prop).toBeDefined();
     expect(prop!.name).toContain('name');
   });
@@ -122,8 +178,33 @@ describe('Objective-C handler — extractSymbols', () => {
 @end
 `);
     const syms = objectiveCHandler.extractSymbols(tree, buf, 'Car.h');
-    const prop = syms.find((s) => s.kind === 'const');
+    const prop = syms.find((s) => s.kind === 'property');
     expect(prop!.name).toBe('Car.speed');
+  });
+
+  // ── Detection guard for .h files ─────────────────────────────────────────
+
+  it('returns 0 symbols for a pure-C .h file with no @interface/@protocol', () => {
+    const { tree, buf } = parse(`
+#ifndef MY_HEADER_H
+#define MY_HEADER_H
+
+int add(int a, int b);
+typedef struct { int x; int y; } Point;
+
+#endif
+`);
+    const syms = objectiveCHandler.extractSymbols(tree, buf, 'math.h');
+    expect(syms).toHaveLength(0);
+  });
+
+  it('processes a .h file that contains @interface', () => {
+    const { tree, buf } = parse(`
+@interface Foo : NSObject
+@end
+`);
+    const syms = objectiveCHandler.extractSymbols(tree, buf, 'Foo.h');
+    expect(syms.find((s) => s.name === 'Foo')).toBeDefined();
   });
 
   // ── doc comments ─────────────────────────────────────────────────────────
@@ -141,7 +222,8 @@ describe('Objective-C handler — extractSymbols', () => {
     const { tree, buf } = parse(
       `/**\n * Returns the full name.\n */\n- (NSString *)fullName;\n`,
     );
-    const syms = objectiveCHandler.extractSymbols(tree, buf, 'test.h');
+    // Use .m extension so the detection guard doesn't filter it out
+    const syms = objectiveCHandler.extractSymbols(tree, buf, 'test.m');
     const method = syms.find((s) => s.kind === 'method');
     expect(method!.summary).toContain('Returns the full name');
   });
@@ -187,7 +269,7 @@ describe('Objective-C handler — extractSymbols', () => {
     expect(names).toContain('Shape');
     expect(names).toContain('Circle');
     expect(syms.some((s) => s.kind === 'method')).toBe(true);
-    expect(syms.some((s) => s.kind === 'const')).toBe(true);
+    expect(syms.some((s) => s.kind === 'property')).toBe(true);
   });
 });
 

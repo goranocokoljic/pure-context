@@ -7,18 +7,189 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+**Claude Code hook system overhaul**
+
+Hooks now use CLI-style commands (`npx purecontext-mcp hook-*`) registered directly in `~/.claude/settings.json`. No scripts are copied to `~/.claude/hooks/` — the commands invoke the installed package directly, so hook logic updates automatically when the package updates.
+
+Seven hook events are now supported (up from three):
+
+| Hook event | Command | What it does |
+|------------|---------|--------------|
+| `PostToolUse` | `hook-posttooluse` | Re-indexes modified files after Edit/Write/MultiEdit |
+| `PreCompact` | `hook-precompact` | Injects indexed repo list into context before compaction |
+| `PreToolUse` | `hook-pretooluse` | Soft edit guard — suggests read tools before editing |
+| `WorktreeCreate` | `hook-worktree-create` | Auto-indexes a newly created agent worktree |
+| `WorktreeRemove` | `hook-worktree-remove` | Fires when an agent worktree is removed |
+| `TaskCompleted` | `hook-taskcompleted` | Post-task diagnostics: complexity stats, TODO count, tool suggestions |
+| `SubagentStart` | `hook-subagentstart` | Injects condensed repo orientation for newly spawned subagents |
+
+*TaskCompleted* — after the agent finishes a task, queries each indexed repo for high-complexity symbols (cyclomatic complexity > 5) and TODO/FIXME annotations, then injects a diagnostic summary plus a reminder of relevant tools: `find_dead_code`, `find_untested_symbols`, `get_todos`, `get_complexity_hotspots`, `health_radar`.
+
+*SubagentStart* — when a subagent spawns it has no session context. This hook injects the indexed repo list (repoId, path, file and symbol counts, last-indexed timestamp) plus the mandatory workflow table so the subagent is oriented without needing an extra tool call.
+
+*WorktreeCreate* — Claude Code's Agent tool can create isolated git worktrees for sub-tasks. This hook calls `index-folder` on the new worktree automatically so PureContext tools work immediately inside it.
+
+Re-running `npx purecontext-mcp hooks --install` upgrades existing installations: old `node ~/.claude/hooks/purecontext-*.mjs` entries are replaced with the new CLI form, and the four new hook events are added.
+
+---
+
+## [1.5.0] - 2026-05-22
+
+### Added
+
+**New language handlers**
+
+- **HCL / Terraform** (`.tf`, `.tfvars`, `.hcl`) — extracts `variable`, `output`, `resource`, `data`, `module`, `provider`, and `locals` blocks; names follow Terraform reference syntax (`var.name`, `module.name`, `local.name`, `output.name`) so queries match the way you write them in code
+- **Angular HTML templates** (`.html`) — extracts component selectors, structural directives (`*ngIf`, `*ngFor`, `@if`, `@for`), event bindings (`(click)="handler"`), template references (`#userInput`), and `routerLink` directives; auto-detected via a sibling `.component.ts` file or Angular marker patterns
+- **Extensionless scripts** — extensionless files (e.g. `plugins/*/functions` in Bash-heavy projects) are now discovered and indexed automatically; shebang detection routes each file to the correct handler
+
+**Objective-C handler overhaul**
+
+- `@interface`, `@protocol`, and `@implementation` declarations now fully extracted from both `.m` and `.h` files
+- Named categories stored as `ClassName+CategoryName`; anonymous categories flagged with `classExtension: true`
+- Full Objective-C selector building (`setObject:forKey:`) instead of plain method names
+- Properties extracted with `property` kind (was `const`)
+- `.h` files guarded by an ObjC detection pass — C headers that happen to use `.h` are not misidentified
+
+**XML symbol disambiguation**
+
+- Root-element symbols in multi-module XML repositories (e.g. `pom.xml` across 30+ Maven modules) are now stored as `tag@module` names, eliminating collisions where every module shared the same top-level element name
+- Bare tag name retained as an FTS token so single-word queries still find the right file
+
+**Search relevance improvements**
+
+- *Monorepo path heuristics* — frontend app directories (`apps/dashboard/`, `apps/web/`) get a score boost when the query contains hook or component vocabulary; avoids backend symbols drowning React/Angular results in mixed monorepos
+- *Java/Groovy core-path boost* — symbols in `/core/src/main/java/` paths boosted; symbols in plugin directories penalised; reduces noise from plugin implementations when querying for core API methods
+- *Library path penalties* extended to cover `engine/`, `erts/`, and `contrib/` directory segments (common in projects that embed a runtime)
+- *Compound underscore boost* — fires when all underscore-separated parts of a symbol name are present in the query, without requiring an exact full-name match
+- *Single-token exact match boost* — single-word queries reliably surface the best exact match at rank 1
+- *Cross-language FTS aliases* — Neovim `nvim_*` C functions get a `vim.api.nvim_*` alias so Lua-style queries (`vim.api.nvim_open_win`) find the C implementation; Proto RPC method symbols include their service name as an FTS token
+- *Erlang bare function names* — Erlang symbols stored without arity suffix (`start_link` instead of `start_link/3`); arity preserved in `frameworkMeta`; module name injected as an FTS token so `module:function` queries work
+- *TypeScript HOC detection* — `export const X = React.memo(() => ...)`, `forwardRef(...)`, and similar HOC-wrapped arrow functions emitted as `kind=function` instead of `kind=const`, ensuring rendering-domain boosts fire correctly
+
+### Fixed
+
+- Case-insensitive file extension matching in file discovery (`.F90` Fortran files were silently skipped)
+- Directory trailing-slash handling in `ignore` negation patterns — fixes traversal of directories with explicit `!negation` rules
+- Index workers were missing registrations for the Fortran, SCSS, LESS, CSS, and Objective-C handlers; files with those extensions were silently dropped before parsing
+- C++ qualified name FTS — bare local name (`Future`) now stored as a separate FTS token alongside the fully-qualified name (`folly::Future`), improving single-word C++ queries
+- Rust synonym scoping — `future→poll`, `spawn→tokio/task`, and serde-specific synonyms now fire only in Rust repositories, preventing them from polluting C++ search results
+
+---
+
+## [1.4.0] - 2026-05-20
+
+### Added
+
+**New MCP tools**
+
+- `get_lexical_scope_matches` — returns all symbols accessible from a given file and line (local scope, module imports, and exported API), letting agents reason about what identifiers are in scope without reading whole files
+- `trace_invocation_chain` — follows call edges from a symbol N hops deep and returns the linearised invocation path; useful for tracing a request from an entry point through to storage
+
+**Language handler depth**
+
+- *Ruby* — DSL macro extraction: `has_many`, `belongs_to`, `has_one`, `has_and_belongs_to_many`, `before_action`, `after_action`, `validates`, and `scope` class macros extracted as `property` symbols; metaprogramming patterns (`define_method`, `method_missing`) flagged in `frameworkMeta`
+- *Rust* — `#[cfg(...)]` attributes now captured in `frameworkMeta.cfgAttributes`; new `cfgFilter` parameter on `search_symbols` restricts results to symbols matching a specific cfg condition (e.g. `target_os = "linux"`)
+- *C++* — export-macro class extraction: `class MY_EXPORT ClassName` and similar patterns now correctly identified as class declarations rather than function definitions
+- *TypeScript* — `export const X = forwardRef(...)` / `React.memo(...)` and similar HOC patterns emitted as `kind=function`; decorator extraction inside `export_statement` wrapper fixed (was silently dropping `@Injectable` and similar decorators on exported classes)
+- *C#* — interface member extraction fixed (interface members are implicitly public; visibility guard removed); method name extraction uses `findLast` before `parameter_list` to avoid returning the return type; event field declarations (`event_field_declaration`) extracted as `property` kind
+- *Kotlin* — extension function extraction; primary constructor property parameters extracted as `property` symbols
+- *PHP* — PHP 8 `#[Attribute]` syntax parsed correctly; Symfony route and controller patterns added to quality-gate trigger; property declarations, `define()` constants, closures, abstract methods, enum cases, and interface constants all extracted
+
+**Search quality**
+
+- FTS BM25 raw rank exposed to the relevance ranker — high keyword-match scores contribute a 0–50 point bonus on top of structural scoring; prevents purely-structural boosts from overriding strong keyword matches
+- Docstring extraction extended — Python and C++ full-paragraph docstrings (not just the first line) fed to the FTS index; improves matches for queries that use documentation vocabulary rather than identifier names
+- Nuxt/Vue-specific vocabulary synonyms added (`composable`, `setup`, `defineComponent`, `useNuxt`, etc.)
+- `search_symbols` returns `verdict: "no_match"` with `negative_evidence` details when all retrieval strategies are exhausted, allowing agents to stop retrying instead of looping through variant queries
+
+**Multi-IDE installer**
+
+`npx purecontext-mcp install <tool|all>` now supports:
+
+| IDE / Tool | Config location |
+|------------|----------------|
+| Cursor | `.cursor/rules/purecontext.mdc` |
+| Windsurf | `.windsurfrules` |
+| Continue | `.continue/config.json` system message |
+| Cline | `.clinerules` |
+| Roo Code | `.roo/rules-code.md` |
+| VS Code Copilot | `.github/copilot-instructions.md` |
+| Claude Desktop | Platform config (`claude_desktop_config.json`) |
+
+All writers are idempotent — running `install` a second time updates the existing block rather than appending a duplicate.
+
+**Claude Code hooks**
+
+- *PostToolUse index hook* — re-indexes modified files automatically after any Edit/Write tool call, keeping the symbol index in sync with in-session edits
+- *PreCompact snapshot hook* — captures an architecture snapshot before context is compacted
+- *Edit guard hook* (soft) — warns when an edit target has dependents with high blast radius; never blocks
+
+Install via `npx purecontext-mcp hooks --install`.
+
+### Fixed
+
+- `expandVerbSynonyms`: prototype-chain collision on the `constructor` key — calling `expandVerbSynonyms("constructor")` previously returned the built-in `Function.prototype.constructor`; fixed by using `Object.create(null)` for the synonym map
+- Test-mapper transaction: FK constraint errors no longer propagate and block FTS index population
+- Windows path-case mismatch: repo ID computation now uses the canonical absolute path from the indexer output rather than recomputing from a potentially different-cased input string
+
+---
+
+## [1.3.0] - 2026-05-16
+
+### Added
+
+**Search quality**
+
+- *OR-fallback retrieval* — when the FTS5 AND query returns too few results, the engine automatically retries with an OR query and re-ranks the combined pool; improves recall for longer, natural-language queries
+- *Abbreviation expansion* — common abbreviations in queries expanded before FTS: `db→database`, `auth→authentication`, `cfg→configuration`, `mgr→manager`, `ctrl→controller`, and 40+ more; C/C++ abbreviations included
+- *camelCase boundary tokenisation* — FTS5 index now correctly splits `getUserById` into `get`, `user`, `by`, `id` at index time, not just at query time; improves recall when query uses word-boundary terms that appear inside camelCase identifiers
+- *Verb synonym expansion* — common verb synonyms expanded at query time: `fetch↔get↔retrieve`, `create↔insert↔add`, `delete↔remove↔drop`, `update↔modify↔edit`, `authenticate→login`, `list↔find`, and more
+- *Stop-word expansion* — 30 additional stop words filtered from multi-word queries: `with`, `without`, `using`, `via`, `existing`, `before`, `after`, `during`, and others
+- *Service/repository kind boost* — `*Service` method symbols +30, `*Repository`/`*Manager`/`*Store` method symbols +15; surfaces application-layer API methods before utility helpers with similar names
+- *Method verb bonus* — fires when the first camelCase part of a method name (the action verb) matches a query word, differentiating `ProductsService.create` from `buildProductListCacheKey`
+- *Quality-gate OR-fallback* — if the AND pool contains no `*Service`/`*Repository` methods even after the first OR-fallback, a second OR pass retrieves the broader candidate pool
+- *Stem matching* — pluralised name parts (`products→product`) now match singular query words
+- *Library path penalty* — symbols from `vendor/`, `node_modules/`, `bower_components/`, `third_party/`, and similar paths penalised to prevent dependency code from ranking above project code
+
+**New stylesheet handlers**
+
+- *SCSS / SASS* (`.scss`, `.sass`) — `@mixin` → function, `@function` → function, top-level `$variable` → const, `%placeholder` → class, `@keyframes` → type
+- *LESS* (`.less`) — `.mixin(@params){}` → function, top-level `@variable` → const, `@keyframes` → type
+- *CSS* (`.css`) — CSS custom properties (`--token-name`) indexed as const (opt-in via `indexing.cssVariables: true` in config)
+
+**Handler depth improvements**
+
+- *Go* — interface `method_spec` extraction; top-level `var` declarations; `*Handler`/`*DB`/`*Client` receiver types added to kind-boost patterns
+- *Java* — inner-class extraction no longer gated on `isStatic`; package-private methods included; Android `Activity`/`Fragment`/`ViewModel` pattern boosts
+- *Rust* — `impl` methods filtered to `pub` visibility by default; `trait` implementations boosted; Rust-specific synonyms scoped to Rust repos only
+- *PHP* — UTF-8 multibyte character offset bug fixed (was producing broken symbol names for methods after accented characters in source); property declarations, closures, `define()` global constants, abstract methods, PHP 8.1 enum cases, and interface constants all extracted
+- *TypeScript* — decorator extraction inside `export_statement` wrapper fixed
+
+### Fixed
+
+- FTS5 syntax error in synonym OR-groups: tokens joined as `(a OR b)` were concatenated without an explicit `AND` connector when followed by another group, producing invalid FTS5 queries; fixed by inserting explicit ` AND ` between groups and checking for top-level OR context before switching to OR-fallback mode
+- `namePrefix` word-boundary guard: stem matching no longer fires when a name only contains the query word as an interior substring (e.g. query `user` no longer matches `superuser` via stem)
+- Short-token filter in multi-word query branch: tokens shorter than 2 characters no longer enter the AND query, preventing FTS5 from returning zero results on trivially-true constraints
+
+---
+
 ## [1.2.0] - 2026-05-13
 
 ### Added
 
-**Advanced relationship analysis (Phase 28)**
+**Advanced relationship analysis**
 - `find_implementations` — find all concrete implementations of a TypeScript interface or abstract class; returns implementing classes with `implementedMethods` and `missingMethods` arrays compared against the interface contract
 - `get_call_hierarchy` — callers and callees of a function N levels deep as a hierarchical tree; supports `callers`, `callees`, and `both` directions; recursive calls marked `cyclic: true`
 - `get_class_hierarchy` — full inheritance tree rooted at a class, showing both ancestors and descendants; use before refactoring a base class to understand the full polymorphism surface
 - `find_cycles` — detect circular import dependencies across the repo or a subtree; returns strongly-connected components with severity rating
 - `get_coupling_map` — afferent/efferent coupling metrics and instability scores (`I = efferent / (afferent + efferent)`) for every file; highlights highest-risk refactoring candidates
 
-**Architectural visualization (Phase 29)**
+**Architectural visualization**
 - `render_diagram` — general-purpose Mermaid or DOT dependency diagram (module, call graph, class hierarchy); output renders natively in GitHub, VS Code, and Claude
 - `render_call_graph` — specialized call graph diagram rooted at a symbol with call-graph-specific layout options
 - `render_import_graph` — file-level import graph for a directory or whole repo; nodes clustered by directory
@@ -26,24 +197,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `render_dep_matrix` — dependency matrix diagram showing coupling between modules as a grid; surfaces structural hotspots at a glance
 - `get_architecture_snapshot` — captures architectural state (file count, symbol count, module breakdown, coupling summary, health scores); take two snapshots to prove structural improvement objectively
 
-**Refactoring safety checks (Phase 30)**
+**Refactoring safety checks**
 - `check_rename_safe` — pre-flight check before renaming a symbol; returns `safe` verdict and all `affectedSites` (call, import, type-reference, string-literal, comment) with file, line, column, and context snippet
 - `check_delete_safe` — pre-flight check before deleting a symbol; returns `safe: false` if anything in the repo still imports or references the symbol
 - `check_move_safe` — pre-flight check before moving a symbol to a different file; validates no import conflicts and lists all import statements that need updating
 - `plan_refactoring` — generate a sequenced, dependency-ordered plan for a structural change from a natural-language description; steps ordered so lower-risk changes happen first
 
-**Health dashboards & debt reporting (Phase 31)**
+**Health dashboards & debt reporting**
 - `health_radar` — five-axis health score (complexity, coupling, maintainability, documentation, stability), each 0–100; returns `overallHealth` score and letter grade (A–F); designed for CI health gates
 - `diff_health_radar` — compare two health radar snapshots (before/after a refactoring) with axis-by-axis deltas and regression/improvement verdicts
 - `get_debt_report` — detailed technical debt report with per-file rankings, priority tiers, worst files by each metric, specific symbols to address, and estimated effort indicators
 
-**AST-level search (Phase 32)**
+**AST-level search**
 - `search_ast` — find every occurrence of a specific tree-sitter node type across all indexed files (e.g. `try_statement`, `arrow_function`, `await_expression`); returns file, line, column, and snippet
 - `search_by_signature` — search symbols by type signature pattern (regex or substring); find all functions returning `Promise<void>` or methods accepting a `Request` parameter
 - `search_by_decorator` — find all symbols annotated with a specific decorator; works for TypeScript (`@Injectable`, `@Controller`) and Python (`@app.route`, `@property`) decorators
 - `search_by_complexity` — find symbols above or below a complexity threshold; returns symbols ranked by complexity score; use before refactoring sprints or to enforce complexity budgets
 
-**Code intelligence helpers (Phase 33)**
+**Code intelligence helpers**
 - `get_entry_points` — identify all runnable entry points: main functions, CLI handlers, HTTP server startups, Lambda handlers, test suites, and scripts; each result includes `kind`, `confidence`, and reason
 - `get_public_api` — all exported symbols grouped by file; use to document a library, audit what is exposed, or check for accidental exports
 - `get_todos` — find all TODO, FIXME, HACK, NOTE, and XXX comments across the repo with file, line, tag type, and comment text

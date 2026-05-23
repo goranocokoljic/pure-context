@@ -1800,3 +1800,76 @@ describe('expandVerbSynonyms — Vue/Nuxt vocabulary', () => {
     expect(result).toContain('use');
   });
 });
+
+// ─── expandVerbSynonyms — prototype-chain safety (Phase 53 regression) ────────
+// Plain-object dict inherits Object.prototype. Words like "constructor" resolve
+// to Object.prototype.constructor (a function with .length===1) which passes the
+// `syns.length === 0` guard but is not iterable.  The fix uses hasOwnProperty.
+describe('expandVerbSynonyms — prototype-chain safety', () => {
+  it('"constructor" returns [] without throwing', () => {
+    expect(() => expandVerbSynonyms('constructor')).not.toThrow();
+    expect(expandVerbSynonyms('constructor')).toEqual([]);
+  });
+
+  it('"hasOwnProperty" returns [] without throwing', () => {
+    expect(() => expandVerbSynonyms('hasOwnProperty')).not.toThrow();
+    expect(expandVerbSynonyms('hasOwnProperty')).toEqual([]);
+  });
+
+  it('"toString" returns [] without throwing', () => {
+    expect(() => expandVerbSynonyms('toString')).not.toThrow();
+    expect(expandVerbSynonyms('toString')).toEqual([]);
+  });
+
+  it('preprocessQuery with "constructor" in query does not throw', () => {
+    expect(() =>
+      preprocessQuery('efficiently share data with all descendant widgets without threading through every constructor'),
+    ).not.toThrow();
+  });
+});
+
+// ─── Task 431: Crypto synonyms ────────────────────────────────────────────────
+
+describe('expandVerbSynonyms — crypto vocabulary (Task 431)', () => {
+  it('"cipher" expands to ["encrypt", "encode"]', () => {
+    expect(expandVerbSynonyms('cipher')).toEqual(expect.arrayContaining(['encrypt', 'encode']));
+  });
+
+  it('"encrypt" expands to include "cipher"', () => {
+    expect(expandVerbSynonyms('encrypt')).toContain('cipher');
+  });
+
+  it('"decrypt" expands to include "decipher" and "decode"', () => {
+    const syns = expandVerbSynonyms('decrypt');
+    expect(syns).toContain('decipher');
+    expect(syns).toContain('decode');
+  });
+
+  it('"decipher" expands to include "decrypt"', () => {
+    expect(expandVerbSynonyms('decipher')).toContain('decrypt');
+  });
+
+  it('"secret" expands to include "key" and "credential"', () => {
+    const syns = expandVerbSynonyms('secret');
+    expect(syns).toContain('key');
+    expect(syns).toContain('credential');
+  });
+
+  it('"credential" expands to include "key", "secret", and "token"', () => {
+    const syns = expandVerbSynonyms('credential');
+    expect(syns).toContain('key');
+    expect(syns).toContain('secret');
+    expect(syns).toContain('token');
+  });
+
+  it('"token" expands to include "key" and "credential"', () => {
+    const syns = expandVerbSynonyms('token');
+    expect(syns).toContain('key');
+    expect(syns).toContain('credential');
+  });
+
+  it('preprocessQuery with "cipher the payload" includes "encrypt"', () => {
+    const result = preprocessQuery('cipher the payload');
+    expect(result).toContain('encrypt');
+  });
+});

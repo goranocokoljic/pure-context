@@ -23,7 +23,12 @@
  *    2 — any query word in signature (per word)
  *    5 — query phrase in summary
  *    1 — any query word in summary (per word)
- *  -35 — library path penalty (system/, vendor/, third_party/, node_modules/)
+ *  +15 — core path boost: symbol in /core/src/main/java/ or /main/java/ (Java/Groovy repos)
+ *  +20 — frontend path boost: symbol in /apps/dashboard/ etc. in mixed monorepos, on hook/component queries
+ *  +20 — use/hook bonus: symbol name starts with useXxx and query has React hook vocabulary
+ *   +5 — path proximity boost per overlapping query token (applies when >= 3 symbols share name)
+ *  -35 — library path penalty (system/, vendor/, third_party/, node_modules/, engine/, erts/, contrib/)
+ *  -35 — Java plugin path penalty: /plugins/ or /plugin/ in Java/Groovy repos
  *
  * Query word extraction:
  *  - Hyphenated tokens split ("front-end" → "front", "end")
@@ -47,6 +52,8 @@ export interface DebugScore {
   namePrefix: number;
   nameFuzzy: number;
   identityExact: number;
+  compoundUnderscoreBoost: number;
+  singleTokenExactBoost: number;
   wordOverlap: number;
   methodVerbBonus: number;
   signatureMatch: number;
@@ -54,8 +61,26 @@ export interface DebugScore {
   kindBoost: number;
   kindHintBoost: number;
   libraryPenalty: number;
+  corePathBoost: number;
+  frontendPathBoost: number;
+  useHookBonus: number;
+  groovySourceBoost: number;
+  angularLifecycleBoost: number;
+  renderingCompoundBoost: number;
+  reactQueryHookBoost: number;
+  interceptorBoost: number;
+  packageContextBoost: number;
+  trpcPrefixBoost: number;
+  pathProximityBoost: number;
   recencyBoost: number;
   ftsBm25Bonus: number;
+}
+
+export interface RankOptions {
+  isMixedMonorepo?: boolean;
+  hasReactHookQuery?: boolean;
+  isJavaGroovyMixed?: boolean;
+  isAngularRepo?: boolean;
 }
 
 export interface ScoredSymbol {
@@ -68,16 +93,19 @@ export interface ScoredSymbol {
 // ─── Library path detection ───────────────────────────────────────────────────
 
 /**
- * Directory names that always indicate third-party library code, regardless of
- * where they appear in the path.  Symbols under these directories receive a
- * score penalty so application-level symbols rank above them.
+ * Directory names that always indicate third-party or low-priority library code,
+ * regardless of where they appear in the path.  Symbols under these directories
+ * receive a -35 score penalty so application-level symbols rank above them.
  *
  * Covers:
- *   system/           CodeIgniter framework core
- *   vendor/           Composer packages (PHP) / generic vendor trees
- *   third_party/      Generic third-party library directories
- *   node_modules/     npm packages
- *   bower_components/ Bower packages
+ *   system/                       CodeIgniter framework core
+ *   vendor/                       Composer packages (PHP) / generic vendor trees
+ *   third_party/                  Generic third-party library directories
+ *   node_modules/                 npm packages
+ *   bower_components/             Bower packages
+ *   engine/                       Flutter C++ engine (pollutes Dart widget queries)
+ *   erts/                         Erlang/OTP BEAM VM C++ (pollutes Erlang stdlib)
+ *   contrib/                      Scientific computing legacy code
  */
 const LIBRARY_PATH_SEGMENTS = new Set([
   'system',
@@ -85,17 +113,40 @@ const LIBRARY_PATH_SEGMENTS = new Set([
   'third_party',
   'node_modules',
   'bower_components',
+  // Phase 71 additions:
+  'engine',
+  'erts',
+  'contrib',
 ]);
 
 /**
+ * Multi-segment path substrings that identify library/low-priority code.
+ * Checked case-insensitively against the full lowercased path.
+ *
+ *   /lib/wx/    Erlang/OTP wxWidgets C++ bindings
+ *   /blas/      BLAS numerical library wrappers
+ *   /lapack/    LAPACK numerical library wrappers
+ */
+const LIBRARY_PATH_SUBSTRINGS = [
+  '/lib/wx/',
+  '/blas/',
+  '/lapack/',
+];
+
+/**
  * Return true when the symbol's file path contains a well-known library
- * directory segment, indicating third-party / framework code.
+ * directory segment or multi-segment substring, indicating third-party /
+ * framework code.
  *
  * Uses forward-slash normalisation so paths work correctly on Windows and Unix.
+ * Checks are case-insensitive to handle /BLAS/, /Engine/, etc.
  */
 export function isLibraryPath(filePath: string): boolean {
-  const normalized = filePath.replace(/\\/g, '/');
-  return normalized.split('/').some((seg) => LIBRARY_PATH_SEGMENTS.has(seg));
+  const normalized = filePath.replace(/\\/g, '/').toLowerCase();
+  if (normalized.split('/').some((seg) => LIBRARY_PATH_SEGMENTS.has(seg))) return true;
+  // Prepend '/' so that repo-relative paths like 'lib/wx/...' match '/lib/wx/'
+  const withLeadingSlash = '/' + normalized;
+  return LIBRARY_PATH_SUBSTRINGS.some((sub) => withLeadingSlash.includes(sub));
 }
 
 /**
@@ -133,6 +184,259 @@ function classFromSignature(name: string, signature: string): string {
   return '';
 }
 
+// ─── Core path boost helpers (Task 414) ──────────────────────────────────────
+
+/**
+ * Return true when the symbol is in the canonical source directory of a
+ * Java/Groovy project: /core/src/main/java/, /main/java/, or the Groovy variants.
+ * Only applied when domain === 'java' so TypeScript repos with similar paths
+ * are unaffected.
+ */
+function isCoreJavaPath(filePath: string): boolean {
+  const p = '/' + filePath.replace(/\\/g, '/');
+  return (
+    p.includes('/core/src/main/java/') ||
+    p.includes('/core/src/main/groovy/') ||
+    p.includes('/main/java/') ||
+    p.includes('/main/groovy/')
+  );
+}
+
+/**
+ * Return true when the symbol lives in a Jenkins-style plugin tree.
+ * Penalised for Java/Groovy repos to lift canonical core methods above plugin
+ * overrides.
+ */
+function isJavaPluginPath(filePath: string): boolean {
+  const p = '/' + filePath.replace(/\\/g, '/').toLowerCase();
+  return p.includes('/plugins/') || p.includes('/plugin/');
+}
+
+// ─── Frontend path boost helpers (Task 415) ──────────────────────────────────
+
+/**
+ * Return true when the symbol lives in a frontend app directory of a mixed
+ * monorepo (e.g. novu apps/dashboard/, cal.com apps/web/).
+ */
+function isFrontendAppPath(filePath: string): boolean {
+  const p = '/' + filePath.replace(/\\/g, '/');
+  return (
+    p.includes('/apps/dashboard/') ||
+    p.includes('/apps/web/') ||
+    p.includes('/apps/frontend/') ||
+    p.includes('/apps/client/')
+  );
+}
+
+/**
+ * Return true when the query contains vocabulary strongly associated with
+ * React hooks or frontend components.
+ */
+function hasFrontendVocab(queryWords: string[]): boolean {
+  return queryWords.some(
+    (w) =>
+      (w.startsWith('use') && w.length >= 4) ||
+      w === 'hook' ||
+      w === 'hooks' ||
+      w === 'component' ||
+      w === 'react' ||
+      w === 'vue' ||
+      w === 'svelte',
+  );
+}
+
+// ─── Path proximity boost helpers (Task 417) ─────────────────────────────────
+
+/**
+ * Common path segments that are too generic to signal query relevance.
+ * Excluded from the path-proximity overlap calculation.
+ */
+const COMMON_PATH_SEGMENTS = new Set([
+  'src', 'lib', 'app', 'apps', 'packages', 'core', 'main',
+  'index', 'test', 'tests', 'dist', 'build',
+]);
+
+/**
+ * Compute a path-proximity bonus for symbols whose file-path tokens overlap
+ * with query words.  Only applied when ≥ 3 candidates share the exact same
+ * lowercase name (suppresses noise for unique symbols).
+ *
+ * Returns +5 per overlapping token.
+ */
+function computePathProximityBoost(filePath: string, queryWords: Set<string>): number {
+  const pathTokens = filePath
+    .replace(/\\/g, '/')
+    .split(/[/\\\-_.]/)
+    .filter((t) => t.length >= 3 && !COMMON_PATH_SEGMENTS.has(t.toLowerCase()))
+    .map((t) => t.toLowerCase());
+  const overlap = pathTokens.filter((t) => queryWords.has(t)).length;
+  return overlap * 5;
+}
+
+// ─── Phase 73 boost helpers ───────────────────────────────────────────────────
+
+const ANGULAR_LIFECYCLE_METHODS = new Set([
+  'ngOnInit', 'ngOnDestroy', 'ngAfterViewInit', 'ngAfterContentInit',
+  'ngOnChanges', 'ngDoCheck', 'ngAfterViewChecked', 'ngAfterContentChecked',
+]);
+const LIFECYCLE_QUERY_WORDS = new Set([
+  'initialization', 'initialize', 'setup', 'teardown', 'destroy', 'cleanup',
+  'mount', 'unmount', 'render',
+]);
+
+/**
+ * Boost Angular lifecycle methods (+10) when the query contains lifecycle
+ * vocabulary ("initialization", "destroy", etc.).  Only fires in Angular repos.
+ */
+function computeAngularLifecycleBoost(
+  symbol: SymbolRecord,
+  queryWords: string[],
+  isAngularRepo: boolean,
+): number {
+  if (!isAngularRepo) return 0;
+  const methodName = symbol.name.split('.').pop() ?? symbol.name;
+  if (!ANGULAR_LIFECYCLE_METHODS.has(methodName)) return 0;
+  for (const w of queryWords) if (LIFECYCLE_QUERY_WORDS.has(w)) return 10;
+  return 0;
+}
+
+const RENDERING_VERBS = new Set(['render', 'draw', 'stroke', 'paint', 'plot', 'sketch']);
+
+/**
+ * Boost rendering functions (+15) that share a verb (render/draw/etc.) AND at
+ * least one noun with the query.  Only fires in rendering-domain repos.
+ *
+ * Differentiates "renderSelectionElement" from bare "render" on a query like
+ * "render canvas selection element" — only the compound function has the extra
+ * noun "selection" in its name.
+ */
+function computeRenderingCompoundBoost(
+  symbol: SymbolRecord,
+  queryWords: string[],
+  domain?: string,
+): number {
+  if (domain !== 'rendering') return 0;
+  if (symbol.kind !== 'function') return 0;
+  const nameWords = splitNameParts(symbol.name);
+  const hasVerb = nameWords.some((w) => RENDERING_VERBS.has(w)) &&
+                  queryWords.some((w) => RENDERING_VERBS.has(w));
+  if (!hasVerb) return 0;
+  const querySet = new Set(queryWords);
+  const nameNouns = nameWords.filter((w) => !RENDERING_VERBS.has(w));
+  const overlap = nameNouns.filter((w) => querySet.has(w)).length;
+  return overlap >= 1 ? 15 : 0;
+}
+
+const MUTATION_QUERY_VERBS = new Set(['create', 'update', 'delete', 'patch', 'remove', 'add']);
+const QUERY_FILE_RE = /\b(queries|mutations|hooks)\b/i;
+
+/**
+ * Boost React Query hooks (+25) that live in queries/mutations/hooks files and
+ * match a mutation verb in the query.
+ *
+ * useCreateSecretV3 in src/hooks/api/secrets/queries.ts should rank first for
+ * queries like "create secret api hook" ahead of schema type symbols.
+ */
+function computeReactQueryHookBoost(symbol: SymbolRecord, queryWords: string[]): number {
+  const methodName = symbol.name.split('.').pop() ?? symbol.name;
+  if (!/^use[A-Z]\w+$/.test(methodName)) return 0;
+  if (!QUERY_FILE_RE.test(symbol.filePath)) return 0;
+  for (const w of queryWords) if (MUTATION_QUERY_VERBS.has(w)) return 25;
+  return 0;
+}
+
+const INTERCEPTOR_QUERY_WORDS = new Set([
+  'interceptor', 'intercept', 'resolver', 'resolve', 'guard',
+  'middleware', 'pipe', 'hook',
+]);
+// Matches Angular/NestJS convention: tokenInterceptor, errorInterceptor,
+// bankAccountResolve (Angular route resolver), authGuard, etc.
+const INTERCEPTOR_NAME_RE = /(?:Interceptor|Resolver|Resolve|Guard|Middleware|Pipe)$/;
+
+/**
+ * Boost HTTP interceptor / resolver / guard symbols (+15) when the query
+ * explicitly mentions those concepts.
+ */
+function computeInterceptorBoost(symbol: SymbolRecord, queryWords: string[]): number {
+  if (symbol.kind !== 'function' && symbol.kind !== 'class') return 0;
+  const baseName = symbol.name.split('.').pop() ?? symbol.name;
+  if (!INTERCEPTOR_NAME_RE.test(baseName)) return 0;
+  for (const w of queryWords) if (INTERCEPTOR_QUERY_WORDS.has(w)) return 30;
+  return 0;
+}
+
+// Generic MVC/framework namespace segments that appear in many package names
+// but convey no discriminating signal — filtering prevents false matches like
+// TestApp::Controller::Action matching "catalyst action controller" queries.
+const PACKAGE_SEGMENT_STOPWORDS = new Set([
+  'test', 'testapp', 'base', 'action', 'controller', 'model', 'view',
+  'helper', 'plugin', 'role', 'app', 'core', 'type', 'class', 'package',
+  'lib', 'util', 'utils', 'common', 'shared',
+]);
+
+/**
+ * Boost Perl and R symbols (+8 per overlapping package token) when query words
+ * overlap with the package name prefix.
+ *
+ * For "Mojolicious::Controller::render" matching "mojolicious render": the
+ * package tokens ["mojolicious", "controller"] overlap with "mojolicious" in
+ * the query → +8. Generic MVC segments (controller, action, model…) are excluded
+ * to prevent TestApp::Controller from spuriously matching catalyst queries.
+ */
+function computePackageContextBoost(symbol: SymbolRecord, queryWords: string[]): number {
+  const ext = symbol.filePath.split('.').pop()?.toLowerCase() ?? '';
+  if (!['pm', 'pl', 'r'].includes(ext)) return 0;
+  const parts = symbol.name.split(/[.:]+/);
+  if (parts.length < 2) return 0;
+  const packageWords = parts
+    .slice(0, -1)
+    .flatMap((p) => splitNameParts(p))
+    .filter((w) => !PACKAGE_SEGMENT_STOPWORDS.has(w));
+  const querySet = new Set(queryWords);
+  let overlap = 0;
+  for (const pw of packageWords) if (querySet.has(pw)) overlap++;
+  // +4 for first match, +8 for each additional — single-match boost is intentionally
+  // modest to avoid tipping rankings where the framework name appears as context
+  // (e.g. "dispatch through the Catalyst router" should not boost Catalyst::Request
+  // above the bare `dispatch` function that is the correct result).
+  return overlap >= 2 ? (overlap - 1) * 8 + 4 : overlap >= 1 ? 4 : 0;
+}
+
+const TRPC_PREFIX_RE = /^(createTRPC|ProcedureBuilder)/;
+const TRPC_QUERY_WORDS = new Set(['trpc', 'procedure', 'builder', 'router', 'rpc']);
+
+/**
+ * Boost tRPC factory functions and ProcedureBuilder symbols (+20) when the query
+ * contains tRPC vocabulary.
+ */
+function computeTrpcPrefixBoost(symbol: SymbolRecord, queryWords: string[]): number {
+  const baseName = symbol.name.split('.')[0] ?? symbol.name;
+  if (!TRPC_PREFIX_RE.test(baseName)) return 0;
+  for (const w of queryWords) if (TRPC_QUERY_WORDS.has(w)) return 20;
+  return 0;
+}
+
+/**
+ * Single-token exact-name boost (+50 for full match, +40 for last dot-segment).
+ *
+ * Fires only when the query is a single bare token. Differentiates "Pod" from
+ * "PodSpec" when the user typed exactly the resource name, and handles
+ * dot-qualified names like "io.k8s.api.core.v1.Pod" via the last-segment check.
+ */
+function computeSingleTokenExactBoost(symbol: SymbolRecord, queryLower: string): number {
+  if (queryLower.includes(' ')) return 0;
+  const nameLower = symbol.name.toLowerCase();
+  if (queryLower === nameLower) return 50;
+  // For dot-qualified names (e.g. OpenAPI / protobuf schemas): also match the
+  // last name segment so "pod" matches "io.k8s.api.core.v1.Pod".
+  const lastDot = nameLower.lastIndexOf('.');
+  if (lastDot >= 0) {
+    const lastSegment = nameLower.slice(lastDot + 1);
+    if (queryLower === lastSegment) return 40;
+  }
+  return 0;
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -143,7 +447,13 @@ function classFromSignature(name: string, signature: string): string {
  *
  * When `debug` is true, each result includes a `debugScore` breakdown.
  */
-export function rankSymbols(symbols: SymbolRecord[], query: string, debug = false, domain?: string): ScoredSymbol[] {
+export function rankSymbols(
+  symbols: SymbolRecord[],
+  query: string,
+  debug = false,
+  domain?: string,
+  opts?: RankOptions,
+): ScoredSymbol[] {
   if (symbols.length === 0) return [];
 
   const queryLower = query.trim().toLowerCase();
@@ -184,7 +494,7 @@ export function rankSymbols(symbols: SymbolRecord[], query: string, debug = fals
   }
 
   // First pass: compute base scores (without BM25) for all symbols.
-  const baseResults = symbols.map((symbol) => score(symbol, queryLower, queryWords, rawQueryFreq));
+  const baseResults = symbols.map((symbol) => score(symbol, queryLower, queryWords, rawQueryFreq, domain, opts));
 
   // Cap BM25 bonus to 30% of its computed value when any symbol already has a
   // dominant name-match score (≥80). This prevents BM25 from overriding a clear
@@ -196,14 +506,32 @@ export function rankSymbols(symbols: SymbolRecord[], query: string, debug = fals
   const topBaseScore = Math.max(...baseResults.map((r) => r.score));
   const bm25Scale = topBaseScore >= 80 ? 0.3 : 1.0;
 
+  // ── Path proximity boost (Task 417) ─────────────────────────────────────────
+  // When ≥ 3 candidates share the exact same lowercase name, boost the one
+  // whose file-path tokens overlap with query words (+5 per overlapping token).
+  // Suppressed for unique names to avoid noise.
+  const nameFreq = new Map<string, number>();
+  for (const s of symbols) {
+    const n = s.name.toLowerCase();
+    nameFreq.set(n, (nameFreq.get(n) ?? 0) + 1);
+  }
+  const queryWordsSet = new Set(queryWords);
+
   const scored = symbols.map((symbol, originalIndex) => {
     const baseScore = baseResults[originalIndex]!;
     const ftsBm25Bonus = Math.round(bm25Bonuses[originalIndex]! * bm25Scale);
+
+    let pathProximity = 0;
+    if ((nameFreq.get(symbol.name.toLowerCase()) ?? 0) >= 3) {
+      pathProximity = computePathProximityBoost(symbol.filePath, queryWordsSet);
+    }
+
+    baseScore.debugScore.pathProximityBoost = pathProximity;
     baseScore.debugScore.ftsBm25Bonus = ftsBm25Bonus;
-    baseScore.debugScore.total += ftsBm25Bonus;
+    baseScore.debugScore.total += ftsBm25Bonus + pathProximity;
     return {
       ...baseScore,
-      score: baseScore.score + ftsBm25Bonus,
+      score: baseScore.score + ftsBm25Bonus + pathProximity,
       symbol,
       originalIndex,
     };
@@ -229,6 +557,8 @@ function score(
   queryLower: string,
   queryWords: string[],
   rawQueryFreq: ReadonlyMap<string, number>,
+  domain?: string,
+  opts?: RankOptions,
 ): { score: number; matchReason: ScoredSymbol['matchReason']; debugScore: DebugScore } {
   const nameLower = symbol.name.toLowerCase();
   const sigLower = symbol.signature.toLowerCase();
@@ -298,9 +628,15 @@ function score(
     ? nameLower.split('::').pop()!
     : nameLower;
 
+  // For XML-disambiguated names (e.g. project@maven-cli), also check the bare
+  // tag name (part before @) for identity matching.
+  const isAtDisambiguated = nameLower.includes('@');
+  const bareTagName = isAtDisambiguated ? nameLower.split('@')[0]! : nameLower;
+
   // Find the query word that triggered identityExact (needed for the frequency lookup).
   const identityMatchWord = queryWords.find((w) => w === nameLower)
-    ?? (bareLocalName !== nameLower ? queryWords.find((w) => w === bareLocalName) : undefined);
+    ?? (bareLocalName !== nameLower ? queryWords.find((w) => w === bareLocalName) : undefined)
+    ?? (bareTagName !== nameLower ? queryWords.find((w) => w === bareTagName) : undefined);
 
   let identityExact = 0;
   if (queryWords.length > 0 && identityMatchWord !== undefined) {
@@ -323,6 +659,27 @@ function score(
     }
     total += identityExact;
   }
+
+  // ── Compound underscore identity boost (Task 433) ─────────────────────────
+  // Fires when the symbol has a compound underscore name (e.g. payment_intent)
+  // and ALL underscore-separated parts appear as query words. Differentiates
+  // "payment_intent" from "payment_method" for query "create payment intent"
+  // where both share the "payment" part but only payment_intent matches all parts.
+  const queryWordsSet = new Set(queryWords);
+  let compoundUnderscoreBoost = 0;
+  if (identityExact === 0 && nameLower.includes('_')) {
+    const uParts = nameLower.split('_').filter((p) => p.length >= 2);
+    if (uParts.length >= 2 && uParts.every((p) => queryWordsSet.has(p))) {
+      compoundUnderscoreBoost = 30;
+      total += compoundUnderscoreBoost;
+    }
+  }
+
+  // ── Single-token exact-name boost (Task 434) ──────────────────────────────
+  // Fires only when the query is a single bare token. Lifts "Pod" above "PodSpec"
+  // for the query "Pod", and handles dot-qualified names via last-segment check.
+  const singleTokenExactBoost = computeSingleTokenExactBoost(symbol, queryLower);
+  total += singleTokenExactBoost;
 
   // ── Word-overlap rules (word-boundary matching against split name parts) ────
   //
@@ -552,12 +909,94 @@ function score(
     total += libraryPenalty;
   }
 
+  // Perl test-fixture penalty: symbols in t/lib/ (e.g. TestApp::Controller)
+  // are test stubs that should not outrank the actual library API symbols.
+  if (libraryPenalty === 0) {
+    const ext = symbol.filePath.split('.').pop()?.toLowerCase() ?? '';
+    if (ext === 'pm' || ext === 'pl') {
+      const normalizedFp = symbol.filePath.replace(/\\/g, '/').toLowerCase();
+      if (normalizedFp.startsWith('t/lib/') || normalizedFp.includes('/t/lib/')) {
+        libraryPenalty = -25;
+        total += libraryPenalty;
+      }
+    }
+  }
+
+  // ── Core path boost (Task 414) ────────────────────────────────────────────
+  // For Java/Groovy repos: boost canonical core source paths (+15) and penalise
+  // plugin implementations (-35) so core methods surface above plugin overrides.
+  let corePathBoost = 0;
+  if (domain === 'java' && libraryPenalty === 0) {
+    // Check plugin penalty BEFORE core-path boost: plugin dirs may also contain
+    // /main/java/ sub-paths, so ordering matters.
+    if (isJavaPluginPath(symbol.filePath)) {
+      corePathBoost = -35;
+      total += corePathBoost;
+    } else if (isCoreJavaPath(symbol.filePath)) {
+      corePathBoost = 15;
+      total += corePathBoost;
+    }
+  }
+
+  // ── Frontend path boost (Task 415) ───────────────────────────────────────
+  // In mixed monorepos (frontend + backend apps/ subdirs), boost symbols from
+  // frontend paths when the query uses hook/component/use* vocabulary.
+  let frontendPathBoost = 0;
+  if (opts?.isMixedMonorepo && isFrontendAppPath(symbol.filePath) && hasFrontendVocab(queryWords)) {
+    frontendPathBoost = 20;
+    total += frontendPathBoost;
+  }
+
+  // ── Use/hook bonus (Task 416) ────────────────────────────────────────────
+  // When the query is asking for a React hook (use*/hook vocabulary) and the
+  // OR-fallback fired (indicated by opts.hasReactHookQuery), reward symbols
+  // whose names follow the React hook naming convention (use[A-Z]...).
+  let useHookBonus = 0;
+  if (opts?.hasReactHookQuery && /^use[A-Z]/.test(symbol.name)) {
+    useHookBonus = 20;
+    total += useHookBonus;
+  }
+
+  // ── Groovy source boost (Task 423) ───────────────────────────────────────
+  // In mixed Java+Groovy repos (e.g. gradle, groovy) Java methods dominate by
+  // sheer count. Give a +10 bonus to symbols in .groovy files so that Groovy
+  // `def` methods surface above equally-scored Java counterparts.
+  let groovySourceBoost = 0;
+  if (opts?.isJavaGroovyMixed && symbol.filePath.endsWith('.groovy')) {
+    groovySourceBoost = 10;
+    total += groovySourceBoost;
+  }
+
+  // ── Phase 73 boosts ───────────────────────────────────────────────────────
+
+  const p73AngularLifecycle = computeAngularLifecycleBoost(
+    symbol, queryWords, opts?.isAngularRepo ?? false,
+  );
+  total += p73AngularLifecycle;
+
+  const p73RenderingCompound = computeRenderingCompoundBoost(symbol, queryWords, domain);
+  total += p73RenderingCompound;
+
+  const p73ReactQueryHook = computeReactQueryHookBoost(symbol, queryWords);
+  total += p73ReactQueryHook;
+
+  const p73Interceptor = computeInterceptorBoost(symbol, queryWords);
+  total += p73Interceptor;
+
+  const p73PackageContext = computePackageContextBoost(symbol, queryWords);
+  total += p73PackageContext;
+
+  const p73TrpcPrefix = computeTrpcPrefixBoost(symbol, queryWords);
+  total += p73TrpcPrefix;
+
   const debugScore: DebugScore = {
     total,
     nameExact,
     namePrefix,
     nameFuzzy,
     identityExact,
+    compoundUnderscoreBoost,
+    singleTokenExactBoost,
     wordOverlap,
     methodVerbBonus,
     signatureMatch,
@@ -565,6 +1004,17 @@ function score(
     kindBoost,
     kindHintBoost,
     libraryPenalty,
+    corePathBoost,
+    frontendPathBoost,
+    useHookBonus,
+    groovySourceBoost,
+    angularLifecycleBoost: p73AngularLifecycle,
+    renderingCompoundBoost: p73RenderingCompound,
+    reactQueryHookBoost: p73ReactQueryHook,
+    interceptorBoost: p73Interceptor,
+    packageContextBoost: p73PackageContext,
+    trpcPrefixBoost: p73TrpcPrefix,
+    pathProximityBoost: 0, // filled in by rankSymbols after the name-frequency pass
     recencyBoost: 0,
     ftsBm25Bonus: 0,
   };
@@ -590,8 +1040,8 @@ function score(
  */
 function splitNameParts(name: string): string[] {
   const parts: string[] = [];
-  // Split on namespace/method-call separators: \ (PHP/Python paths), : (PHP ::), . (TS dot notation)
-  for (const segment of name.split(/[\\:.]+/)) {
+  // Split on namespace/method-call separators: \ (PHP/Python paths), : (PHP ::), . (TS dot notation), @ (XML disambiguation)
+  for (const segment of name.split(/[\\:.@]+/)) {
     // Split each segment on underscores
     for (const subSeg of segment.split('_').filter(Boolean)) {
       // camelCase / PascalCase split within each snake_case segment
