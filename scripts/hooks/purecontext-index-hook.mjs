@@ -56,7 +56,7 @@ function debugLog(msg) {
 }
 
 export function reindexRepo(repoRoot) {
-  spawnSync('npx', ['purecontext-mcp', 'index-folder', '--path', repoRoot], {
+  spawnSync('npx', ['--prefer-offline', 'purecontext-mcp', 'index-folder', '--path', repoRoot], {
     stdio: 'ignore',
     timeout: 60_000,
     shell: process.platform === 'win32',
