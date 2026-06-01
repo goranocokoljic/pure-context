@@ -25,7 +25,8 @@ import { discoverFiles, DEFAULT_FILE_LIMIT } from './file-discovery.js';
 import { createHashCache, computeHash } from './hash-cache.js';
 import { initParser, isInitialized } from './parse-dispatcher.js';
 import { getSupportedExtensions } from '../handlers/handler-registry.js';
-import { getAdapterExtensions, getRegisteredAdapters } from '../adapters/adapter-registry.js';
+import { getAdapterExtensions, getRegisteredAdapters, discoverAdapters } from '../adapters/adapter-registry.js';
+import { getConfig } from '../config/config-loader.js';
 import { processFile } from './file-processor.js';
 import { createWorkerPool } from './worker-pool.js';
 import type { ParseJob } from './worker-pool.js';
@@ -86,7 +87,14 @@ export async function indexFolder(
   }
 
   // ── 3. Discover files ─────────────────────────────────────────────────────
-  const adapters = options.adapters ?? [];
+  // Auto-discover active framework adapters when the caller didn't supply an
+  // explicit set. Without this, adapter-only extensions (e.g. `.vue`) are never
+  // added to the discovery allowlist, so those files are silently skipped — and
+  // framework symbol extraction (Vue SFC <script> parsing, route metadata, …)
+  // never runs. Adapters must be registered in this process (the MCP server
+  // entry and the worker both import every standard adapter for self-registration).
+  const adapters =
+    options.adapters ?? (await discoverAdapters(absRoot, { adapters: getConfig().adapters }));
   const allExtensions = [...getSupportedExtensions(), ...getAdapterExtensions(adapters)];
   const effectiveFileLimit = options.fileLimit ?? DEFAULT_FILE_LIMIT;
 

@@ -31,6 +31,7 @@ import { deleteByFile } from '../../core/db/symbol-store.js';
 import { deleteEdgesByFile } from '../../core/db/dep-store.js';
 import { deleteFile } from '../../core/db/file-store.js';
 import { getSupportedExtensions } from '../../handlers/handler-registry.js';
+import { getAdapterExtensions, getRegisteredAdapters } from '../../adapters/adapter-registry.js';
 import {
   GitHubApiFetcher,
   parseGitHubUrl,
@@ -234,8 +235,13 @@ async function indexViaGitHubApi(args: {
     };
   }
 
-  // Filter tree to extensions supported by PureContext
-  const supportedExts = new Set(getSupportedExtensions());
+  // Filter tree to extensions supported by PureContext. Include adapter-only
+  // extensions (e.g. .vue/.svelte/.astro) so SFC blobs aren't dropped before the
+  // remote repo is fetched — indexFolder re-runs real adapter detection at index time.
+  const supportedExts = new Set([
+    ...getSupportedExtensions(),
+    ...getAdapterExtensions(getRegisteredAdapters()),
+  ]);
   const indexableEntries = treeEntries.filter((e) => {
     const dot = e.path.lastIndexOf('.');
     if (dot === -1) return false;

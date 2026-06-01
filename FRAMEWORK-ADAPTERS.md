@@ -57,6 +57,23 @@ Extracts from Single File Components:
 
 Useful for: jumping to a `<MyButton>` mentioned in a template, or finding every composable that touches the auth store.
 
+### Svelte
+
+Detected by `svelte` / `@sveltejs/*` in `package.json`, a `svelte.config.*` file, or any `.svelte` file present (including monorepo sub-apps).
+
+Extracts from Svelte components:
+- The component itself (named from filename) → `component`
+- Symbols inside `<script>` / `<script context="module">` blocks (parsed by the TS/JS handler)
+- Exported `useFoo` functions → `composable`
+
+### Astro
+
+Detected by `astro` / `@astrojs/*` in `package.json`, an `astro.config.*` file, or any `.astro` file present (including monorepo sub-apps).
+
+Extracts from Astro components:
+- The component itself (named from filename) → `component`
+- Symbols declared in the leading `---` frontmatter (parsed as TypeScript)
+
 ### Nuxt
 
 Detected by `nuxt.config.ts` / `.js` / `.mts` / `.mjs`.

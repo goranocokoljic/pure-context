@@ -108,6 +108,8 @@ registerHandler(angularHtmlHandler);
 
 import '../adapters/vue.js';
 import '../adapters/nuxt.js';
+import '../adapters/svelte.js';
+import '../adapters/astro.js';
 import '../adapters/react.js';
 import '../adapters/nextjs.js';
 import '../adapters/angular.js';

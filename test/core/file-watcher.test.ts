@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
-import { startWatching } from '../../src/core/watcher/file-watcher.js';
+import { startWatching, watchedExtensions } from '../../src/core/watcher/file-watcher.js';
+import { vueAdapter } from '../../src/adapters/vue.js';
 import { indexFolder, deleteIndex } from '../../src/core/index-manager.js';
 import { openDatabase, computeRepoId } from '../../src/core/db/schema.js';
 import { searchSymbols } from '../../src/core/db/symbol-store.js';
@@ -39,6 +40,16 @@ function sleep(ms: number): Promise<void> {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+describe('watchedExtensions', () => {
+  it('includes adapter-only extensions like .vue alongside handler extensions', () => {
+    // Importing vueAdapter self-registers it into the adapter registry.
+    expect(vueAdapter.extensions()).toContain('.vue');
+    const exts = watchedExtensions();
+    expect(exts).toContain('.vue'); // adapter-only extension
+    expect(exts).toContain('.ts'); // language-handler extension
+  });
+});
 
 describe('startWatching', () => {
   const roots: string[] = [];

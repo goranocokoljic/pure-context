@@ -21,7 +21,7 @@
 
 import { createHash } from 'crypto';
 import { basename } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readdirSync, type Dirent } from 'fs';
 import type { FrameworkAdapter, SymbolRecord, Tree } from '../core/types.js';
 import { registerAdapter } from './adapter-registry.js';
 import { logger } from '../core/logger.js';
@@ -36,6 +36,71 @@ const NUXT_CONFIG_NAMES = [
   'nuxt.config.js',
   'nuxt.config.mjs',
 ];
+
+// ─── Detection helpers ──────────────────────────────────────────────────────
+
+/**
+ * Directory names that never contain a first-party Nuxt app root — skipped
+ * during the recursive detection scan to keep it fast and avoid false positives
+ * from bundled dependencies.
+ */
+const DETECT_IGNORE_DIRS = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  'out',
+  '.nuxt',
+  '.output',
+  '.next',
+  'coverage',
+  'vendor',
+  'target',
+  '.cache',
+  '.turbo',
+  '.svelte-kit',
+]);
+
+/** Max directory depth and total directories visited by the detection scan. */
+const DETECT_MAX_DEPTH = 6;
+const DETECT_MAX_DIRS = 2000;
+
+const NUXT_CONFIG_SET = new Set(NUXT_CONFIG_NAMES);
+
+/**
+ * Bounded recursive scan: returns true on the first `nuxt.config.{ts,mts,js,mjs}`
+ * found anywhere in the tree. Handles monorepos where the Nuxt app lives in a
+ * subdirectory (apps/web/, frontend/, …) rather than the indexed root. Skips
+ * heavy/irrelevant directories and caps depth + total directories so the scan
+ * stays cheap. Symlinked directories are not followed (Dirent.isDirectory() is
+ * false for symlinks), avoiding cycles.
+ */
+function scanForNuxtConfig(dir: string, depth: number, budget: { dirs: number }): boolean {
+  if (depth > DETECT_MAX_DEPTH || budget.dirs >= DETECT_MAX_DIRS) return false;
+  budget.dirs++;
+
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false; // unreadable directory — skip
+  }
+
+  const subDirs: string[] = [];
+  for (const e of entries) {
+    if (e.isFile()) {
+      if (NUXT_CONFIG_SET.has(e.name)) return true;
+    } else if (e.isDirectory() && !DETECT_IGNORE_DIRS.has(e.name)) {
+      subDirs.push(e.name);
+    }
+  }
+
+  for (const name of subDirs) {
+    if (scanForNuxtConfig(`${dir}/${name}`, depth + 1, budget)) return true;
+  }
+
+  return false;
+}
 
 // ─── Route path helpers ───────────────────────────────────────────────────────
 
@@ -112,6 +177,45 @@ function makeId(filePath: string, name: string, kind: string): string {
     .slice(0, 16);
 }
 
+// ─── Nuxt-relative path resolution ──────────────────────────────────────────
+
+/**
+ * Top-level Nuxt convention directories that sit directly under the app root.
+ * The first occurrence of one of these marks the app-root boundary. `server` is
+ * included so that a path like `server/plugins/foo.ts` resolves relative to the
+ * `server/` tree (and is correctly *not* treated as an app-root `plugins/` file).
+ */
+const NUXT_ROOT_SEGMENTS = new Set(['server', 'plugins', 'middleware', 'composables', 'pages']);
+
+/**
+ * Resolve the path of a file relative to its Nuxt app root.
+ *
+ * When indexing a monorepo, file paths are relative to the indexed repo root
+ * (e.g. `apps/web/server/api/users.ts`), but Nuxt category detection and route
+ * derivation expect paths relative to the Nuxt app root (`server/api/users.ts`).
+ * This finds the first recognized Nuxt convention-directory boundary and returns
+ * the path from there. Returns null when no boundary is found.
+ *
+ * Stateless by design: the parallel worker pool resolves adapters from its own
+ * registry, so the app root cannot be cached during detect() — it must be
+ * derivable from the file path alone.
+ *
+ *   'server/api/users.ts'             → 'server/api/users.ts'   (no-op, non-monorepo)
+ *   'apps/web/server/api/users.ts'    → 'server/api/users.ts'
+ *   'packages/site/pages/index.vue'   → 'pages/index.vue'
+ *   'server/plugins/foo.ts'           → 'server/plugins/foo.ts' (categoryOf → null)
+ *   'src/utils/helpers.ts'            → null
+ */
+export function toNuxtRelative(filePath: string): string | null {
+  const segments = filePath.replace(/\\/g, '/').split('/');
+  for (let i = 0; i < segments.length; i++) {
+    if (NUXT_ROOT_SEGMENTS.has(segments[i]!)) {
+      return segments.slice(i).join('/');
+    }
+  }
+  return null;
+}
+
 // ─── File category ────────────────────────────────────────────────────────────
 
 type FileCategory =
@@ -122,13 +226,19 @@ type FileCategory =
   | 'composable'
   | null;
 
-function getCategory(filePath: string): FileCategory {
-  if (filePath.startsWith('server/api/') && filePath.endsWith('.ts')) return 'server-api';
-  if (filePath.startsWith('server/routes/') && filePath.endsWith('.ts')) return 'server-route';
-  if (filePath.startsWith('plugins/') && filePath.endsWith('.ts')) return 'plugin';
-  if (filePath.startsWith('middleware/') && filePath.endsWith('.ts')) return 'middleware';
-  if (filePath.startsWith('composables/') && filePath.endsWith('.ts')) return 'composable';
+/** Classify an already-Nuxt-relative path into a file category. */
+function categoryOf(rel: string): FileCategory {
+  if (rel.startsWith('server/api/') && rel.endsWith('.ts')) return 'server-api';
+  if (rel.startsWith('server/routes/') && rel.endsWith('.ts')) return 'server-route';
+  if (rel.startsWith('plugins/') && rel.endsWith('.ts')) return 'plugin';
+  if (rel.startsWith('middleware/') && rel.endsWith('.ts')) return 'middleware';
+  if (rel.startsWith('composables/') && rel.endsWith('.ts')) return 'composable';
   return null;
+}
+
+function getCategory(filePath: string): FileCategory {
+  const rel = toNuxtRelative(filePath);
+  return rel ? categoryOf(rel) : null;
 }
 
 // ─── Nuxt adapter ─────────────────────────────────────────────────────────────
@@ -145,7 +255,15 @@ export const nuxtAdapter: FrameworkAdapter = {
   // ── Detection ───────────────────────────────────────────────────────────────
 
   async detect(projectRoot: string): Promise<boolean> {
-    return NUXT_CONFIG_NAMES.some((name) => existsSync(`${projectRoot}/${name}`));
+    // Fast path: nuxt.config.* in the indexed root (common case).
+    if (NUXT_CONFIG_NAMES.some((name) => existsSync(`${projectRoot}/${name}`))) {
+      return true;
+    }
+
+    // Monorepo / sub-app fallback: bounded recursive scan for a nuxt.config.*
+    // anywhere in the tree (e.g. apps/web/, frontend/). Skips heavy dirs and
+    // caps depth + total directories.
+    return scanForNuxtConfig(projectRoot, 0, { dirs: 0 });
   },
 
   // ── File routing ─────────────────────────────────────────────────────────────
@@ -161,12 +279,15 @@ export const nuxtAdapter: FrameworkAdapter = {
   // ── Framework symbol extraction ──────────────────────────────────────────────
 
   extractFrameworkSymbols(tree: Tree | null, source: Buffer, filePath: string): SymbolRecord[] {
-    const category = getCategory(filePath);
+    // `rel` is the path relative to the Nuxt app root (handles monorepo sub-apps).
+    // The stored symbol filePath stays repo-relative so files can still be opened.
+    const rel = toNuxtRelative(filePath);
+    const category = rel ? categoryOf(rel) : null;
 
     switch (category) {
       case 'server-api':
       case 'server-route': {
-        const { routePath, method } = deriveServerRoute(filePath);
+        const { routePath, method } = deriveServerRoute(rel!);
         const name = routePath;
         const methodLabel = method ? `${method} ` : '';
         return [
@@ -243,9 +364,13 @@ export const nuxtAdapter: FrameworkAdapter = {
    * - Any symbol in composables/ gets nuxt_auto_import: true.
    */
   enrichMetadata(symbol: SymbolRecord): SymbolRecord {
+    // Resolve to the Nuxt-app-root-relative path so monorepo sub-app symbols
+    // (e.g. apps/web/pages/index.vue) are enriched the same as root-level ones.
+    const rel = toNuxtRelative(symbol.filePath);
+
     // Page component: add route metadata
-    if (symbol.kind === 'component' && symbol.filePath.startsWith('pages/')) {
-      const routePath = derivePageRoutePath(symbol.filePath);
+    if (symbol.kind === 'component' && rel && rel.startsWith('pages/')) {
+      const routePath = derivePageRoutePath(rel);
       return {
         ...symbol,
         frameworkMeta: {
@@ -257,7 +382,7 @@ export const nuxtAdapter: FrameworkAdapter = {
     }
 
     // Composable (or any symbol) in composables/ — mark as auto-imported
-    if (symbol.filePath.startsWith('composables/')) {
+    if (rel && rel.startsWith('composables/')) {
       return {
         ...symbol,
         frameworkMeta: {
