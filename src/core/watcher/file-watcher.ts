@@ -3,6 +3,18 @@ import { relative, resolve } from 'path';
 import { logger } from '../logger.js';
 import { reindexFiles } from '../index-manager.js';
 import { getSupportedExtensions } from '../../handlers/handler-registry.js';
+import { getAdapterExtensions, getRegisteredAdapters } from '../../adapters/adapter-registry.js';
+
+// ─── Watched extensions ───────────────────────────────────────────────────────
+
+/**
+ * Extensions the watcher reacts to: language-handler extensions plus adapter-only
+ * extensions (e.g. .vue/.svelte/.astro). Without the adapter union, SFC edits
+ * would never trigger incremental re-indexing.
+ */
+export function watchedExtensions(): string[] {
+  return [...getSupportedExtensions(), ...getAdapterExtensions(getRegisteredAdapters())];
+}
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -53,7 +65,7 @@ export function startWatching(
   const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
   const { onChanged } = options;
 
-  const supportedExts = new Set(getSupportedExtensions());
+  const supportedExts = new Set(watchedExtensions());
 
   // Batches of paths accumulated during the debounce window
   const changed = new Set<string>();

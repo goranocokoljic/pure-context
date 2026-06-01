@@ -129,6 +129,44 @@ describe('vueAdapter.detect', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('returns true when .vue files live in a nested sub-app (monorepo)', async () => {
+    const dir = tmpDir();
+    try {
+      // Root has a non-vue package.json; Vue app is in apps/web/src/
+      writeFile(dir, 'package.json', JSON.stringify({ dependencies: { lerna: '^8.0.0' } }));
+      const sub = join(dir, 'apps', 'web', 'src', 'components');
+      mkdirSync(sub, { recursive: true });
+      writeFile(sub, 'Button.vue', '<template><button/></template>');
+      expect(await vueAdapter.detect(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns true when a nested package.json declares vue (no .vue at root)', async () => {
+    const dir = tmpDir();
+    try {
+      const sub = join(dir, 'frontend');
+      mkdirSync(sub, { recursive: true });
+      writeFile(sub, 'package.json', JSON.stringify({ dependencies: { vue: '^3.4.0' } }));
+      expect(await vueAdapter.detect(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores .vue files inside node_modules (no false positive)', async () => {
+    const dir = tmpDir();
+    try {
+      const sub = join(dir, 'node_modules', 'some-pkg', 'dist');
+      mkdirSync(sub, { recursive: true });
+      writeFile(sub, 'Bundled.vue', '<template/>');
+      expect(await vueAdapter.detect(dir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── preProcess ────────────────────────────────────────────────────────────────

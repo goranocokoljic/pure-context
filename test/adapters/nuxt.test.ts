@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { nuxtAdapter, derivePageRoutePath, deriveServerRoute } from '../../src/adapters/nuxt.js';
+import { nuxtAdapter, derivePageRoutePath, deriveServerRoute, toNuxtRelative } from '../../src/adapters/nuxt.js';
 import { _resetForTesting } from '../../src/adapters/adapter-registry.js';
 import type { SymbolRecord } from '../../src/core/types.js';
 
@@ -77,6 +77,31 @@ describe('nuxtAdapter.detect', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('returns true when nuxt.config lives in a nested sub-app (monorepo)', async () => {
+    const dir = tmpDir();
+    try {
+      writeFileSync(join(dir, 'package.json'), '{}'); // non-nuxt root
+      const sub = join(dir, 'apps', 'web');
+      mkdirSync(sub, { recursive: true });
+      writeFileSync(join(sub, 'nuxt.config.ts'), 'export default {}');
+      expect(await nuxtAdapter.detect(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores nuxt.config inside node_modules (no false positive)', async () => {
+    const dir = tmpDir();
+    try {
+      const sub = join(dir, 'node_modules', 'some-pkg');
+      mkdirSync(sub, { recursive: true });
+      writeFileSync(join(sub, 'nuxt.config.ts'), 'export default {}');
+      expect(await nuxtAdapter.detect(dir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─── fileFilter ───────────────────────────────────────────────────────────────
@@ -104,6 +129,65 @@ describe('nuxtAdapter.fileFilter', () => {
     'server/plugins/foo.ts',  // wrong directory (server/plugins ≠ plugins)
   ])('does not match %s', (filePath) => {
     expect(nuxtAdapter.fileFilter(filePath)).toBe(false);
+  });
+});
+
+// ─── toNuxtRelative (monorepo path resolution) ────────────────────────────────
+
+describe('toNuxtRelative', () => {
+  it.each<[string, string | null]>([
+    // Non-monorepo (already app-root-relative) — pass through unchanged
+    ['server/api/users.ts',            'server/api/users.ts'],
+    ['server/routes/health.ts',        'server/routes/health.ts'],
+    ['plugins/analytics.ts',           'plugins/analytics.ts'],
+    ['middleware/auth.ts',             'middleware/auth.ts'],
+    ['composables/useAuth.ts',         'composables/useAuth.ts'],
+    ['pages/blog/[slug].vue',          'pages/blog/[slug].vue'],
+    // Monorepo sub-app — strip the leading app-root prefix
+    ['apps/web/server/api/users.ts',   'server/api/users.ts'],
+    ['packages/site/pages/index.vue',  'pages/index.vue'],
+    ['frontend/composables/useX.ts',   'composables/useX.ts'],
+    // Windows backslashes normalize
+    ['apps\\web\\plugins\\auth.ts',    'plugins/auth.ts'],
+    // No Nuxt boundary → null
+    ['src/utils/helpers.ts',           null],
+    ['components/Button.vue',          null],
+  ])('%s → %s', (filePath, expected) => {
+    expect(toNuxtRelative(filePath)).toBe(expected);
+  });
+
+  it('matches the server boundary before a deeper pages segment', () => {
+    expect(toNuxtRelative('apps/web/server/api/pages/list.ts')).toBe('server/api/pages/list.ts');
+  });
+});
+
+// ─── nested monorepo extraction + enrichment ──────────────────────────────────
+
+describe('nuxtAdapter — nested monorepo sub-app', () => {
+  it('fileFilter matches a server route in a sub-app', () => {
+    expect(nuxtAdapter.fileFilter('apps/web/server/api/users.get.ts')).toBe(true);
+  });
+
+  it('derives the route from an app-root-relative portion of a nested path', () => {
+    const [s] = nuxtAdapter.extractFrameworkSymbols(null, buf(''), 'apps/web/server/api/users.post.ts');
+    expect(s!.kind).toBe('route');
+    expect(s!.name).toBe('/api/users');
+    expect(s!.frameworkMeta?.['http_method']).toBe('POST');
+    // Stored filePath stays repo-relative so the file can still be opened
+    expect(s!.filePath).toBe('apps/web/server/api/users.post.ts');
+  });
+
+  it('enriches a nested page component with route metadata', () => {
+    const comp = sym({ kind: 'component', filePath: 'packages/site/pages/blog/[slug].vue' });
+    const result = nuxtAdapter.enrichMetadata!(comp);
+    expect(result.frameworkMeta?.['nuxt_page']).toBe(true);
+    expect(result.frameworkMeta?.['route_path']).toBe('/blog/:slug');
+  });
+
+  it('marks a nested composable as auto-imported', () => {
+    const fn = sym({ kind: 'function', name: 'useX', filePath: 'frontend/composables/useX.ts' });
+    const result = nuxtAdapter.enrichMetadata!(fn);
+    expect(result.frameworkMeta?.['nuxt_auto_import']).toBe(true);
   });
 });
 

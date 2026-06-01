@@ -11,7 +11,7 @@
 
 import { createHash } from 'crypto';
 import { basename } from 'path';
-import { readFileSync, readdirSync } from 'fs';
+import { readFileSync, readdirSync, type Dirent } from 'fs';
 import type { FrameworkAdapter, SymbolRecord, Tree } from '../core/types.js';
 import { splitVueSFC } from './vue-preprocessor.js';
 import { registerAdapter } from './adapter-registry.js';
@@ -41,6 +41,90 @@ function componentNameFromPath(filePath: string): string {
   return toPascalCase(basename(filePath, '.vue'));
 }
 
+// ─── Detection helpers ──────────────────────────────────────────────────────
+
+/**
+ * Directory names that never contain first-party Vue source — skipped during
+ * the recursive detection scan to keep it fast and avoid false positives from
+ * bundled dependencies.
+ */
+const DETECT_IGNORE_DIRS = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  'out',
+  '.nuxt',
+  '.output',
+  '.next',
+  'coverage',
+  'vendor',
+  'target',
+  '.cache',
+  '.turbo',
+  '.svelte-kit',
+]);
+
+/** Max directory depth and total directories visited by the detection scan. */
+const DETECT_MAX_DEPTH = 6;
+const DETECT_MAX_DIRS = 2000;
+
+/** Returns true if a parsed package.json declares a vue / @vue/* dependency. */
+function pkgDeclaresVue(raw: string): boolean {
+  try {
+    const pkg = JSON.parse(raw) as Record<string, unknown>;
+    const deps = Object.assign(
+      {},
+      pkg['dependencies'] as Record<string, string> | undefined,
+      pkg['devDependencies'] as Record<string, string> | undefined,
+    );
+    return Object.keys(deps).some((k) => k === 'vue' || k.startsWith('@vue/'));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Bounded recursive scan: returns true on the first sign of a Vue project —
+ * either a `.vue` file or a (possibly nested) package.json declaring vue.
+ * Skips heavy/irrelevant directories and caps depth + total directories so the
+ * scan stays cheap even on large monorepos. Symlinked directories are not
+ * followed (Dirent.isDirectory() is false for symlinks), avoiding cycles.
+ */
+function scanForVue(dir: string, depth: number, budget: { dirs: number }): boolean {
+  if (depth > DETECT_MAX_DEPTH || budget.dirs >= DETECT_MAX_DIRS) return false;
+  budget.dirs++;
+
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false; // unreadable directory — skip
+  }
+
+  const subDirs: string[] = [];
+  for (const e of entries) {
+    if (e.isFile()) {
+      if (e.name.endsWith('.vue')) return true;
+      if (e.name === 'package.json') {
+        try {
+          if (pkgDeclaresVue(readFileSync(`${dir}/${e.name}`, 'utf8'))) return true;
+        } catch {
+          // unreadable package.json — ignore
+        }
+      }
+    } else if (e.isDirectory() && !DETECT_IGNORE_DIRS.has(e.name)) {
+      subDirs.push(e.name);
+    }
+  }
+
+  for (const name of subDirs) {
+    if (scanForVue(`${dir}/${name}`, depth + 1, budget)) return true;
+  }
+
+  return false;
+}
+
 /**
  * Try to find an explicit component name from `defineOptions({ name: '...' })`.
  * Falls back to the filename-derived PascalCase name.
@@ -62,36 +146,20 @@ export const vueAdapter: FrameworkAdapter = {
   // ── Detection ───────────────────────────────────────────────────────────────
 
   async detect(projectRoot: string): Promise<boolean> {
-    // Primary signal: package.json declares a vue dependency
+    // Fast path: root package.json declares a vue dependency (common case).
     try {
-      const raw = readFileSync(`${projectRoot}/package.json`, 'utf8');
-      const pkg = JSON.parse(raw) as Record<string, unknown>;
-      const deps = Object.assign(
-        {},
-        pkg['dependencies'] as Record<string, string> | undefined,
-        pkg['devDependencies'] as Record<string, string> | undefined,
-      );
-      if (Object.keys(deps).some((k) => k === 'vue' || k.startsWith('@vue/'))) {
+      if (pkgDeclaresVue(readFileSync(`${projectRoot}/package.json`, 'utf8'))) {
         return true;
       }
     } catch {
-      // No package.json or parse error — fall through to file scan
+      // No package.json or parse error — fall through to the recursive scan
     }
 
-    // Fallback: presence of .vue files in common source directories
-    const scanDirs = [projectRoot, `${projectRoot}/src`, `${projectRoot}/components`];
-    for (const dir of scanDirs) {
-      try {
-        const entries = readdirSync(dir, { withFileTypes: true });
-        if (entries.some((e) => e.isFile() && e.name.endsWith('.vue'))) {
-          return true;
-        }
-      } catch {
-        // Directory doesn't exist — skip
-      }
-    }
-
-    return false;
+    // Monorepo / sub-app fallback: bounded recursive scan for a `.vue` file or
+    // a nested package.json declaring vue. Handles projects where the Vue app
+    // lives in a subdirectory (frontend/, web/, apps/web/, …) rather than the
+    // indexed root. Skips heavy dirs and caps depth + total directories.
+    return scanForVue(projectRoot, 0, { dirs: 0 });
   },
 
   // ── File routing ─────────────────────────────────────────────────────────────

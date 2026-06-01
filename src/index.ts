@@ -60,6 +60,8 @@ import { getConfig } from './config/config-loader.js';
 // Framework adapters — imported for side-effect self-registration
 import './adapters/vue.js';
 import './adapters/nuxt.js';
+import './adapters/svelte.js';
+import './adapters/astro.js';
 import './adapters/react.js';
 import './adapters/nextjs.js';
 import './adapters/angular.js';
