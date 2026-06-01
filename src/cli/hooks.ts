@@ -2,8 +2,8 @@
  * `purecontext-mcp hooks --install` / `hooks --list`
  * `purecontext-mcp hook-pretooluse|hook-posttooluse|hook-precompact|hook-worktree-create|hook-worktree-remove`
  *
- * Merges hook entries into ~/.claude/settings.json using CLI-style commands
- * (npx purecontext-mcp hook-*) so no scripts need to be copied to ~/.claude/hooks/.
+ * Merges hook entries into ~/.claude/settings.json using direct node invocation
+ * (node "<cliPath>" hook-*) so hooks never trigger npm registry SSL checks.
  * Also injects PureContext agent instructions into ~/.claude/CLAUDE.md.
  */
 
@@ -18,7 +18,7 @@ import {
 } from 'fs';
 import type _BetterSqlite3 from 'better-sqlite3';
 type DatabaseConstructor = typeof _BetterSqlite3;
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
 
@@ -31,42 +31,15 @@ const CLAUDE_DIR = join(homedir(), '.claude');
 const SETTINGS_PATH = join(CLAUDE_DIR, 'settings.json');
 const CLAUDE_MD_PATH = join(CLAUDE_DIR, 'CLAUDE.md');
 
-// ─── Settings entries ─────────────────────────────────────────────────────────
+// ─── Hook command builder ─────────────────────────────────────────────────────
 
-const POST_TOOL_USE_ENTRY = {
-  matcher: 'Edit|Write|MultiEdit',
-  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-posttooluse' }],
-};
-
-const PRE_COMPACT_ENTRY = {
-  matcher: '',
-  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-precompact' }],
-};
-
-const PRE_TOOL_USE_ENTRY = {
-  matcher: 'Edit|Write|MultiEdit',
-  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-pretooluse' }],
-};
-
-const WORKTREE_CREATE_ENTRY = {
-  matcher: '',
-  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-worktree-create' }],
-};
-
-const WORKTREE_REMOVE_ENTRY = {
-  matcher: '',
-  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-worktree-remove' }],
-};
-
-const TASK_COMPLETED_ENTRY = {
-  matcher: '',
-  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-taskcompleted' }],
-};
-
-const SUBAGENT_START_ENTRY = {
-  matcher: '',
-  hooks: [{ type: 'command', command: 'npx purecontext-mcp hook-subagentstart' }],
-};
+// Builds a direct `node "<script>" <subcommand>` invocation that bypasses npx
+// and avoids npm registry SSL checks entirely (important on corporate proxies).
+function makeHookCmd(subcommand: string): string {
+  const cliScript = resolve(__dirname, '..', 'index.js');
+  const q = (p: string) => `"${p}"`;
+  return `${q(process.execPath)} ${q(cliScript)} ${subcommand}`;
+}
 
 // ─── CLAUDE.md block ──────────────────────────────────────────────────────────
 
@@ -168,12 +141,12 @@ export function cmdHooksList(): void {
   console.log(`  CLAUDE.md block:     ${isClaudeMdInjected() ? 'present' : 'not present'}\n`);
 
   if (areSettingsMerged()) {
-    console.log('  Active hooks:');
-    console.log('    PostToolUse   → npx purecontext-mcp hook-posttooluse');
-    console.log('    PreCompact    → npx purecontext-mcp hook-precompact');
-    console.log('    PreToolUse    → npx purecontext-mcp hook-pretooluse');
-    console.log('    WorktreeCreate → npx purecontext-mcp hook-worktree-create');
-    console.log('    WorktreeRemove → npx purecontext-mcp hook-worktree-remove');
+    console.log('  Active hooks (invoked via direct node, no npx):');
+    console.log('    PostToolUse    → hook-posttooluse');
+    console.log('    PreCompact     → hook-precompact');
+    console.log('    PreToolUse     → hook-pretooluse');
+    console.log('    WorktreeCreate → hook-worktree-create');
+    console.log('    WorktreeRemove → hook-worktree-remove');
   }
 }
 
@@ -193,37 +166,37 @@ export function mergeSettings(): void {
 
   hooks.PostToolUse = mergeHookEntry(
     hooks.PostToolUse ?? [],
-    POST_TOOL_USE_ENTRY,
+    { matcher: 'Edit|Write|MultiEdit', hooks: [{ type: 'command', command: makeHookCmd('hook-posttooluse') }] },
     ['purecontext-index-hook.mjs', 'hook-posttooluse'],
   );
   hooks.PreCompact = mergeHookEntry(
     hooks.PreCompact ?? [],
-    PRE_COMPACT_ENTRY,
+    { matcher: '', hooks: [{ type: 'command', command: makeHookCmd('hook-precompact') }] },
     ['purecontext-precompact-hook.mjs', 'hook-precompact'],
   );
   hooks.PreToolUse = mergeHookEntry(
     hooks.PreToolUse ?? [],
-    PRE_TOOL_USE_ENTRY,
+    { matcher: 'Edit|Write|MultiEdit', hooks: [{ type: 'command', command: makeHookCmd('hook-pretooluse') }] },
     ['purecontext-edit-guard.mjs', 'hook-pretooluse'],
   );
   hooks.WorktreeCreate = mergeHookEntry(
     (hooks.WorktreeCreate ?? []) as unknown[],
-    WORKTREE_CREATE_ENTRY,
+    { matcher: '', hooks: [{ type: 'command', command: makeHookCmd('hook-worktree-create') }] },
     ['hook-worktree-create'],
   );
   hooks.WorktreeRemove = mergeHookEntry(
     (hooks.WorktreeRemove ?? []) as unknown[],
-    WORKTREE_REMOVE_ENTRY,
+    { matcher: '', hooks: [{ type: 'command', command: makeHookCmd('hook-worktree-remove') }] },
     ['hook-worktree-remove'],
   );
   hooks.TaskCompleted = mergeHookEntry(
     (hooks.TaskCompleted ?? []) as unknown[],
-    TASK_COMPLETED_ENTRY,
+    { matcher: '', hooks: [{ type: 'command', command: makeHookCmd('hook-taskcompleted') }] },
     ['hook-taskcompleted'],
   );
   hooks.SubagentStart = mergeHookEntry(
     (hooks.SubagentStart ?? []) as unknown[],
-    SUBAGENT_START_ENTRY,
+    { matcher: '', hooks: [{ type: 'command', command: makeHookCmd('hook-subagentstart') }] },
     ['hook-subagentstart'],
   );
 
@@ -309,10 +282,11 @@ function findRepoRoot(filePath: string): string | null {
 }
 
 function reindexRepo(repoRoot: string): void {
-  spawnSync('npx', ['purecontext-mcp', 'index-folder', '--path', repoRoot], {
+  const selfScript = process.argv[1];
+  if (!selfScript) return;
+  spawnSync(process.execPath, [selfScript, 'index-folder', '--path', repoRoot], {
     stdio: 'ignore',
     timeout: 60_000,
-    shell: process.platform === 'win32',
   });
 }
 
@@ -467,11 +441,13 @@ export async function cmdHookWorktreeCreate(): Promise<void> {
     const targetPath = worktreePath ?? (cwd && name ? join(cwd, '.claude', 'worktrees', name) : null);
     if (!targetPath) process.exit(0);
 
-    spawnSync('npx', ['purecontext-mcp', 'index-folder', '--path', targetPath], {
-      stdio: 'ignore',
-      timeout: 120_000,
-      shell: process.platform === 'win32',
-    });
+    const selfScript = process.argv[1];
+    if (selfScript) {
+      spawnSync(process.execPath, [selfScript, 'index-folder', '--path', targetPath], {
+        stdio: 'ignore',
+        timeout: 120_000,
+      });
+    }
   } catch { /* never block */ }
 
   process.exit(0);
