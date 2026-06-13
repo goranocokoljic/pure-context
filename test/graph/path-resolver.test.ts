@@ -231,6 +231,76 @@ describe('tsconfig path alias resolution', () => {
     expect(r.resolve('@/foo', 'main.ts')).toBe('src/foo.ts');
     rmSync(root, { recursive: true });
   });
+
+  it('does not treat comment-like sequences inside strings as comments', () => {
+    // Regression: a `"~/*"` paths key opens `/*` and an `include` glob like
+    // `"**​/*"` closes `*/`. A whole-text comment-stripping regex would delete
+    // the entire paths block and corrupt the (valid) JSON.
+    const root = join(tmpdir(), `purecontext-glob-${Date.now()}`);
+    mkdirSync(join(root, 'vue/src/stores'), { recursive: true });
+    writeFileSync(join(root, 'vue/src/stores/settings.js'), '');
+    writeFileSync(
+      join(root, 'tsconfig.json'),
+      `{
+        "compilerOptions": {
+          "baseUrl": ".",
+          "paths": {
+            "~/*": ["./vue/src/*"],
+            "@/*": ["./vue/src/*"]
+          }
+        },
+        "include": ["vue/src/**/*"]
+      }`,
+    );
+    const r = createResolver(root);
+    expect(r.resolve('~/stores/settings', 'vue/src/pages/page.vue')).toBe(
+      'vue/src/stores/settings.js',
+    );
+    rmSync(root, { recursive: true });
+  });
+});
+
+// ─── jsconfig.json fallback ───────────────────────────────────────────────────
+
+describe('jsconfig.json fallback', () => {
+  it('resolves aliases from jsconfig.json when no tsconfig.json exists', () => {
+    const root = join(tmpdir(), `purecontext-jsconfig-${Date.now()}`);
+    mkdirSync(join(root, 'src'), { recursive: true });
+    writeFileSync(join(root, 'src', 'foo.js'), '');
+    writeFileSync(
+      join(root, 'jsconfig.json'),
+      JSON.stringify({
+        compilerOptions: { baseUrl: '.', paths: { '@/*': ['src/*'] } },
+      }),
+    );
+    const r = createResolver(root);
+    expect(r.resolve('@/foo', 'app/page.js')).toBe('src/foo.js');
+    rmSync(root, { recursive: true });
+  });
+
+  it('prefers tsconfig.json over jsconfig.json when both exist', () => {
+    const root = join(tmpdir(), `purecontext-both-${Date.now()}`);
+    mkdirSync(join(root, 'ts'), { recursive: true });
+    mkdirSync(join(root, 'js'), { recursive: true });
+    writeFileSync(join(root, 'ts', 'foo.ts'), '');
+    writeFileSync(join(root, 'js', 'foo.js'), '');
+    writeFileSync(
+      join(root, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: { baseUrl: '.', paths: { '@/*': ['ts/*'] } },
+      }),
+    );
+    writeFileSync(
+      join(root, 'jsconfig.json'),
+      JSON.stringify({
+        compilerOptions: { baseUrl: '.', paths: { '@/*': ['js/*'] } },
+      }),
+    );
+    const r = createResolver(root);
+    // tsconfig wins → ts/foo.ts, not js/foo.js
+    expect(r.resolve('@/foo', 'app/page.ts')).toBe('ts/foo.ts');
+    rmSync(root, { recursive: true });
+  });
 });
 
 // ─── External packages ────────────────────────────────────────────────────────

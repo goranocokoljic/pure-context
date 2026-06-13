@@ -156,29 +156,103 @@ function isDirectory(p: string): boolean {
 
 // ─── tsconfig loading ─────────────────────────────────────────────────────────
 
+// Config files that may carry compilerOptions.paths, in precedence order.
+// Mirrors editor behaviour: tsconfig.json wins, jsconfig.json is the JS-project
+// fallback (common in Vue/Nuxt/plain-JS repos with no TypeScript).
+const CONFIG_FILENAMES = ['tsconfig.json', 'jsconfig.json'];
+
 function loadTsConfigPaths(projectRoot: string): TsConfigPaths | null {
-  const tsconfigPath = resolve(projectRoot, 'tsconfig.json');
-  if (!existsSync(tsconfigPath)) return null;
+  for (const filename of CONFIG_FILENAMES) {
+    const configPath = resolve(projectRoot, filename);
+    if (!existsSync(configPath)) continue;
 
-  try {
-    const raw = readFileSync(tsconfigPath, 'utf8');
-    // Strip // and /* */ comments (tsconfig.json often contains them)
-    const stripped = raw
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/\/\/.*/g, '');
-    const tsconfig = JSON.parse(stripped) as {
-      compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> };
-    };
+    try {
+      const raw = readFileSync(configPath, 'utf8');
+      const tsconfig = JSON.parse(stripJsonComments(raw)) as {
+        compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> };
+      };
 
-    const compilerOptions = tsconfig.compilerOptions ?? {};
-    const rawBaseUrl = compilerOptions.baseUrl ?? '.';
-    const baseUrl = resolve(projectRoot, rawBaseUrl);
-    const paths = compilerOptions.paths ?? {};
+      const compilerOptions = tsconfig.compilerOptions ?? {};
+      const rawBaseUrl = compilerOptions.baseUrl ?? '.';
+      const baseUrl = resolve(projectRoot, rawBaseUrl);
+      const paths = compilerOptions.paths ?? {};
 
-    return { baseUrl, paths };
-  } catch {
-    return null;
+      return { baseUrl, paths };
+    } catch {
+      // Malformed config — fall through to the next candidate (if any).
+      continue;
+    }
   }
+
+  return null;
+}
+
+/**
+ * Strip `//` line comments and `/* … *​/` block comments from JSONC text
+ * (tsconfig/jsconfig commonly contain them), while leaving comment-like
+ * sequences *inside string literals* untouched.
+ *
+ * A naive regex approach is unsafe here: a `paths` key such as `"~/*"` opens a
+ * comment and an `include` glob such as `"**​/*"` closes one, so a whole-text
+ * regex would delete everything between them and corrupt otherwise-valid JSON.
+ * This walks the text character by character and only treats `//` / `/*` as
+ * comment starts when outside a double-quoted string.
+ */
+function stripJsonComments(input: string): string {
+  let out = '';
+  let inString = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    const next = input[i + 1];
+
+    if (inLineComment) {
+      if (ch === '\n') {
+        inLineComment = false;
+        out += ch; // keep the newline so line numbers are preserved
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (ch === '*' && next === '/') {
+        inBlockComment = false;
+        i++; // consume the closing '/'
+      }
+      continue;
+    }
+
+    if (inString) {
+      out += ch;
+      if (ch === '\\') {
+        // Copy the escaped character verbatim so an escaped quote (\") does
+        // not prematurely close the string.
+        out += input[i + 1] ?? '';
+        i++;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    // Outside any string or comment.
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+    } else if (ch === '/' && next === '/') {
+      inLineComment = true;
+      i++;
+    } else if (ch === '/' && next === '*') {
+      inBlockComment = true;
+      i++;
+    } else {
+      out += ch;
+    }
+  }
+
+  return out;
 }
 
 // ─── Wildcard matching ────────────────────────────────────────────────────────
