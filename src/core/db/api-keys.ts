@@ -1,4 +1,5 @@
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
+import { getSqliteFactory } from './sqlite-loader.js';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -87,7 +88,7 @@ export function getAuthDbPath(): string {
 export function openAuthDatabase(): Database.Database {
   const path = getAuthDbPath();
   mkdirSync(join(path, '..'), { recursive: true });
-  const db = new Database(path);
+  const db = getSqliteFactory().open(path);
   db.exec(AUTH_DDL);
   db.exec(REQUEST_LOG_DDL);
   runAuthMigrations(db);
@@ -99,7 +100,7 @@ export function openAuthDatabase(): Database.Database {
  * Suitable for unit tests — no disk I/O.
  */
 export function openInMemoryAuthDatabase(): Database.Database {
-  const db = new Database(':memory:');
+  const db = getSqliteFactory().open(':memory:');
   db.exec(AUTH_DDL);
   db.exec(REQUEST_LOG_DDL);
   runAuthMigrations(db);

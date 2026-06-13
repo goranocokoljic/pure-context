@@ -1,4 +1,3 @@
-import { createRequire } from 'module';
 import { createHash } from 'crypto';
 import { mkdirSync } from 'fs';
 import { homedir } from 'os';
@@ -6,37 +5,14 @@ import { join } from 'path';
 import type { RepoMetadata } from '../types.js';
 import { EMBEDDINGS_DDL } from './embedding-store.js';
 import { CO_CHANGE_DDL } from './co-change-store.js';
-import { NativeDependencyError } from '../errors.js';
+import { getSqliteFactory, type SqliteDatabase } from './sqlite-loader.js';
 
-// ─── Lazy-load better-sqlite3 ─────────────────────────────────────────────────
-// We defer the native-addon load so any binary mismatch throws a
-// NativeDependencyError (with an actionable user message) rather than an
-// opaque module-load crash.
-
-const _require = createRequire(import.meta.url);
-
-// better-sqlite3 uses `export =` (not `export default`), so its type is the
-// constructor itself when accessed via the module namespace.
-import type _BetterSqlite3 from 'better-sqlite3';
-type DatabaseConstructor = typeof _BetterSqlite3;
-let _Database: DatabaseConstructor | null = null;
-let _dbLoadError: unknown = null;
-let _dbLoaded = false;
-
-function getDatabase(): DatabaseConstructor {
-  if (!_dbLoaded) {
-    try {
-      _Database = _require('better-sqlite3') as DatabaseConstructor;
-    } catch (err) {
-      _dbLoadError = err;
-    }
-    _dbLoaded = true;
-  }
-  if (_dbLoadError !== null || _Database === null) {
-    throw new NativeDependencyError(_dbLoadError);
-  }
-  return _Database;
-}
+// ─── SQLite backend ───────────────────────────────────────────────────────────
+// The concrete engine (native better-sqlite3 or the WASM fallback) is chosen by
+// the loader. We keep the better-sqlite3-compatible `SqliteDatabase` type so
+// the existing `InstanceType<DatabaseConstructor>` annotations below — and all
+// call sites — remain valid and unchanged.
+type DatabaseConstructor = new (filename: string) => SqliteDatabase;
 
 export const SCHEMA_VERSION = 8;
 
@@ -176,17 +152,15 @@ export function getIndexDir(): string {
 }
 
 export function openDatabase(repoId: string, indexDir?: string): InstanceType<DatabaseConstructor> {
-  const DB = getDatabase();
   const dir = indexDir ?? getIndexDir();
   mkdirSync(dir, { recursive: true });
-  const db = new DB(join(dir, `${repoId}.db`));
+  const db = getSqliteFactory().open(join(dir, `${repoId}.db`));
   initializeDatabase(db);
   return db;
 }
 
 export function openInMemoryDatabase(): InstanceType<DatabaseConstructor> {
-  const DB = getDatabase();
-  const db = new DB(':memory:');
+  const db = getSqliteFactory().open(':memory:');
   initializeDatabase(db);
   return db;
 }

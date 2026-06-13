@@ -12,6 +12,7 @@ import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { cmdHooksInstall } from './hooks.js';
 import { getClaudeDesktopConfigPath } from './install-detect.js';
+import { resolveServerLaunch, nodeMajor } from './resolve-node.js';
 
 export type Scope = 'local' | 'global' | 'both';
 
@@ -123,6 +124,23 @@ export async function installClaude(projectRoot: string, scope: Scope): Promise<
   if (scope === 'global' || scope === 'both') {
     cmdHooksInstall();
   }
+  printClaudeMcpAddHint();
+}
+
+/**
+ * Print the exact `claude mcp add` command that registers the server pinned to
+ * the user's global Node. We print rather than write config because Claude Code
+ * manages MCP registration via its own store, and a machine-specific absolute
+ * node path must not land in a project-committed `.mcp.json`.
+ */
+function printClaudeMcpAddHint(): void {
+  const launch = resolveServerLaunch();
+  warnIfNodeTooOld(launch.nodeVersion);
+  const quoted = [launch.command, ...launch.args].map((p) => (p.includes(' ') ? `"${p}"` : p));
+  console.log(
+    '\nTo register the MCP server (pinned to your global Node, so it works in every project):\n' +
+      `  claude mcp add purecontext-mcp --scope user -- ${quoted.join(' ')}\n`,
+  );
 }
 
 /**
@@ -301,20 +319,31 @@ export async function installClaudeDesktop(_projectRoot: string, _scope: Scope):
   }
 
   const mcpServers = (config['mcpServers'] ?? {}) as Record<string, unknown>;
-  const existing = mcpServers['purecontext-mcp'] as Record<string, unknown> | undefined;
 
-  if (existing?.['command'] === 'npx') {
-    // Already present with same command — skip
-    return;
-  }
+  // Pin the server to a globally-available Node (Volta default / system),
+  // independent of any project's Node pin. This is a user-scope config, so the
+  // machine-specific absolute node path is appropriate here.
+  const launch = resolveServerLaunch();
+  warnIfNodeTooOld(launch.nodeVersion);
 
   mcpServers['purecontext-mcp'] = {
-    command: 'npx',
-    args: ['purecontext-mcp'],
+    command: launch.command,
+    args: launch.args,
   };
   config['mcpServers'] = mcpServers;
 
   writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
+}
+
+/** Warn (don't fail) when the resolved global Node is below the supported floor. */
+function warnIfNodeTooOld(version: string | null): void {
+  const major = nodeMajor(version);
+  if (major !== null && major < 18) {
+    console.log(
+      `  warning: resolved Node is ${version} (< 18). PureContext requires Node >= 18.\n` +
+        '  Set your global/default Node to 18+ (Volta: `volta install node@22`).',
+    );
+  }
 }
 
 // ─── Dispatch table ───────────────────────────────────────────────────────────

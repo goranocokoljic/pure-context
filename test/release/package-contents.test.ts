@@ -75,9 +75,11 @@ describe('package.json required fields', () => {
     expect(pkg.version).toMatch(/^\d+\.\d+\.\d+/);
   });
 
-  it('has bin pointing to dist/index.js', () => {
+  it('has bin pointing to the dist/bin.js launcher', () => {
+    // bin is the Node-version-guard launcher, which dynamically imports the
+    // real entry point only after confirming a supported runtime.
     const bin = pkg.bin as Record<string, string>;
-    expect(bin['purecontext-mcp']).toBe('./dist/index.js');
+    expect(bin['purecontext-mcp']).toBe('./dist/bin.js');
   });
 
   it('has engines.node >= 18', () => {

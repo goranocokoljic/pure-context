@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import {
   ApiKeyStore,
   hashApiKey,

@@ -20,13 +20,14 @@
 import { IncomingMessage, ServerResponse } from 'node:http';
 import { readdirSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import type { AuthResult, Permission } from './auth/api-key.js';
 import { ApiKeyValidator } from './auth/api-key.js';
 import { TenantStore, type Tenant, type WorkspaceRole, type WorkspaceMember } from '../core/db/tenants.js';
 import { ApiKeyStore, type ApiKeyRecord } from '../core/db/api-keys.js';
 import { RequestLogStore, type RequestLogEntry } from '../core/db/request-log.js';
 import { getIndexDir } from '../core/db/schema.js';
+import { getSqliteFactory } from '../core/db/sqlite-loader.js';
 import { logger } from '../core/logger.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -424,7 +425,7 @@ export class AdminApi {
     for (const file of files) {
       const dbPath = join(this.indexDir, file);
       try {
-        const db = new Database(dbPath, { readonly: true });
+        const db = getSqliteFactory().open(dbPath, { readonly: true });
         const row = db
           .prepare<[string], { id: string }>('SELECT id FROM repos WHERE tenant_id = ? LIMIT 1')
           .get(tenantId);

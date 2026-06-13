@@ -103,6 +103,7 @@ import { runInstallCommand } from './cli/install.js';
 import { VERSION } from './version.js';
 import { PureContextError, formatErrorBox } from './core/errors.js';
 import { computeRepoId, openDatabase } from './core/db/schema.js';
+import { initSqliteBackend } from './core/db/sqlite-loader.js';
 import { invalidateCache } from './core/db/symbol-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -174,6 +175,10 @@ Claude Code integration:
 // ─── Startup ──────────────────────────────────────────────────────────────────
 
 async function bootstrap(): Promise<void> {
+  // Select the SQLite backend (native better-sqlite3, else WASM fallback)
+  // before anything opens a database.
+  await initSqliteBackend();
+
   // Register all language handlers before any indexing can happen
   registerHandler(typescriptHandler);
   registerHandler(tsxHandler);

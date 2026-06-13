@@ -8,7 +8,6 @@
  */
 
 import { spawnSync } from 'child_process';
-import { createRequire } from 'module';
 import {
   existsSync,
   mkdirSync,
@@ -16,8 +15,7 @@ import {
   readdirSync,
   writeFileSync,
 } from 'fs';
-import type _BetterSqlite3 from 'better-sqlite3';
-type DatabaseConstructor = typeof _BetterSqlite3;
+import { getSqliteFactory, type SqliteDatabase } from '../core/db/sqlite-loader.js';
 import { join, dirname, resolve } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
@@ -364,12 +362,14 @@ function readIndexedRepos(): RepoRow[] {
   const indexDir = join(base, 'indexes');
   if (!existsSync(indexDir)) return [];
 
-  const _require = createRequire(import.meta.url);
-  let Database: DatabaseConstructor | null = null;
+  // Hooks run as short-lived processes without bootstrap, so only the sync
+  // (native) backend is reachable here. On a WASM-only Node this returns [] —
+  // the snapshot hint is advisory; the index DBs remain fully usable via the
+  // server, which initialises the WASM backend properly.
+  let factory;
   try {
-    Database = _require('better-sqlite3') as DatabaseConstructor;
+    factory = getSqliteFactory();
   } catch { return []; }
-  if (!Database) return [];
 
   const repos: RepoRow[] = [];
   let files: string[];
@@ -378,9 +378,9 @@ function readIndexedRepos(): RepoRow[] {
   } catch { return []; }
 
   for (const file of files) {
-    let db: InstanceType<DatabaseConstructor> | undefined;
+    let db: SqliteDatabase | undefined;
     try {
-      db = new Database(join(indexDir, file), { readonly: true });
+      db = factory.open(join(indexDir, file), { readonly: true });
       const rows = db.prepare('SELECT id, root_path, file_count, indexed_at FROM repos LIMIT 50').all() as RepoRow[];
       repos.push(...rows);
     } catch { /* skip unreadable db */ } finally {
@@ -476,12 +476,10 @@ function readRepoStats(): RepoStats[] {
   const indexDir = join(base, 'indexes');
   if (!existsSync(indexDir)) return [];
 
-  const _require = createRequire(import.meta.url);
-  let Database: DatabaseConstructor | null = null;
+  let factory;
   try {
-    Database = _require('better-sqlite3') as DatabaseConstructor;
+    factory = getSqliteFactory();
   } catch { return []; }
-  if (!Database) return [];
 
   let files: string[];
   try {
@@ -491,9 +489,9 @@ function readRepoStats(): RepoStats[] {
   const stats: RepoStats[] = [];
 
   for (const file of files) {
-    let db: InstanceType<DatabaseConstructor> | undefined;
+    let db: SqliteDatabase | undefined;
     try {
-      db = new Database(join(indexDir, file), { readonly: true });
+      db = factory.open(join(indexDir, file), { readonly: true });
 
       const repo = db.prepare(
         'SELECT id, root_path, file_count, indexed_at FROM repos LIMIT 1',
