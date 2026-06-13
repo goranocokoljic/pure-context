@@ -68,7 +68,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "purecontext-mcp": "./dist/index.js"
+    "purecontext-mcp": "./dist/bin.js"
   },
   "scripts": {
     "build": "npm run build:server && npm run build:ui",

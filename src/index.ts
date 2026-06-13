@@ -11,6 +11,9 @@
  *   purecontext-mcp --help / -h        Print usage and exit
  */
 
+// Node version guard — must be the first import so it runs before any heavy or
+// native module (e.g. better-sqlite3) is evaluated on an unsupported runtime.
+import './node-guard.js';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
