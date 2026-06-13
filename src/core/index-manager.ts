@@ -35,9 +35,10 @@ import { buildGraph } from '../graph/graph-builder.js';
 import { join } from 'path';
 import { track } from './telemetry.js';
 import { discoverProviders } from '../providers/provider-registry.js';
-import { isGitRepo, readFileHistory } from './git-log-reader.js';
+import { isGitRepo, readFileHistory, readRepoCommitFiles } from './git-log-reader.js';
 import { updateFileGitMeta } from './db/file-store.js';
 import { insertGitCommits, deleteGitMetadataForFile } from './db/git-metadata-store.js';
+import { insertCommitFiles, deleteCommitFilesForRepo } from './db/co-change-store.js';
 import { buildTestMappings } from './test-mapper.js';
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -394,6 +395,24 @@ export async function indexFolder(
     }
 
     logger.info('Git metadata capture complete');
+
+    // ── Co-change capture (repo-level commit→files) ──────────────────────────
+    // A single `git log --name-only -n N` at the repo root, stored in the
+    // dedicated commit_files table (separate from git_metadata). Gated on
+    // git.coChangeDepth > 0; failures never abort indexing.
+    const coChangeDepth = getConfig().git?.coChangeDepth ?? 0;
+    if (coChangeDepth > 0) {
+      try {
+        const commits = await readRepoCommitFiles(absRoot, coChangeDepth);
+        if (commits && commits.length > 0) {
+          deleteCommitFilesForRepo(db, repoId);
+          insertCommitFiles(db, repoId, commits);
+          logger.info(`Co-change capture: ${commits.length} commit(s) recorded`);
+        }
+      } catch (err) {
+        logger.debug(`Co-change capture skipped: ${err}`);
+      }
+    }
   }
 
   // ── 11. Update repo metadata ──────────────────────────────────────────────

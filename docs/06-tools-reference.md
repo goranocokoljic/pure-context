@@ -104,6 +104,7 @@ Search symbols by name fragment. The primary navigation tool.
 | `limit` | `number` | no | Max results (default: 20) |
 | `mode` | `string` | no | `"keyword"` (default), `"semantic"`, or `"hybrid"` |
 | `debug` | `boolean` | no | Include relevance scoring breakdown in response |
+| `includeRisk` | `boolean` | no | Attach a compact `{ band, riskScore }` to each result (default `false`; see [`get_symbol_risk`](#get_symbol_risk)) |
 
 **Returns:** `{ symbols: SymbolSummary[], _tokenEstimate }`
 
@@ -165,6 +166,7 @@ Retrieve the raw source code of a symbol.
 | `symbolId` | `string` | yes | Symbol ID from `search_symbols` |
 | `context_lines` | `number` | no | Extra lines of context above/below (default: 0) |
 | `verify` | `boolean` | no | Re-read file from disk to verify source hasn't changed |
+| `includeRisk` | `boolean` | no | Attach a compact `{ band, riskScore }` to the symbol (default `false`; see [`get_symbol_risk`](#get_symbol_risk)) |
 
 **Returns:** `{ source, filePath, startByte, endByte, startLine, endLine, _tokenEstimate }`
 
@@ -264,6 +266,8 @@ Forward-walk from a symbol — returns everything needed to understand it (trans
 | `maxTokens` | `number` | no | Stop collecting when estimate exceeds this |
 
 **Returns:** `{ symbols: SymbolSummary[], files: string[], _tokenEstimate }`
+
+When git co-change data exists (`git.coChangeDepth > 0`), the response also includes `historicalNeighbors` — files that historically change together with the target but are not reachable through imports, each with a small outline. Absent (and output byte-identical to before) when there is no co-change data.
 
 ---
 
@@ -424,6 +428,44 @@ File or symbol churn metrics.
 | `since` | `string` | no | ISO 8601 date — look back from this date |
 
 **Returns:** `{ files: [{ filePath, commits, linesChanged, authors, churnScore }] }`
+
+---
+
+### `get_co_change`
+
+Temporal coupling — files that historically change together with a target file or symbol, derived from the repo-level commit capture. Reveals coupling the import graph cannot (a route and its test; a feature flag and the code it gates). Requires `git.coChangeDepth > 0` at index time.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repoId` | `string` | yes | Target repository |
+| `filePath` | `string` | no | Target file path (provide this **or** `symbolId`) |
+| `symbolId` | `string` | no | Target symbol — resolved to its containing file (git is file-granular) |
+| `minSupport` | `number` | no | Drop partners with fewer than N shared commits (default 2) |
+| `dayWindow` | `number` | no | Look back N days (default: entire captured window) |
+| `topN` | `number` | no | Max partners to return (default 20) |
+
+**Returns:** `{ targetFilePath, targetCommits, windowCommits, signalQuality, partners: [{ filePath, support, weightedSupport, confidence, lift, coChangeDate }] }`
+
+Mega-commits (reformats, lockfile sweeps) are filtered out and down-weighted; `signalQuality: "low"` flags shallow/sparse histories.
+
+---
+
+### `get_symbol_risk`
+
+Composite, explainable "how risky is it to change this symbol?" verdict. Blends churn (90 d), centrality (afferent coupling + reverse blast radius), cyclomatic complexity, test-coverage gap, and co-change spread — each normalized repo-relative. Returns a 0–100 score, a band, the per-factor breakdown, and human-readable reasons. Code-centered only — no author/ownership metrics.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repoId` | `string` | yes | Target repository |
+| `symbolId` | `string` | yes | Symbol to score |
+
+**Returns:** `{ riskScore, band: "low" | "review" | "high", factors: { churn, centrality, complexity, testGap, coChange }, reasons: string[], signalQuality }`
+
+> `search_symbols` and `get_symbol_source` accept `includeRisk: true` to attach a compact `{ band, riskScore }` to results (opt-in, default off). `get_context_bundle` returns `historicalNeighbors` — co-changing files not reachable via imports — when co-change data exists. Risk weights are configurable via `risk.weights.*` (see [Configuration](04-configuration.md)).
 
 ---
 

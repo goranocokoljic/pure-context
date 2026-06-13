@@ -1,4 +1,4 @@
----
+hmmm---
 description: PureContext MCP code navigation rules
 alwaysApply: true
 ---
@@ -13,21 +13,35 @@ Always use PureContext MCP tools for code navigation. Never read entire files to
 2. **Find code by name**: `search_symbols` → read `summary` and `signature` → only call `get_symbol_source` for symbols you will actually edit
 3. **Find code by behaviour**: `search_semantic` for conceptual queries; `search_text` for literals/comments
 
-### Key tools
+### Pick the right tool
 
-| Goal | Tool |
-|------|------|
-| Find function/class by name | `search_symbols` |
-| Find by what it does | `search_semantic` |
-| Find literal string or comment | `search_text` |
-| All symbols in a file | `get_file_outline` |
-| What breaks if I change this | `get_blast_radius` |
-| All callers of a function | `find_references` |
-| Callers/callees tree | `get_call_hierarchy` |
+| I need to… | Use |
+|------------|-----|
+| Find a function/class/method by name | `search_symbols` |
+| Find code by what it does (meaning) | `search_semantic` |
+| Find a literal string, comment, or config value | `search_text` |
+| Read a symbol's implementation | `get_symbol_source` |
+| Read a non-symbol file region (imports, config) | `get_file_content` |
+| Survey one file / the whole project | `get_file_outline` / `get_repo_outline` |
+| Know what breaks if I change a symbol | `get_blast_radius` |
+| Find every call site of a symbol | `find_references` |
+| See the callers/callees tree | `get_call_hierarchy` |
+| Judge how risky a symbol is to change | `get_symbol_risk` |
+| Find files that change together with this one | `get_co_change` |
+| Pre-flight a rename / delete / move | `check_rename_safe` / `check_delete_safe` / `check_move_safe` |
+| Find exported symbols with no tests | `find_untested_symbols` |
+| Codebase health score / debt report | `health_radar` / `get_debt_report` |
+
+### Before editing risky code
+
+Before broad or automated edits to an unfamiliar symbol, check `get_symbol_risk` (composite churn + centrality + complexity + test-gap + co-change, banded `low`/`review`/`high`). For a `high` symbol, inspect its callers (`get_blast_radius`) and its historical co-changers (`get_co_change`) first — co-changing files are the second-order edits the import graph can't show you. `search_symbols` and `get_symbol_source` accept `includeRisk: true` to attach a compact `{ band, riskScore }` inline.
 
 ### Anti-patterns — never do these
 
 - Do not read whole files to find a function — use `search_symbols` + `get_symbol_source`
 - Do not call `get_symbol_source` for every result — read `summary` first
 - Do not skip `list_repos` — every tool needs a `repoId`
+- Do not use `search_text` for symbol lookups — it greps raw text; use `search_symbols`
 - Do not re-search after `verdict: "no_match"` — the symbol does not exist
+
+Full tool reference (every parameter), navigation patterns, and known limitations: **`AGENT_REFERENCE.md`**.

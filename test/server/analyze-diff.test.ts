@@ -8,13 +8,19 @@
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
-import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdirSync } from 'fs';
 
 // ─── Mock os.homedir so openDatabase writes to a temp dir ─────────────────────
+// `tmpHome` is created via vi.hoisted so it is initialized before the (hoisted)
+// vi.mock factory or any module-init homedir() call references it — the import
+// chain now pulls in config-loader, which reads homedir() at module load.
 
-const tmpHome = join(tmpdir(), `purecontext-analyze-diff-${Math.random().toString(36).slice(2)}`);
+const tmpHome = vi.hoisted(() => {
+  const os = require('node:os') as typeof import('node:os');
+  const path = require('node:path') as typeof import('node:path');
+  return path.join(os.tmpdir(), `purecontext-analyze-diff-${Math.random().toString(36).slice(2)}`);
+});
 
 vi.mock('node:os', async (importOriginal) => {
   const orig = await importOriginal<typeof import('node:os')>();
@@ -468,5 +474,103 @@ index 000..111 100644
     const out = JSON.parse((result.content[0] as { text: string }).text);
     expect(out._meta.timing_ms).toBeGreaterThanOrEqual(0);
     expect(typeof out._meta.server_version).toBe('string');
+  });
+
+  it('reduces to today\'s shape when all impact flags are off', async () => {
+    const result = await handler({
+      repoId: REPO_ID,
+      diff: SIMPLE_DIFF,
+      includeBlastRadius: false,
+      includeRisk: false,
+      includeCoChangeGaps: false,
+      includeTests: false,
+      includeArchitectureFlags: false,
+    });
+    const out = JSON.parse((result.content[0] as { text: string }).text);
+    // None of the Phase 77 fields are present.
+    expect(out.risk).toBeUndefined();
+    expect(out.missingCoChange).toBeUndefined();
+    expect(out.recommendedTests).toBeUndefined();
+    expect(out.coverageGaps).toBeUndefined();
+    expect(out.architecturalFlags).toBeUndefined();
+    expect(out.signalQuality).toBeUndefined();
+  });
+});
+
+// ─── Phase 77 — impact-aware synthesis, end-to-end on a real .diff fixture ─────
+// Extends the same temp DB with co-change history, a coverage gap, and an import
+// cycle so a real unified diff (read from disk) exercises every synthesis section.
+
+import { readFileSync } from 'fs';
+import { insertCommitFiles } from '../../src/core/db/co-change-store.js';
+
+describe('handler — analyze_diff impact synthesis (fixture diff)', () => {
+  const NOW = Math.floor(Date.now() / 1000);
+
+  beforeAll(() => {
+    const db = openDatabase(REPO_ID);
+
+    // ── Co-change history for src/foo.ts ─────────────────────────────────────
+    // foo co-changes with the UNTOUCHED src/ledger.ts (6×) and with a test file
+    // test/foo.test.ts (4×); 16 single-file padding commits push the window ≥ 20.
+    const commits = [];
+    for (let i = 0; i < 6; i++) {
+      commits.push({ sha: `fl${i}`, date: NOW - i, files: ['src/foo.ts', 'src/ledger.ts'] });
+    }
+    for (let i = 0; i < 4; i++) {
+      commits.push({ sha: `ft${i}`, date: NOW - 100 - i, files: ['src/foo.ts', 'test/foo.test.ts'] });
+    }
+    for (let i = 0; i < 16; i++) {
+      commits.push({ sha: `pad${i}`, date: NOW - 500 - i, files: [`pad${i}.ts`] });
+    }
+    insertCommitFiles(db, REPO_ID, commits);
+
+    // ── Coverage gap: sym-existing is untested ───────────────────────────────
+    db.prepare(
+      `INSERT OR REPLACE INTO provider_metadata (repo_id, provider_name, entity_key, metadata, updated_at)
+       VALUES (?, 'test-mapper', 'sym-existing', ?, ?)`,
+    ).run(REPO_ID, JSON.stringify({ testFiles: [], testSymbolIds: [], coverageStatus: 'untested' }), NOW);
+
+    // ── Import cycle: src/foo.ts <-> src/bar.ts ──────────────────────────────
+    const edge = db.prepare(
+      `INSERT INTO dep_edges (repo_id, source_file, source_symbol_id, target_file, target_symbol_id, edge_type, specifier, tenant_id)
+       VALUES (?, ?, NULL, ?, NULL, 'import', ?, 'local')`,
+    );
+    edge.run(REPO_ID, 'src/foo.ts', 'src/bar.ts', 'src/bar.ts');
+    edge.run(REPO_ID, 'src/bar.ts', 'src/foo.ts', 'src/foo.ts');
+
+    db.close();
+  });
+
+  it('populates risk, missingCoChange, recommendedTests, coverageGaps, flags', async () => {
+    const diff = readFileSync(
+      join(process.cwd(), 'test/fixtures/change-synthesis/foo-body-change.diff'),
+      'utf8',
+    );
+    const result = await handler({ repoId: REPO_ID, diff, blastRadiusDepth: 2 });
+    expect(result.isError).toBeFalsy();
+    const out = JSON.parse((result.content[0] as { text: string }).text);
+
+    // Risk computed for the changed symbol.
+    expect(out.risk).toBeDefined();
+    expect(['low', 'review', 'high']).toContain(out.risk.band);
+
+    // The untouched, historically-coupled file is flagged as missing.
+    expect(out.signalQuality).toBe('ok');
+    expect(out.missingCoChange.map((m: { filePath: string }) => m.filePath)).toContain('src/ledger.ts');
+
+    // The co-changing test file is recommended (not listed as missing co-change).
+    expect(out.recommendedTests.map((t: { testFilePath: string }) => t.testFilePath)).toContain('test/foo.test.ts');
+    expect(out.missingCoChange.map((m: { filePath: string }) => m.filePath)).not.toContain('test/foo.test.ts');
+
+    // The untested changed symbol is a coverage gap.
+    expect(out.coverageGaps.map((g: { symbolId: string }) => g.symbolId)).toContain('sym-existing');
+
+    // The foo<->bar cycle is flagged.
+    const cycleFiles = out.architecturalFlags.cyclesTouched.flat();
+    expect(cycleFiles).toContain('src/foo.ts');
+
+    // reviewPriority is elevated above 'low' (coverage gap + impact).
+    expect(out.reviewPriority).not.toBe('low');
   });
 });

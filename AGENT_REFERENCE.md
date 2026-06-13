@@ -5,6 +5,71 @@ The always-on instructions (mandatory workflow, decision rules, anti-patterns) l
 
 ---
 
+## Pick the right tool
+
+| I need to… | Use |
+|---|---|
+| Find a function/class/method by name | `search_symbols` |
+| Find code by what it does (meaning, not name) | `search_semantic` |
+| Find a literal string, comment, or config value | `search_text` |
+| Read a symbol's implementation | `get_symbol_source` |
+| Fetch several symbols at once | `get_symbols` |
+| Survey all symbols in one file | `get_file_outline` |
+| Survey the whole project layout | `get_repo_outline` or `get_file_tree` |
+| Read a non-symbol file section (imports, config block) | `get_file_content` with `startLine`/`endLine` |
+| Understand what a symbol depends on | `get_context_bundle` |
+| Know what breaks if I change a symbol | `get_blast_radius` |
+| Find all call sites of a symbol | `find_references` |
+| Check who imports a file directly | `find_importers` |
+| Find unused exports | `find_dead_code` |
+| Judge how risky a symbol is to change | `get_symbol_risk` |
+| Review a diff/PR by impact (risk, missing co-changes, tests, flags) | `analyze_diff` |
+| Find files that historically change together with one | `get_co_change` |
+| Understand symbol-level git history | `get_symbol_history` |
+| Identify high-churn / high-risk files | `get_churn_metrics` |
+| Check if similar code exists across repos | `find_similar` |
+| Search all indexed repos at once | `search_cross_repo` |
+| Trace a dbt column's lineage | `search_columns` |
+| Get per-file quality scores (complexity, coupling) | `get_quality_metrics` |
+| Find god classes, circular deps, dead code | `detect_antipatterns` |
+| Generate an architecture overview doc | `get_architecture_doc` |
+| Find all implementations of an interface / abstract class | `find_implementations` |
+| Trace execution flow (callers / callees tree) | `get_call_hierarchy` |
+| Understand class inheritance (ancestors / descendants) | `get_class_hierarchy` |
+| Detect circular import dependencies | `find_cycles` |
+| Get per-file coupling and instability scores | `get_coupling_map` |
+| Generate a Mermaid / DOT diagram | `render_diagram` (or specialized variants) |
+| Capture an architectural snapshot for before/after | `get_architecture_snapshot` |
+| Pre-flight check before rename / delete / move | `check_rename_safe` / `check_delete_safe` / `check_move_safe` |
+| Get a sequenced, risk-annotated refactoring plan | `plan_refactoring` |
+| 5-axis codebase health score (CI gate / dashboard) | `health_radar` |
+| Compare health before and after a refactoring | `diff_health_radar` |
+| Detailed debt report with per-file rankings | `get_debt_report` |
+| Find every occurrence of an AST node type | `search_ast` |
+| Find symbols matching a type signature pattern | `search_by_signature` |
+| Find all symbols with a specific decorator | `search_by_decorator` |
+| Find the most complex functions by threshold | `search_by_complexity` |
+| Identify where an application starts | `get_entry_points` |
+| Audit a module's exported public API surface | `get_public_api` |
+| Find all TODO / FIXME / HACK comments | `get_todos` |
+| Rank symbols by complexity score | `get_complexity_hotspots` |
+| Understand type dependency relationships | `get_type_graph` |
+| Find exported symbols with no test coverage | `find_untested_symbols` |
+| Get a per-file test coverage map | `get_test_coverage_map` |
+
+### Rules of thumb
+
+- **Batch reads** — when you need source for several symbols, one `get_symbols` call beats many `get_symbol_source` calls.
+- **Unsure of the exact name?** Use `mode: "hybrid"` to combine keyword precision with semantic recall.
+- **Before rename / delete / move** — always run the matching `check_*` tool; if `safe: false`, resolve the listed blockers before proceeding.
+- **Before modifying an interface or base class** — `find_implementations` lists every class that must change; `get_class_hierarchy` shows the descendant tree.
+- **Before broad edits to a symbol** — `get_symbol_risk` for the verdict; for a `high` band, inspect `get_co_change` + `get_blast_radius` first.
+- **dbt projects** — run `dbt compile` before `index_folder`; use `search_columns` for column lineage.
+
+The sections below document every tool's parameters in full, grouped by category.
+
+---
+
 ## Indexing tools
 
 ### `list_repos`
@@ -170,6 +235,27 @@ Symbol-level git commit history. Returns structured JSON with commits, authors, 
 File and symbol churn metrics. Before modifying any symbol, check churn: if `churnScore > 6`, mention this to the user and suggest extra testing. High-churn files are under active development or chronically buggy.
 
 For debugging, use `get_churn_metrics` to find recently-changed symbols — recent changes are the most likely source of new bugs.
+
+### `get_co_change`
+Temporal coupling — files that historically change together with a target file/symbol, from git history. Reveals coupling the import graph cannot (a route and its test, a feature flag and the code it gates). Returns `support` (shared commits), `confidence` (directional A→B), `lift`, with mega-commits filtered out. Granularity is file-level (a `symbolId` resolves to its file). Requires `git.coChangeDepth > 0` at index time; returns `signalQuality: "low"` on shallow histories rather than overstating weak ratios.
+
+### `get_symbol_risk`
+Composite, explainable change-risk verdict for a symbol: `riskScore` 0–100, banded `low` / `review` / `high`. Blends churn, centrality (afferent coupling + reverse blast radius), complexity, test gap, and co-change spread — each normalized repo-relative. Always returns `factors` (raw + normalized) and `reasons[]`.
+
+**Guardrail:** before broad automated edits to a symbol, consult its risk. For a `high` symbol, inspect its callers (`get_blast_radius`) and co-changers (`get_co_change`) *first* — those are the second-order edits most likely to break. `search_symbols` and `get_symbol_source` accept `includeRisk: true` to attach a compact `{ band, riskScore }` inline (opt-in, default off). `get_context_bundle` returns `historicalNeighbors` — co-changing files not reachable via imports — when co-change data exists.
+
+> Risk and co-change are **code-centered** — they intentionally model no author/ownership/productivity metrics.
+
+### `analyze_diff`
+Impact-aware review of a unified git diff (paste `git diff` / `git diff HEAD~1` output). Beyond the changed-symbol list + blast radius, it returns:
+- `risk` — aggregate band (`low`/`review`/`high`) + the top composite-risk symbols touched.
+- `missingCoChange` — **the headline signal**: files that *historically* change together with the edited files but are **absent from this diff** (the "you touched `refundService` but `ledgerService` usually moves with it — and it's not here" instinct). Empty + suppressed when `signalQuality:"low"` (thin history) — it never invents warnings.
+- `recommendedTests` — tests that exercise the changed symbols (plus co-changing test files).
+- `coverageGaps` — changed symbols with no detected test coverage.
+- `architecturalFlags` — import cycles / layer-boundary crossings the changed files **currently sit on** (current-state *flags*, not "regressions introduced by the diff").
+- `reviewPriority` — `low`/`medium`/`high`/`critical`, now folding in risk band + coverage gaps.
+
+All impact sections default **on**; switch any off (`includeRisk`, `includeCoChangeGaps`, `includeTests`, `includeArchitectureFlags`) for cheap runs. Built for CI and AI-assisted PR review: *review by impact, not by diff size.*
 
 ---
 
@@ -423,13 +509,15 @@ Per-file coverage map with `coverageRatio` per file and aggregated totals.
 ### Modify a high-risk symbol safely
 ```
 1. search_symbols({ query: "functionName", kind: "function" })
-2. get_churn_metrics({ repoId, symbolId }) → if churnScore > 6, warn the user
-3. get_symbol_history({ symbolId })        → understand recent change context
-4. get_blast_radius({ symbolId })          → know full impact scope
-5. get_context_bundle({ symbolId, maxDepth: 2 })
-6. get_symbol_source({ symbolId })
-7. [make the change]
-8. find_dead_code({ repoId })
+2. get_symbol_risk({ repoId, symbolId })   → composite verdict (band + factors + reasons)
+3. If band is "high", inspect BEFORE editing:
+   - get_co_change({ repoId, symbolId })   → files that move with it but don't import it
+   - get_blast_radius({ symbolId })        → full reverse-dependency impact
+   - get_symbol_history({ symbolId })      → recent change context
+4. get_context_bundle({ symbolId, maxDepth: 2 })  → also returns historicalNeighbors when co-change data exists
+5. get_symbol_source({ symbolId })
+6. [make the change — and its co-changers, if they must move together]
+7. find_dead_code({ repoId })
 ```
 
 ### Find where something is called
@@ -521,7 +609,7 @@ Per-file coverage map with `coverageRatio` per file and aggregated totals.
 Every response includes:
 
 ```json
-"_meta": { "timing_ms": 3, "tokens_saved": 1842, "total_tokens_saved": 45231 }
+{ "_meta": { "timing_ms": 3, "tokens_saved": 1842, "total_tokens_saved": 45231 } }
 ```
 
 `_tokenEstimate` — rough token count of the returned payload. Use it to:

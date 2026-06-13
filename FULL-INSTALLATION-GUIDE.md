@@ -251,14 +251,14 @@ On re-run, the marked block is replaced in place. Anything outside the markers (
 
 The two source-of-truth files are at the repository root:
 
-- **`AGENT_INSTRUCTIONS_SHORT.md`** — Compact (~2 KB). Mandatory first step, tool selection table, core rules, common usage patterns. Use for agents with limited system prompt space.
-- **`AGENT_INSTRUCTIONS.md`** — Full (~15 KB). Adds parameter notes, every usage pattern, known limitations, decision trees, anti-patterns. Use for complex multi-step workflows.
+- **`AGENT_INSTRUCTIONS.md`** — the onboarding doc: mandatory workflow, tool-selection table, navigation patterns, anti-patterns. Paste into your agent's rules file for complex multi-step workflows. (`npx purecontext-mcp install <tool>` writes a compact, always-on subset automatically.)
+- **`AGENT_REFERENCE.md`** — the single canonical reference: a full intent→tool picker, every parameter, every navigation pattern, and known limitations. Read this when an agent needs the authoritative answer.
 
 To use these manually:
 
 ```bash
 # Claude Code
-cat AGENT_INSTRUCTIONS_SHORT.md >> CLAUDE.md
+cat AGENT_INSTRUCTIONS.md >> CLAUDE.md
 
 # Cursor — paste into .cursorrules or via Cursor Settings → Rules
 # Windsurf — paste into .windsurfrules or workspace memory

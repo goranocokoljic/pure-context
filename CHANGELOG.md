@@ -37,6 +37,76 @@ Re-running `npx purecontext-mcp hooks --install` upgrades existing installations
 
 ---
 
+## [1.9.0] - 2026-06-07
+
+### Added
+
+**Change-impact synthesis — `analyze_diff` reviews by impact, not by diff size (Phase 77, Phase A)**
+
+`analyze_diff` is upgraded from "changed symbols + blast radius + a simple priority heuristic" into an impact-aware change report. Paste a unified `git diff` and, on top of the changed-symbol list, it now returns:
+
+- **`missingCoChange`** — the headline new signal: files that *historically* change together with the edited files but are **absent from this diff** (the senior-reviewer "you touched `refundService` but `ledgerService` usually moves with it — and it's not here" instinct). Suppressed entirely on thin/squashed history (`signalQuality: "low"`) — it never invents warnings.
+- **`risk`** — aggregate risk band (`low` / `review` / `high`) plus the top composite-risk symbols touched (reusing the Phase 76 `get_symbol_risk` engine).
+- **`recommendedTests`** — tests that exercise the changed symbols, plus co-changing test files.
+- **`coverageGaps`** — changed symbols with no detected test coverage.
+- **`architecturalFlags`** — import cycles / layer-boundary crossings the changed files **currently sit on** (current-state *flags*, not "regressions introduced by the diff" — a before/after graph delta is deferred to a future `compare_change_impact`).
+- **`reviewPriority`** — same `low` / `medium` / `high` / `critical` enum, now folding in the aggregate risk band and coverage-gap count alongside the original signature-break / blast signal.
+
+All impact sections default **on** and are individually switchable off (`includeRisk`, `includeCoChangeGaps`, `includeTests`, `includeArchitectureFlags`) for cheap runs — with all four off, the output reduces to the pre-1.9 shape exactly. All new fields are additive, so existing CI/JSON consumers are unaffected.
+
+Internally this ships a reusable, MCP-free **change-synthesis core** (`synthesizeChange`) that a future pre-edit `prepare_change` orchestrator will consume verbatim, and a `RiskContext` performance refactor so scoring many symbols in one diff builds the repo-wide distributions once instead of per symbol (composite-risk output is byte-identical).
+
+New config: `changeSynthesis.coChangeConfidenceThreshold` (0.4), `changeSynthesis.maxSymbolsScored` (25), `changeSynthesis.maxCoChangeGaps` (10), `changeSynthesis.maxRecommendedTests` (15). Risk weights reuse `risk.weights`; mega-commit handling reuses `git.megaCommitThreshold`. **Still deliberately code-centered: no author, ownership, or productivity metrics.**
+
+---
+
+## [1.8.0] - 2026-06-04
+
+### Added
+
+**Temporal risk intelligence (Phase 76)**
+
+PureContext now models the one signal a static dependency graph can't derive — which files *historically change together* — and fuses it with the risk primitives it already computes into a single, explainable verdict surfaced *before* you edit.
+
+- **`get_co_change`** — temporal coupling. Reports the files that change together with a target file or symbol, derived from git commit history. Surfaces coupling the import graph cannot see (a route and its test; a feature flag and the code it gates). Returns explainable association metrics — `support` (shared commits), `confidence` (directional A→B probability), and `lift` (association strength) — with mega-commits (reformats, lockfile sweeps, codemods) filtered out and down-weighted by `1/(k−1)`. Granularity is file-level (a `symbolId` resolves to its file). Shallow/sparse histories return `signalQuality: "low"` instead of overstating weak ratios.
+- **`get_symbol_risk`** — composite, explainable "how risky is it to change this symbol?" score (0–100, banded `low` / `review` / `high`). Blends churn (90 d), centrality (afferent coupling + reverse blast radius), cyclomatic complexity, test-coverage gap, and co-change spread — each normalized **repo-relative** (midrank percentile) so the score is comparable within a repo and not dominated by absolute size. Always returns `factors` (raw + normalized) and human-readable `reasons[]` — never a black-box number. Weights are configurable via `risk.weights`.
+- **`get_context_bundle` → `historicalNeighbors`** — the bundle now appends files that historically change with the target but are *not* reachable through imports, each with a small outline. Empty (and bundle output byte-identical to before) when no co-change data exists, so token estimates are unchanged unless the signal is present.
+- **`includeRisk` flag** on `search_symbols` and `get_symbol_source` — opt-in (default `false`, no added cost). When set, each result carries a compact `{ band, riskScore }`; the full breakdown stays in `get_symbol_risk`.
+
+Capture is a single repo-level `git log --name-only -n N` stored in a dedicated `commit_files` table (separate from `git_metadata`, whose per-file last-10 window is too shallow and recency-skewed for co-change). New config: `git.coChangeDepth` (default 300; `0` disables capture entirely with zero behavioral change) and `git.megaCommitThreshold` (default 30). Capture is additive and failure-tolerant; skipped for non-git directories. **Deliberately code-centered: no author, ownership, or productivity metrics.**
+
+Known limitations (documented, not bugs): repo-level capture does not `--follow`, so a mid-history rename splits a file's co-change signal; squash-merge monorepos can inflate coupling (mitigated by `megaCommitThreshold` + `signalQuality`).
+
+**TypeScript HOC arrow detection + `delete-index` CLI (Phase 74)**
+
+- HOC-wrapped arrow/function exports — `export const X = React.memo(fn)`, `forwardRef<T,P>(fn)`, `withRouter(fn)` — are now stored as `kind=function` instead of `kind=const`, so rendering-domain ranking (`computeRenderingCompoundBoost`, `kindBoost`) can see them.
+- New `npx purecontext-mcp delete-index <path>` command cleanly removes a project's stored index.
+
+### Database
+
+- Schema version bumped to **8**: additive `commit_files` table (`repo_id`, `commit_sha`, `file_path`, `commit_date`) with a `commit_sha` index. Migration is backward-safe — existing indexes load without re-indexing; co-change/risk simply report low signal until the next re-index captures history.
+
+---
+
+## [1.7.0] - 2026-06-01
+
+### Added
+
+**Svelte and Astro single-file-component support (Phase 75)**
+
+- **Svelte** (`.svelte`) — a `splitSvelteSFC` preprocessor extracts `<script>` and `<script context="module">` blocks; one `component` symbol per file; `useXxx` helpers are classified as composables.
+- **Astro** (`.astro`) — a `splitAstroSFC` preprocessor extracts the leading `---` frontmatter as a TypeScript block; one `component` symbol per file. A `---` later in markup is not treated as frontmatter; an unterminated fence raises a parse error.
+- Both adapters use a shared `detect-utils.ts` providing bounded recursive monorepo detection (mirrors the Vue/Nuxt approach).
+
+### Fixed
+
+**Adapter-extension wiring (the `.vue`-not-indexed bug class, Phase 75)**
+
+- The **file watcher** and the **GitHub remote-index path** now union adapter extensions (`getAdapterExtensions(getRegisteredAdapters())`) into their handler-extension sets, so `.vue`/`.svelte`/`.astro` edits trigger re-index and remote SFC blobs are no longer dropped. (Previously both gated on handler extensions only.) New `watchedExtensions()` helper for testability.
+- The **benchmark harness** now imports all framework adapters for self-registration — it previously registered 40 handlers but 0 adapters, so it had never indexed `.vue`. Vue/Nuxt benchmark numbers shift on the next run as a measurement-scope correction, not a regression.
+
+---
+
 ## [1.5.0] - 2026-05-22
 
 ### Added

@@ -10,6 +10,23 @@ A 45-line function retrieved by name gives Claude exactly what it needs. An 800-
 
 PureContext fixes this by giving AI agents a way to navigate code the way experienced engineers do — by name, by meaning, by dependency — rather than by reading everything and hoping.
 
+That precise retrieval is the **foundation**. It's also where the bigger shift begins.
+
+---
+
+## The bigger problem: agents can read code, but not change it safely
+
+Finding code is the easy half — and increasingly, every agent harness can do it. The hard half is *changing* code you didn't write: knowing what depends on a function, what quietly moves alongside it, and whether it's safe to touch at all.
+
+That's the context a careful senior engineer carries in their head and a fresh agent simply doesn't have. PureContext gives the agent that context as tools it can call **before** it edits:
+
+- **Blast radius** (`get_blast_radius`) — every file that transitively depends on a symbol, so a change is never blind.
+- **Temporal co-change** (`get_co_change`) — the files that historically move *together* in commits but don't import each other: the test, the migration, the feature flag. The coupling the dependency graph can't see.
+- **Composite change risk** (`get_symbol_risk`) — one banded `low` / `review` / `high` verdict fusing churn, centrality, complexity, test gaps, and co-change, with plain-English reasons. Deliberately code-centered: no author or productivity metrics.
+- **Refactor-safety checks** (`check_rename_safe` / `check_delete_safe` / `check_move_safe`, `plan_refactoring`) — a pre-flight verdict before a rename, delete, move, or multi-step refactor.
+
+This is what sets PureContext apart from a fast symbol index: it doesn't just help an agent *find* code, it helps it *change* code without breaking what it can't see. The token-efficient retrieval underneath is what makes every one of those checks cheap enough to run on every edit.
+
 ---
 
 ## What changes in practice
@@ -36,11 +53,11 @@ A solo developer working on a 500-file TypeScript monorepo, and an enterprise te
 
 The difference matters most in enterprise environments where no single person knows the whole codebase, onboarding takes months, and getting AI to help requires giving it enough context to be useful without hitting token limits.
 
-### AI agents can plan changes safely
+### AI agents can change code safely, not just read it
 
-Before PureContext, asking an AI to help you change a core function was risky. The AI didn't know what depended on it. It couldn't see what would break.
+Before PureContext, asking an AI to change a core function was a gamble — it didn't know what depended on the code, what moved with it, or whether it was risky to touch.
 
-With the dependency graph tools, Claude can check the blast radius of any change before touching it — see what imports the function, follow the transitive dependency chain, and tell you "this change will affect 14 files across 3 services." That's the difference between AI assistance and AI guesswork.
+Now Claude checks the blast radius, the historical co-changers, and a composite risk score *before* editing, and can tell you: *"this is high-risk and untested — it affects 14 files across 3 services and usually moves with `ledger.ts` and `refund.test.ts`, so I'll update those in the same change."* That's the difference between AI assistance and AI guesswork.
 
 ---
 

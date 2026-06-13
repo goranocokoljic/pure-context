@@ -25,6 +25,7 @@ import {
   isGitRepo,
   readFileHistory,
   readRepoMeta,
+  parseRepoCommitFiles,
   type CommitRecord,
 } from '../../src/core/git-log-reader.js';
 
@@ -254,5 +255,44 @@ describe('readRepoMeta', () => {
     mockSpawn.mockReturnValue(makeFakeProcess({ spawnError: true, spawnErrorCode: 'ENOENT' }));
 
     await expect(readRepoMeta('/repo')).rejects.toThrow(/git is not available/i);
+  });
+});
+
+describe('parseRepoCommitFiles', () => {
+  const M = '@@PCXCOMMIT@@';
+
+  it('parses commits and their touched files', () => {
+    const out = [
+      `${M}abc123|1700000000`,
+      '',
+      'src/a.ts',
+      'src/b.ts',
+      '',
+      `${M}def456|1699990000`,
+      '',
+      'src/c.ts',
+      '',
+    ].join('\n');
+
+    const commits = parseRepoCommitFiles(out);
+    expect(commits).toHaveLength(2);
+    expect(commits[0]).toEqual({ sha: 'abc123', date: 1700000000, files: ['src/a.ts', 'src/b.ts'] });
+    expect(commits[1]).toEqual({ sha: 'def456', date: 1699990000, files: ['src/c.ts'] });
+  });
+
+  it('normalizes backslashes and drops file-less commits', () => {
+    const out = [
+      `${M}aaa|1`,
+      'src\\win\\path.ts',
+      `${M}bbb|2`, // commit with no files — dropped
+    ].join('\n');
+
+    const commits = parseRepoCommitFiles(out);
+    expect(commits).toHaveLength(1);
+    expect(commits[0].files).toEqual(['src/win/path.ts']);
+  });
+
+  it('returns empty array for empty output', () => {
+    expect(parseRepoCommitFiles('')).toEqual([]);
   });
 });

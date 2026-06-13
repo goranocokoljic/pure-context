@@ -76,4 +76,24 @@ describe('validateConfig', () => {
     const { valid } = validateConfig(DEFAULT_CONFIG);
     expect(valid).toBe(true);
   });
+
+  it('accepts valid changeSynthesis config', () => {
+    const { valid } = validateConfig({
+      changeSynthesis: {
+        coChangeConfidenceThreshold: 0.5,
+        maxSymbolsScored: 10,
+        maxCoChangeGaps: 5,
+        maxRecommendedTests: 8,
+      },
+    });
+    expect(valid).toBe(true);
+  });
+
+  it('rejects invalid changeSynthesis values', () => {
+    expect(validateConfig({ changeSynthesis: 'no' }).valid).toBe(false);
+    expect(validateConfig({ changeSynthesis: { coChangeConfidenceThreshold: 1.5 } }).valid).toBe(false);
+    expect(validateConfig({ changeSynthesis: { coChangeConfidenceThreshold: -0.1 } }).valid).toBe(false);
+    expect(validateConfig({ changeSynthesis: { maxSymbolsScored: -1 } }).valid).toBe(false);
+    expect(validateConfig({ changeSynthesis: { maxCoChangeGaps: 1.5 } }).valid).toBe(false);
+  });
 });

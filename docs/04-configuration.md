@@ -110,6 +110,27 @@ purecontext-mcp config --check
 | `maxFileSizeBytes` | `number` | `1048576` | Files larger than this (default: 1 MB) are skipped |
 | `allowSymlinks` | `boolean` | `false` | When `false`, symlinks that resolve outside the project root are blocked |
 
+### Git & temporal coupling (`git.*`)
+
+Powers `get_co_change`, `get_symbol_risk`, and `get_context_bundle`'s `historicalNeighbors` (Phase 76).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `git.coChangeDepth` | `number` | `300` | Recent commits captured at the repo root (one `git log --name-only`) for co-change analysis. `0` disables capture entirely — zero extra git work, identical behavior to before. |
+| `git.megaCommitThreshold` | `number` | `30` | Commits touching more files than this (reformats, lockfile sweeps, codemods) are excluded / down-weighted so they don't manufacture spurious coupling. |
+
+### Change-risk weights (`risk.weights.*`)
+
+Tunable factor weights for `get_symbol_risk`. Each scales the repo-relative (0–1) normalized factor; weights need not sum to 1 (normalized at scoring time).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `risk.weights.churn` | `number` | `0.25` | How often the symbol's file changes (90 d) |
+| `risk.weights.centrality` | `number` | `0.25` | Afferent coupling + reverse blast radius |
+| `risk.weights.complexity` | `number` | `0.2` | Cyclomatic complexity of the symbol |
+| `risk.weights.testGap` | `number` | `0.15` | Whether the symbol appears untested |
+| `risk.weights.coChange` | `number` | `0.15` | How many files historically move with it |
+
 ### Transport
 
 | Field | Type | Default | Description |

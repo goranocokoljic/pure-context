@@ -64,6 +64,34 @@ get_churn_metrics(repoId, since: "2026-04-07") →
 
 ---
 
+## Temporal coupling: what changes *together*
+
+Churn tells you *how often* a file changes; co-change tells you *what changes with it*. `get_co_change` surfaces the files that historically appear in the same commits as your target — the coupling the import graph can't show, like a route and its test, or a feature flag and the code it gates.
+
+> "If I touch the checkout route, what else usually moves with it?"
+
+```
+get_co_change(repoId, filePath: "src/routes/checkout.ts") →
+
+  src/routes/checkout.test.ts     support 9   confidence 0.75   lift 6.1
+  src/config/feature-flags.ts     support 5   confidence 0.42   lift 3.4
+```
+
+Mega-commits (reformats, lockfile sweeps) are filtered out so they don't fabricate coupling, and `signalQuality: "low"` warns you when history is too thin to trust the ratios.
+
+## One number for "is this risky to change?"
+
+`get_symbol_risk` fuses churn, centrality (how many files depend on it), complexity, test gap, and co-change spread into a single banded verdict (`low` / `review` / `high`) with a `reasons[]` list — never a black-box number. Consult it before broad edits; for a `high` symbol, inspect its co-changers and callers first. It is code-centered: no author or productivity metrics.
+
+```
+get_symbol_risk(repoId, symbolId) →
+  { riskScore: 78, band: "high",
+    reasons: ["47 dependents", "churn 8/90d", "no direct test",
+              "co-changes with feature-flags.ts (conf 0.7)"] }
+```
+
+---
+
 ## Answering "who owns this?" without politics
 
 In enterprise environments, code ownership is often informal — there are people who know parts of the codebase deeply, but that knowledge isn't documented anywhere. Churn data makes it explicit.
@@ -146,4 +174,4 @@ The default of 500 commits covers about a year on a moderately active project.
 
 ---
 
-→ Reference: [MCP Tools Reference](../docs/06-tools-reference.md) — `get_symbol_history`, `get_churn_metrics`, `analyze_diff`
+→ Reference: [MCP Tools Reference](../docs/06-tools-reference.md) — `get_symbol_history`, `get_churn_metrics`, `get_co_change`, `get_symbol_risk`, `analyze_diff`

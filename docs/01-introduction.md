@@ -3,7 +3,7 @@
 
 ## What is PureContext MCP?
 
-PureContext MCP is a **token-efficient source code navigation server** for AI agents. Instead of reading entire files, AI agents can retrieve exactly the symbols they need — functions, classes, methods, routes, and more — saving 90–98% of context tokens.
+PureContext MCP is a **code-intelligence server for AI coding agents**. It gives an agent what it needs to *change* code safely — impact (blast radius), temporal coupling (which files change together), and a composite change-risk score — *before* it edits. That sits on a **token-efficient retrieval** foundation: instead of reading entire files, agents retrieve exactly the symbols they need — functions, classes, methods, routes, and more — saving 90–98% of context tokens.
 
 It implements the **Model Context Protocol (MCP)** so it works natively with Claude Code and any other MCP-compatible AI client.
 
@@ -61,7 +61,7 @@ PureContext builds a **structured index** of your codebase using tree-sitter AST
 
 ## What PureContext is not
 
-PureContext is a navigation and indexing layer, not a general-purpose tool:
+PureContext is a code-intelligence and indexing layer, not a general-purpose tool:
 
 - Not a code editor or IDE
 - Not a runtime debugger or test runner

@@ -131,6 +131,62 @@ export interface PureContextConfig {
     cssVariables: boolean;
   };
   /**
+   * Git / temporal-coupling capture settings (Phase 76).
+   */
+  git: {
+    /**
+     * How many recent commits to capture at the repo root for co-change
+     * (temporal coupling) analysis. One `git log --name-only -n N` per index.
+     * 0 = disable co-change capture entirely (no extra git call, byte-identical
+     * behavior to pre-Phase-76). Default: 300.
+     */
+    coChangeDepth: number;
+    /**
+     * Commits touching more than this many files are treated as mega-commits
+     * (reformats, lockfile sweeps, codemods) and excluded / down-weighted in
+     * co-change scoring so they do not manufacture spurious coupling.
+     * Default: 30.
+     */
+    megaCommitThreshold: number;
+  };
+  /**
+   * Composite symbol-risk scoring weights (Phase 76, get_symbol_risk).
+   * Each weight scales the repo-relative (0–1) normalized factor before the
+   * weighted sum is rescaled to 0–100. Weights need not sum to 1 — they are
+   * normalized at scoring time.
+   */
+  risk: {
+    weights: {
+      churn: number;
+      centrality: number;
+      complexity: number;
+      testGap: number;
+      coChange: number;
+    };
+  };
+  /**
+   * Change-impact synthesis settings (Phase 77, analyze_diff / change-synthesis).
+   * Bound the impact-aware change report so it stays token-disciplined on large
+   * diffs. Risk weights reuse `risk.weights`; mega-commit reuses
+   * `git.megaCommitThreshold`.
+   */
+  changeSynthesis: {
+    /**
+     * Minimum directional co-change confidence (support / commits(target)) for a
+     * historically-coupled file to be flagged as "missing" from a diff. Default 0.4.
+     */
+    coChangeConfidenceThreshold: number;
+    /**
+     * Maximum changed symbols scored for risk per diff (the rest are ranked out
+     * by afferent coupling so the most-connected are always scored). Default 25.
+     */
+    maxSymbolsScored: number;
+    /** Maximum absent co-change partners reported. Default 10. */
+    maxCoChangeGaps: number;
+    /** Maximum recommended test files reported. Default 15. */
+    maxRecommendedTests: number;
+  };
+  /**
    * Which transport(s) to start.
    *   'stdio' — stdin/stdout (default; required for Claude Code)
    *   'http'  — HTTP + Streamable HTTP
@@ -310,6 +366,25 @@ export const DEFAULT_CONFIG: PureContextConfig = {
   allowSymlinks: false,
   indexing: {
     cssVariables: false,
+  },
+  git: {
+    coChangeDepth: 300,
+    megaCommitThreshold: 30,
+  },
+  risk: {
+    weights: {
+      churn: 0.25,
+      centrality: 0.25,
+      complexity: 0.2,
+      testGap: 0.15,
+      coChange: 0.15,
+    },
+  },
+  changeSynthesis: {
+    coChangeConfidenceThreshold: 0.4,
+    maxSymbolsScored: 25,
+    maxCoChangeGaps: 10,
+    maxRecommendedTests: 15,
   },
   transport: 'stdio',
   http: {
@@ -545,6 +620,67 @@ export function validateConfig(raw: unknown): ValidationResult {
       const i = idx as Record<string, unknown>;
       if ('cssVariables' in i && typeof i['cssVariables'] !== 'boolean') {
         errors.push('indexing.cssVariables must be a boolean');
+      }
+    }
+  }
+  if ('git' in cfg) {
+    const g = cfg['git'];
+    if (typeof g !== 'object' || g === null || Array.isArray(g)) {
+      errors.push('git must be an object');
+    } else {
+      const git = g as Record<string, unknown>;
+      if ('coChangeDepth' in git) {
+        const v = git['coChangeDepth'];
+        if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+          errors.push('git.coChangeDepth must be a non-negative integer (0 = disabled)');
+        }
+      }
+      if ('megaCommitThreshold' in git) {
+        const v = git['megaCommitThreshold'];
+        if (typeof v !== 'number' || !Number.isInteger(v) || v < 2) {
+          errors.push('git.megaCommitThreshold must be an integer >= 2');
+        }
+      }
+    }
+  }
+  if ('risk' in cfg) {
+    const r = cfg['risk'];
+    if (typeof r !== 'object' || r === null || Array.isArray(r)) {
+      errors.push('risk must be an object');
+    } else {
+      const weights = (r as Record<string, unknown>)['weights'];
+      if (weights !== undefined) {
+        if (typeof weights !== 'object' || weights === null || Array.isArray(weights)) {
+          errors.push('risk.weights must be an object');
+        } else {
+          for (const [k, v] of Object.entries(weights as Record<string, unknown>)) {
+            if (typeof v !== 'number' || v < 0) {
+              errors.push(`risk.weights.${k} must be a non-negative number`);
+            }
+          }
+        }
+      }
+    }
+  }
+  if ('changeSynthesis' in cfg) {
+    const c = cfg['changeSynthesis'];
+    if (typeof c !== 'object' || c === null || Array.isArray(c)) {
+      errors.push('changeSynthesis must be an object');
+    } else {
+      const cs = c as Record<string, unknown>;
+      if ('coChangeConfidenceThreshold' in cs) {
+        const v = cs['coChangeConfidenceThreshold'];
+        if (typeof v !== 'number' || v < 0 || v > 1) {
+          errors.push('changeSynthesis.coChangeConfidenceThreshold must be a number in [0,1]');
+        }
+      }
+      for (const key of ['maxSymbolsScored', 'maxCoChangeGaps', 'maxRecommendedTests'] as const) {
+        if (key in cs) {
+          const v = cs[key];
+          if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+            errors.push(`changeSynthesis.${key} must be a non-negative integer`);
+          }
+        }
       }
     }
   }

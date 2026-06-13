@@ -151,6 +151,32 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
     indexing: {
       cssVariables: partial.indexing?.cssVariables ?? DEFAULT_CONFIG.indexing.cssVariables,
     },
+    git: {
+      coChangeDepth: partial.git?.coChangeDepth ?? DEFAULT_CONFIG.git.coChangeDepth,
+      megaCommitThreshold:
+        partial.git?.megaCommitThreshold ?? DEFAULT_CONFIG.git.megaCommitThreshold,
+    },
+    risk: {
+      weights: {
+        churn: partial.risk?.weights?.churn ?? DEFAULT_CONFIG.risk.weights.churn,
+        centrality: partial.risk?.weights?.centrality ?? DEFAULT_CONFIG.risk.weights.centrality,
+        complexity: partial.risk?.weights?.complexity ?? DEFAULT_CONFIG.risk.weights.complexity,
+        testGap: partial.risk?.weights?.testGap ?? DEFAULT_CONFIG.risk.weights.testGap,
+        coChange: partial.risk?.weights?.coChange ?? DEFAULT_CONFIG.risk.weights.coChange,
+      },
+    },
+    changeSynthesis: {
+      coChangeConfidenceThreshold:
+        partial.changeSynthesis?.coChangeConfidenceThreshold ??
+        DEFAULT_CONFIG.changeSynthesis.coChangeConfidenceThreshold,
+      maxSymbolsScored:
+        partial.changeSynthesis?.maxSymbolsScored ?? DEFAULT_CONFIG.changeSynthesis.maxSymbolsScored,
+      maxCoChangeGaps:
+        partial.changeSynthesis?.maxCoChangeGaps ?? DEFAULT_CONFIG.changeSynthesis.maxCoChangeGaps,
+      maxRecommendedTests:
+        partial.changeSynthesis?.maxRecommendedTests ??
+        DEFAULT_CONFIG.changeSynthesis.maxRecommendedTests,
+    },
     transport: partial.transport ?? DEFAULT_CONFIG.transport,
     http: {
       port: pctxPort ?? partial.http?.port ?? DEFAULT_CONFIG.http.port,

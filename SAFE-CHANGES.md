@@ -94,20 +94,29 @@ This is the pattern to use before any significant change:
 1. Identify the symbol you're changing
    search_symbols(query: "processOrder") → find the right one
 
-2. Check the blast radius
+2. Get a composite risk read
+   get_symbol_risk(symbolId) → band (low/review/high) + reasons
+
+3. Check the blast radius
    get_blast_radius(symbolId) → how many files are affected?
 
-3. Understand the symbol in context
-   get_context_bundle(symbolId, maxDepth: 2) → what does it depend on?
+4. Find what moves with it that the import graph can't show
+   get_co_change(symbolId) → files that historically change together
+                             (e.g. the test or config that must move too)
 
-4. Make the change
+5. Understand the symbol in context
+   get_context_bundle(symbolId, maxDepth: 2) → dependencies + historicalNeighbors
 
-5. Verify nothing became orphaned
+6. Make the change (and its co-changers, if they need to move together)
+
+7. Verify nothing became orphaned
    find_dead_code(repoId) → any exports that are now unused?
 
-6. Re-index (if you changed signatures)
+8. Re-index (if you changed signatures)
    index_folder → incremental, fast, picks up your changes
 ```
+
+> For a `high`-risk symbol, treat steps 3–4 as mandatory: the co-changers are the second-order edits most likely to break. For a quick inline signal, pass `includeRisk: true` to `search_symbols` to see each candidate's `{ band, riskScore }` before you pick one.
 
 ---
 
@@ -153,4 +162,4 @@ This transforms "I think this change is safe but I'm not sure" into "I know exac
 
 ---
 
-→ Reference: [MCP Tools Reference](../docs/06-tools-reference.md) — `get_blast_radius`, `get_context_bundle`, `find_importers`, `find_dead_code`, `get_layer_violations`
+→ Reference: [MCP Tools Reference](../docs/06-tools-reference.md) — `get_symbol_risk`, `get_co_change`, `get_blast_radius`, `get_context_bundle`, `find_importers`, `find_dead_code`, `get_layer_violations`

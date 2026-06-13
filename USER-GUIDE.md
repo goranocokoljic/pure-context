@@ -2,13 +2,15 @@
 
 This guide explains what PureContext does, why it changes the way you work with code, and how to use its features effectively. Each section focuses on a capability area with real examples and concrete workflows.
 
+PureContext gives an AI agent two things: **precise retrieval** (pull the exact symbol you need instead of reading whole files — the token-efficient foundation) and **change intelligence** (know what a change affects, what moves with it, and how risky it is — *before* the edit). The first makes every interaction cheap; the second is what lets an agent change unfamiliar code safely.
+
 For parameter-level documentation — every tool input, output, and flag — see the [Reference Manual](docs/README.md).
 
 ---
 
 ## Start here
 
-- [Why PureContext](WHY-PURECONTEXT.md) — The full case: what actually improves when AI has precise context instead of bulk context, who benefits, and what PureContext does not do
+- [Why PureContext](WHY-PURECONTEXT.md) — The full case: why precise context beats bulk context, why *safe change* (not just retrieval) is the differentiator, who benefits, and what PureContext does not do
 
 ---
 

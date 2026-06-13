@@ -36,7 +36,7 @@ const GIT_TIMEOUT_MS = 15_000;
  * Rejects with a descriptive error on non-zero exit or if git is absent.
  * Times out after GIT_TIMEOUT_MS to prevent hangs on large repos.
  */
-function runGit(args: string[], cwd: string): Promise<string> {
+function runGit(args: string[], cwd: string, timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
   return new Promise((resolve, reject) => {
     let proc: ReturnType<typeof spawn>;
     try {
@@ -54,8 +54,8 @@ function runGit(args: string[], cwd: string): Promise<string> {
       if (settled) return;
       settled = true;
       try { proc.kill(); } catch { /* ignore */ }
-      reject(new Error(`git ${args[0] ?? ''} timed out after ${GIT_TIMEOUT_MS}ms`));
-    }, GIT_TIMEOUT_MS);
+      reject(new Error(`git ${args[0] ?? ''} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
 
     proc.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8'); });
     proc.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
@@ -303,4 +303,90 @@ export async function readRepoMeta(repoRoot: string): Promise<{
   }
 
   return { defaultBranch: branch, headSha, remoteUrl };
+}
+
+// ─── Repo-level commit→files capture (co-change foundation) ────────────────────
+
+/** One commit and the files it touched — the unit of temporal-coupling analysis. */
+export interface RepoCommit {
+  sha: string;
+  date: number;        // Unix timestamp (seconds)
+  files: string[];     // Repo-relative paths touched by this commit
+}
+
+/** Sentinel prefix that marks a commit-header line in the --name-only stream. */
+const COMMIT_MARKER = '@@PCXCOMMIT@@';
+
+/** Larger timeout for the single repo-wide log — output can be sizeable. */
+const REPO_LOG_TIMEOUT_MS = 30_000;
+
+/**
+ * Parse the output of `git log --name-only --format=<marker>%H|%at`.
+ *
+ * The stream alternates between a marker line (`<marker><sha>|<unixDate>`) and
+ * the list of files touched by that commit, separated by blank lines. Any line
+ * that is not a marker and not blank is treated as a file path for the current
+ * commit.
+ */
+export function parseRepoCommitFiles(output: string): RepoCommit[] {
+  const commits: RepoCommit[] = [];
+  let current: RepoCommit | null = null;
+
+  for (const rawLine of output.split('\n')) {
+    const line = rawLine.replace(/\r$/, '');
+    if (line.startsWith(COMMIT_MARKER)) {
+      const header = line.slice(COMMIT_MARKER.length);
+      const bar = header.indexOf('|');
+      if (bar < 0) { current = null; continue; }
+      const sha = header.slice(0, bar).trim();
+      const date = parseInt(header.slice(bar + 1).trim(), 10);
+      if (!sha || isNaN(date)) { current = null; continue; }
+      current = { sha, date, files: [] };
+      commits.push(current);
+      continue;
+    }
+    const trimmed = line.trim();
+    if (!trimmed || !current) continue;
+    // Normalise to forward slashes for cross-platform stability.
+    current.files.push(trimmed.replace(/\\/g, '/'));
+  }
+
+  // Drop commits that touched no files (e.g. empty commits).
+  return commits.filter((c) => c.files.length > 0);
+}
+
+/**
+ * Read the last `maxCommits` commits at the repo root, each with the full list
+ * of files it touched.
+ *
+ * This is a SINGLE `git log` invocation (unlike the per-file `readFileHistory`),
+ * so it is far cheaper and far deeper for co-change analysis. Merge commits are
+ * excluded (`--no-merges`) to avoid mega-merge noise. Returns `null` when the
+ * directory is not a git repo or git is unavailable.
+ *
+ * @param repoRoot   Absolute path to the git working tree root.
+ * @param maxCommits Maximum number of commits to read (default 500).
+ */
+export async function readRepoCommitFiles(
+  repoRoot: string,
+  maxCommits = 500,
+): Promise<RepoCommit[] | null> {
+  let logOutput: string;
+  try {
+    logOutput = await runGit(
+      [
+        'log',
+        '--no-merges',
+        '--name-only',
+        `--format=${COMMIT_MARKER}%H|%at`,
+        '-n', String(maxCommits),
+      ],
+      repoRoot,
+      REPO_LOG_TIMEOUT_MS,
+    );
+  } catch {
+    return null;
+  }
+
+  return parseRepoCommitFiles(logOutput);
 }

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { join } from 'node:path';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { getSymbolById } from '../../core/db/symbol-store.js';
+import { computeSymbolRisk } from './symbol-risk.js';
 import { getFileContent, getFileHash, getFileSizeBytes } from '../../core/db/file-store.js';
 import { validatePath } from '../../core/security.js';
 import { buildMeta } from './_meta.js';
@@ -40,6 +41,14 @@ export const inputSchema = {
       'Sets hashDrift: true when the file has changed since indexing. ' +
       'Performance cost: one disk read per call.',
     ),
+  includeRisk: z
+    .boolean()
+    .optional()
+    .describe(
+      'When true, attach a compact change-risk verdict { band, riskScore } ' +
+      '(Phase 76). Default false (no extra cost). Use get_symbol_risk for the ' +
+      'full factor breakdown.',
+    ),
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -67,11 +76,12 @@ interface GetSymbolSourceArgs {
   symbolId: string;
   contextLines?: number;
   verify?: boolean;
+  includeRisk?: boolean;
 }
 
 export function handler(args: GetSymbolSourceArgs): CallToolResult {
   const t0 = Date.now();
-  const { repoId, symbolId, verify = false } = args;
+  const { repoId, symbolId, verify = false, includeRisk = false } = args;
 
   // Clamp contextLines to [0, MAX_CONTEXT_LINES].
   const requestedLines = args.contextLines ?? 0;
@@ -104,6 +114,13 @@ export function handler(args: GetSymbolSourceArgs): CallToolResult {
 
   const raw = getFileContent(db, repoId, symbol.filePath);
   const rawBytes = getFileSizeBytes(db, repoId, symbol.filePath);
+
+  // Compact risk verdict (opt-in) — computed while the db is still open.
+  let risk: { band: string; riskScore: number } | undefined;
+  if (includeRisk) {
+    const r = computeSymbolRisk(db, repoId, symbolId);
+    if (r) risk = { band: r.band, riskScore: r.riskScore };
+  }
 
   // Hash drift detection — one disk read, only when requested.
   let hashDrift: boolean | undefined;
@@ -162,6 +179,10 @@ export function handler(args: GetSymbolSourceArgs): CallToolResult {
       symbolOutput['diskHash'] = diskHash;
       symbolOutput['cachedHash'] = cachedHash;
     }
+  }
+
+  if (includeRisk && risk) {
+    symbolOutput['risk'] = risk;
   }
 
   const response: Record<string, unknown> = {

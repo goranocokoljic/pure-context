@@ -43,6 +43,8 @@ This means you can ask "which commits touched `authenticateUser`?" and get an an
 | `git.maxCommits` | `500` | Maximum commits to walk back from HEAD |
 | `git.includeMergeCommits` | `false` | Include merge commits (usually noise) |
 | `git.branches` | `["main"]` | Branches to index history from |
+| `git.coChangeDepth` | `300` | Commits captured at the repo root for co-change analysis (`get_co_change`, `get_symbol_risk`, bundle `historicalNeighbors`). `0` disables capture entirely. |
+| `git.megaCommitThreshold` | `30` | Commits touching more files than this are excluded / down-weighted as mega-commits (reformats, lockfile sweeps) |
 
 ---
 
@@ -120,6 +122,45 @@ File and symbol churn metrics — how often things change.
 
 ---
 
+## `get_co_change` — temporal coupling
+
+Files that historically change together with a target file or symbol. This is the signal a static dependency graph cannot derive: a route and its test, or a feature flag and the code it gates, that move together without importing each other.
+
+Capture is a single repo-level `git log --no-merges --name-only -n N` at index time (controlled by `git.coChangeDepth`), stored in a dedicated `commit_files` table — separate from the per-file `git_metadata` history, whose last-N-per-file window is too shallow for co-change.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `repoId` | `string` | required | Target repository |
+| `filePath` | `string` | — | Target file (provide this **or** `symbolId`) |
+| `symbolId` | `string` | — | Target symbol — resolved to its file (git is file-granular) |
+| `minSupport` | `number` | `2` | Drop partners with fewer than N shared commits |
+| `dayWindow` | `number` | — | Look back N days (default: entire captured window) |
+| `topN` | `number` | `20` | Max partners to return |
+
+**Response:** ranked `partners` with `support` (shared commits), `confidence` (directional A→B probability), `lift` (association strength), and `coChangeDate`. Mega-commits are filtered and down-weighted; `signalQuality: "low"` flags shallow/sparse histories.
+
+**Use cases:**
+- "If I touch this file, what else usually changes with it?"
+- "What's the test or config that moves with this code but doesn't import it?"
+
+---
+
+## `get_symbol_risk` — composite change risk
+
+A single, explainable "how risky is it to change this symbol?" verdict. Blends churn (90 d), centrality (afferent coupling + reverse blast radius), cyclomatic complexity, test-coverage gap, and co-change spread — each normalized **repo-relative** (midrank percentile) so scores compare within a repo and aren't dominated by absolute size.
+
+**Parameters:** `{ repoId, symbolId }`
+
+**Response:** `{ riskScore (0–100), band: "low" | "review" | "high", factors: { churn, centrality, complexity, testGap, coChange }, reasons: string[], signalQuality }`. Factor weights are tunable via `risk.weights.*` (see [Configuration](04-configuration.md)).
+
+It always returns `factors` (raw + normalized) and human-readable `reasons[]` — never a black-box number. **Code-centered only — no author, ownership, or productivity metrics.**
+
+**Guardrail:** before broad or automated edits to a `high` symbol, inspect its callers (`get_blast_radius`) and co-changers (`get_co_change`) first. `search_symbols` and `get_symbol_source` accept `includeRisk: true` to attach a compact `{ band, riskScore }` inline; `get_context_bundle` returns `historicalNeighbors` (co-changing files not reachable via imports) when co-change data exists.
+
+---
+
 ## PR / diff analysis
 
 Analyze what a branch or commit range changes at the symbol level:
@@ -155,3 +196,5 @@ When git integration is enabled:
 - **Merge commits:** excluded by default to avoid noise from merge-only diffs
 - **Rebased history:** rebase changes commit hashes — a re-index is needed to pick up rebased history accurately
 - Git submodules are not indexed
+- **Co-change rename continuity:** the repo-level capture does not follow renames, so a file renamed mid-history splits its co-change signal until re-indexed
+- **Squash-merge monorepos:** squashed PRs collapse many logical changes into one commit, which can inflate co-change; `git.megaCommitThreshold` mitigates this and `signalQuality: "low"` flags weak signal

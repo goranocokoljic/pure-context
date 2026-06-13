@@ -4,15 +4,25 @@
 [![Stable](https://img.shields.io/badge/stability-stable-brightgreen.svg)](docs/27-api-stability.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Stop burning context tokens reading whole files.** PureContext MCP indexes your codebase and lets AI agents retrieve exactly the code they need — a single function, a class, a route definition — without loading hundreds of irrelevant lines first.
+**Most tools help an AI agent *read* your codebase. PureContext helps it *change* your codebase safely.**
+
+Agents are already good at finding code. What they can't see is the part that breaks things: what a symbol connects to, what quietly changes alongside it, and whether it's risky to touch at all. PureContext MCP indexes your codebase into a structured, queryable model and gives agents that missing layer — **impact, coupling, and change-risk intelligence, before the edit.**
 
 ```
-Without PureContext:  800-line auth file → ~2,000 tokens to find one function
-With PureContext:     45-line function   →   ~150 tokens
-                      Savings: 93%
+Before changing processRefund(), the agent checks:
+
+  get_symbol_risk   → band: HIGH — 47 dependents · churn 8/90d
+                      · no direct test · co-changes with ledger.ts (conf 0.71)
+  get_blast_radius  → 23 files affected across 4 modules
+  get_co_change     → usually moves together with refund.test.ts and ledger.ts
+
+→ so it updates those together, instead of shipping a half-change that
+  passes locally and breaks billing in production.
 ```
 
-But token savings are the mechanism, not the point. The point is that AI gets better answers from precise context than from bulk context. Less hallucination. More accurate suggestions. The ability to work effectively on large codebases that don't fit in any context window.
+This is the layer autonomous agents are missing. Refactoring and change-safety tooling is still mostly built for humans clicking through an IDE — not for an agent about to edit code it has never seen. PureContext closes that gap: blast radius, temporal co-change, rename/delete/move safety checks, and a composite per-symbol risk score — all queryable as MCP tools.
+
+It's built on **token-efficient retrieval** as the foundation: agents pull a single function, class, or route by name or meaning instead of reading whole files — typically **90%+ fewer context tokens** ([see it in action](#what-this-looks-like-in-practice)). Precise context means less hallucination, more accurate edits, and the ability to work on codebases far larger than any context window.
 
 ---
 
@@ -38,6 +48,8 @@ That's it. Claude will index your codebase and you can start navigating it by na
 ---
 
 ## What this looks like in practice
+
+### First, find and understand it
 
 A typical "find and understand" conversation, before vs. after:
 
@@ -66,7 +78,62 @@ Claude: search_symbols(query: "stripe webhook signature")
         Total context used: ~258 tokens — 96% less
 ```
 
-The agent stays in the conversation and can keep going (blast radius, related tests, change planning) instead of running out of context after one file read.
+The agent stays in the conversation instead of running out of context after one file read — which frees it to get to the part that actually matters: changing the code safely.
+
+### Then change it without breaking things
+
+A typical "modify this" conversation, before vs. after:
+
+**Without PureContext**
+
+```
+You:    Add a partial-refund path to processRefund().
+Claude: [reads processRefund, edits it]
+        Done — added the partial-refund branch.
+
+        (Never saw that ledger.ts reconciles every refund, or that
+         refund.test.ts asserts the old totals. CI breaks; billing
+         drifts in production.)
+```
+
+**With PureContext**
+
+```
+You:    Add a partial-refund path to processRefund().
+Claude: get_symbol_risk(symbolId: "processRefund")
+        → band: HIGH — 47 dependents · churn 8/90d · no direct test
+          · co-changes with ledger.ts (conf 0.71)
+        get_blast_radius(symbolId: "processRefund")
+        → 23 files affected across 4 modules
+        get_co_change(symbolId: "processRefund")
+        → usually moves together with ledger.ts and refund.test.ts
+
+        This symbol is high-risk and untested. I'll update processRefund(),
+        adjust the reconciliation in ledger.ts, and extend refund.test.ts
+        in the same change.
+```
+
+The difference here isn't tokens — it's that the agent saw the second-order edits *before* writing code, instead of discovering them in a failed CI run or a production incident.
+
+---
+
+## Change & refactoring intelligence
+
+This is the part most code tools leave to humans. PureContext exposes it as MCP tools an agent can call *before* it edits — so autonomous changes come with the same impact awareness a careful senior engineer would bring.
+
+| Question the agent can answer | Tool |
+|---|---|
+| What breaks if I change this symbol? | `get_blast_radius` |
+| What files historically change *together* with this one (but don't import it)? | `get_co_change` |
+| How risky is this symbol to change, and why? | `get_symbol_risk` |
+| Is it safe to rename / delete / move this? | `check_rename_safe` · `check_delete_safe` · `check_move_safe` |
+| What's the sequenced, risk-annotated plan for a larger refactor? | `plan_refactoring` |
+| Who calls this, and who do they call? | `get_call_hierarchy` · `find_references` |
+| What's churning or accumulating debt? | `get_churn_metrics` · `get_debt_report` · `health_radar` |
+
+**`get_symbol_risk`** is the composite verdict: it fuses change frequency (churn), centrality (how much depends on it), complexity, test-coverage gaps, and temporal co-change into one banded score (`low` / `review` / `high`) with human-readable reasons — never a black-box number, and deliberately **code-centered** (no author or productivity metrics). **`get_co_change`** surfaces the coupling the import graph can't see — the test, the migration, or the feature flag that always moves with a file. Together they let an agent edit unfamiliar code the way a cautious human does: check the blast radius, update what moves with it, and flag what it shouldn't touch alone.
+
+→ Full tool list and parameters: [AGENT_REFERENCE.md](AGENT_REFERENCE.md) · safe-change workflow: [SAFE-CHANGES.md](SAFE-CHANGES.md)
 
 ---
 
@@ -311,11 +378,10 @@ Supported tools and where each one writes:
 
 ### Manual install
 
-If you'd rather paste the rules yourself, three instruction files are at the repository root:
+If you'd rather paste the rules yourself, two instruction files are at the repository root:
 
-- **[`AGENT_INSTRUCTIONS_SHORT.md`](AGENT_INSTRUCTIONS_SHORT.md)** — ~2 KB. Mandatory workflow, tool selection table, core rules. Use for agents with limited system-prompt space.
-- **[`AGENT_INSTRUCTIONS.md`](AGENT_INSTRUCTIONS.md)** — ~15 KB. Adds parameter notes, decision trees, anti-patterns.
-- **[`AGENT_REFERENCE.md`](AGENT_REFERENCE.md)** — ~30 KB. Full tool reference with every parameter, every navigation pattern, and every known limitation. Installed automatically by `hooks --install`; read this when an agent needs the canonical answer.
+- **[`AGENT_INSTRUCTIONS.md`](AGENT_INSTRUCTIONS.md)** — the onboarding doc: mandatory workflow, tool-selection table, navigation patterns, and anti-patterns. Paste into your agent's rules file, or run `npx purecontext-mcp install <tool>` to write a compact, always-on version automatically.
+- **[`AGENT_REFERENCE.md`](AGENT_REFERENCE.md)** — the single canonical reference: a full intent→tool picker, every parameter, every navigation pattern, and known limitations. Installed automatically by `hooks --install`; read this when an agent needs the authoritative answer.
 
 Paste the contents into whatever system prompt, memory, or rules configuration your agent uses.
 

@@ -15,6 +15,7 @@
 import { z } from 'zod';
 import { openDatabase } from '../../core/db/schema.js';
 import { getCommitsInWindow } from '../../core/db/git-metadata-store.js';
+import { byteOffsetToLine } from './symbol-lines.js';
 import { buildMeta } from './_meta.js';
 import type { SymbolKind } from '../../core/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -154,18 +155,6 @@ interface DbSymbolRow {
   file_path: string;
   start_byte: number;
   end_byte: number;
-}
-
-/**
- * Convert a byte offset to a 1-based line number.
- */
-function byteOffsetToLine(content: Buffer, byteOffset: number): number {
-  let line = 1;
-  const cap = Math.min(byteOffset, content.length);
-  for (let i = 0; i < cap; i++) {
-    if (content[i] === 0x0a) line++;
-  }
-  return line;
 }
 
 /**

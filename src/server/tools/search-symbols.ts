@@ -11,6 +11,7 @@ import { HybridSearcher } from '../../semantic/hybrid-search.js';
 import { logger } from '../../core/logger.js';
 import { preprocessQuery, toOrFallbackQuery, isStopWord } from '../../core/search/query-preprocessor.js';
 import { rankSymbols, isLibraryPath } from '../../core/search/relevance-ranker.js';
+import { computeSymbolRisk } from './symbol-risk.js';
 import { resolveRepoScope } from '../../core/db/repo-scope.js';
 import type { ScoredSymbol, RankOptions } from '../../core/search/relevance-ranker.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -65,6 +66,14 @@ export const inputSchema = {
     .boolean()
     .optional()
     .describe('Return per-result score breakdown for tuning and diagnostics (default false)'),
+  includeRisk: z
+    .boolean()
+    .optional()
+    .describe(
+      'When true, attach a compact change-risk verdict { band, riskScore } to ' +
+      'each result (Phase 76). Default false (no extra cost). Use ' +
+      'get_symbol_risk for the full factor breakdown before editing a high-risk symbol.',
+    ),
   cfgFilter: z
     .union([
       z.string().describe('Simple predicate string, e.g. \'target_os = "linux"\''),
@@ -171,6 +180,7 @@ export async function handler(args: {
   semantic_weight?: number;
   keyword_weight?: number;
   debug?: boolean;
+  includeRisk?: boolean;
   cfgFilter?: string | { kind: string; key?: string; value?: string };
 }): Promise<CallToolResult> {
   const t0 = Date.now();
@@ -523,6 +533,28 @@ export async function handler(args: {
     ? allKeywordResults.filter((r) => symbolMatchesCfgFilter(r.symbol, cfgMatcher!)).slice(0, limit)
     : allKeywordResults.slice(0, limit);
 
+  // ── Optional compact risk verdict per result (opt-in, Phase 76) ────────────
+  const riskByKey = new Map<string, { band: string; riskScore: number }>();
+  if (args.includeRisk && top.length > 0) {
+    const byRepo = new Map<string, string[]>();
+    for (const r of top) {
+      const list = byRepo.get(r.repoId) ?? [];
+      list.push(r.symbol.id);
+      byRepo.set(r.repoId, list);
+    }
+    for (const [rid, symbolIds] of byRepo) {
+      const rdb = openDatabase(rid);
+      try {
+        for (const sid of symbolIds) {
+          const risk = computeSymbolRisk(rdb, rid, sid);
+          if (risk) riskByKey.set(`${rid}::${sid}`, { band: risk.band, riskScore: risk.riskScore });
+        }
+      } finally {
+        rdb.close();
+      }
+    }
+  }
+
   const negativeEvidence =
     top.length === 0
       ? {
@@ -555,6 +587,9 @@ export async function handler(args: {
             score: r.score,
             matchReason: r.matchReason,
             ...(args.debug && r.debugScore ? { _score: r.debugScore } : {}),
+            ...(args.includeRisk && riskByKey.has(`${r.repoId}::${r.symbol.id}`)
+              ? { risk: riskByKey.get(`${r.repoId}::${r.symbol.id}`) }
+              : {}),
           })),
           _meta: {
             ...buildMeta({ timingMs: Date.now() - t0, rawBytes: totalRawBytes, responseBytes: totalResponseBytes }),

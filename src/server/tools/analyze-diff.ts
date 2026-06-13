@@ -22,17 +22,21 @@ import {
   parseDeletedSymbolNames,
 } from '../../core/diff-parser.js';
 import { buildMeta } from './_meta.js';
+import { synthesizeChange, type ChangeSynthesis } from './change-synthesis.js';
 import type { SymbolRecord, SymbolKind } from '../../core/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'analyze_diff';
 
 export const description =
-  'Parse a unified git diff and identify all symbols that are added, modified, ' +
-  'signature-changed, or deleted, then calculate the downstream blast radius. ' +
-  'Returns a reviewPriority rating (low / medium / high / critical) derived from ' +
-  'the number of public API surface changes and the size of the impacted dependency ' +
-  'graph. Most useful in CI pipelines and AI-assisted PR review workflows.';
+  'Parse a unified git diff and produce an impact-aware change report: which ' +
+  'symbols are added, modified, signature-changed, or deleted, the downstream ' +
+  'blast radius, composite symbol risk, historically co-changing files MISSING ' +
+  'from the diff (the senior-reviewer "you forgot to touch X" signal), ' +
+  'recommended tests, coverage gaps, and architectural flags (cycles / layer ' +
+  'crossings the change sits on). Returns a reviewPriority rating ' +
+  '(low / medium / high / critical). Impact-aware sections default ON and are ' +
+  'individually switchable for cheap runs. Most useful in CI and AI-assisted PR review.';
 
 export const inputSchema = {
   repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
@@ -50,6 +54,22 @@ export const inputSchema = {
     .max(5)
     .optional()
     .describe('Max dependency hops for blast-radius walk (default 2)'),
+  includeRisk: z
+    .boolean()
+    .optional()
+    .describe('Score composite symbol risk for changed symbols (default true)'),
+  includeCoChangeGaps: z
+    .boolean()
+    .optional()
+    .describe('Flag historically co-changing files missing from the diff (default true)'),
+  includeTests: z
+    .boolean()
+    .optional()
+    .describe('Recommend tests + report coverage gaps for changed symbols (default true)'),
+  includeArchitectureFlags: z
+    .boolean()
+    .optional()
+    .describe('Flag cycles / layer crossings the changed files sit on (default true)'),
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -80,6 +100,12 @@ interface AnalyzeDiffOutput {
     symbolsImpacted: number;
     impactedFiles: string[];
   };
+  risk?: ChangeSynthesis['aggregateRisk'];
+  missingCoChange?: ChangeSynthesis['missingCoChange'];
+  recommendedTests?: ChangeSynthesis['recommendedTests'];
+  coverageGaps?: ChangeSynthesis['coverageGaps'];
+  architecturalFlags?: ChangeSynthesis['architecturalFlags'];
+  signalQuality?: ChangeSynthesis['signalQuality'];
   reviewPriority: 'low' | 'medium' | 'high' | 'critical';
   _meta: ReturnType<typeof buildMeta>;
 }
@@ -158,22 +184,30 @@ function detectOldSignature(
 /**
  * Derive the review priority from the analysis results.
  *
+ * Folds the Phase 77 impact signals (composite risk band + coverage gaps) into
+ * the original signature-break/blast heuristic. The enum is unchanged
+ * (low/medium/high/critical) so existing CI consumers keep working; when risk
+ * is not computed (riskBand undefined) the derivation reduces to the original.
+ *
  * priority  condition
  * ────────  ─────────────────────────────────────────────────────────
- * critical  ≥1 signature break AND blast radius > 10 files
- * high      ≥1 signature break OR blast radius > 5 files
- * medium    implementation changes with blast radius 1–5 files
- * low       changes to files with no importers (blast radius 0)
+ * critical  ≥1 signature break AND (blast > 10 files OR risk band high)
+ * high      ≥1 signature break OR blast > 5 files OR risk band high
+ * medium    blast 1–5 files OR risk band review OR ≥1 coverage gap
+ * low       none of the above
  */
 function computeReviewPriority(
   signatureBreaks: number,
   blastFilesImpacted: number | undefined,
+  riskBand: 'low' | 'review' | 'high' | undefined,
+  coverageGapCount: number,
 ): 'low' | 'medium' | 'high' | 'critical' {
   const blast = blastFilesImpacted ?? 0;
+  const highRisk = riskBand === 'high';
 
-  if (signatureBreaks > 0 && blast > 10) return 'critical';
-  if (signatureBreaks > 0 || blast > 5) return 'high';
-  if (blast >= 1 && blast <= 5) return 'medium';
+  if (signatureBreaks > 0 && (blast > 10 || highRisk)) return 'critical';
+  if (signatureBreaks > 0 || blast > 5 || highRisk) return 'high';
+  if ((blast >= 1 && blast <= 5) || riskBand === 'review' || coverageGapCount > 0) return 'medium';
   return 'low';
 }
 
@@ -184,6 +218,10 @@ export async function handler(args: {
   diff: string;
   includeBlastRadius?: boolean;
   blastRadiusDepth?: number;
+  includeRisk?: boolean;
+  includeCoChangeGaps?: boolean;
+  includeTests?: boolean;
+  includeArchitectureFlags?: boolean;
 }): Promise<CallToolResult> {
   const t0 = Date.now();
   const {
@@ -191,6 +229,10 @@ export async function handler(args: {
     diff,
     includeBlastRadius = true,
     blastRadiusDepth = 2,
+    includeRisk = true,
+    includeCoChangeGaps = true,
+    includeTests = true,
+    includeArchitectureFlags = true,
   } = args;
 
   // ── 1. Parse the diff ──────────────────────────────────────────────────────
@@ -377,9 +419,34 @@ export async function handler(args: {
     };
   }
 
+  // ── 4. Change-impact synthesis (Phase 77) ──────────────────────────────────
+  // Built on top of the already-correct symbol-change list. Each section is
+  // individually switchable; when all are off we skip synthesis entirely so the
+  // output reduces to the original shape.
+  const anySynthesis =
+    includeRisk || includeCoChangeGaps || includeTests || includeArchitectureFlags;
+
+  let synthesis: ChangeSynthesis | undefined;
+  if (anySynthesis) {
+    const changedSymbolIds = changedSymbols
+      .filter((s) => s.symbolId && s.changeType !== 'deleted')
+      .map((s) => s.symbolId);
+    const changedFilePaths = [
+      ...new Set(changedSymbols.map((s) => s.filePath).filter((p): p is string => !!p)),
+    ];
+    synthesis = synthesizeChange(db, repoId, {
+      changedSymbolIds,
+      changedFilePaths,
+      includeRisk,
+      includeCoChangeGaps,
+      includeTests,
+      includeArchitectureFlags,
+    });
+  }
+
   db.close();
 
-  // ── 4. Build summary ───────────────────────────────────────────────────────
+  // ── 5. Build summary ───────────────────────────────────────────────────────
   const summary = {
     filesChanged: new Set(fileDiffs.map((f) => f.newPath ?? f.oldPath)).size,
     symbolsAdded: changedSymbols.filter((s) => s.changeType === 'added').length,
@@ -388,9 +455,14 @@ export async function handler(args: {
     signatureBreaks: changedSymbols.filter((s) => s.changeType === 'signature_changed').length,
   };
 
+  const riskBand = includeRisk ? synthesis?.aggregateRisk.band : undefined;
+  const coverageGapCount = includeTests ? (synthesis?.coverageGaps.length ?? 0) : 0;
+
   const reviewPriority = computeReviewPriority(
     summary.signatureBreaks,
     blastRadiusResult?.filesImpacted,
+    riskBand,
+    coverageGapCount,
   );
 
   const output: AnalyzeDiffOutput = {
@@ -402,6 +474,18 @@ export async function handler(args: {
 
   if (blastRadiusResult !== undefined) {
     output.blastRadius = blastRadiusResult;
+  }
+
+  // Attach only the synthesis sections whose toggle is on (additive output).
+  if (synthesis) {
+    if (includeRisk) output.risk = synthesis.aggregateRisk;
+    if (includeCoChangeGaps) output.missingCoChange = synthesis.missingCoChange;
+    if (includeTests) {
+      output.recommendedTests = synthesis.recommendedTests;
+      output.coverageGaps = synthesis.coverageGaps;
+    }
+    if (includeArchitectureFlags) output.architecturalFlags = synthesis.architecturalFlags;
+    output.signalQuality = synthesis.signalQuality;
   }
 
   return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };

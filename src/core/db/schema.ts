@@ -5,6 +5,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import type { RepoMetadata } from '../types.js';
 import { EMBEDDINGS_DDL } from './embedding-store.js';
+import { CO_CHANGE_DDL } from './co-change-store.js';
 import { NativeDependencyError } from '../errors.js';
 
 // ─── Lazy-load better-sqlite3 ─────────────────────────────────────────────────
@@ -37,7 +38,7 @@ function getDatabase(): DatabaseConstructor {
   return _Database;
 }
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 const DDL = `
 PRAGMA journal_mode = WAL;
@@ -193,6 +194,7 @@ export function openInMemoryDatabase(): InstanceType<DatabaseConstructor> {
 export function initializeDatabase(db: InstanceType<DatabaseConstructor>): void {
   db.exec(DDL);
   db.exec(EMBEDDINGS_DDL);
+  db.exec(CO_CHANGE_DDL);
   runMigrations(db);
   // Ensure source column exists — added after v7, using try-catch for existing DBs
   // (SQLite does not support ALTER TABLE ... ADD COLUMN IF NOT EXISTS)
@@ -369,6 +371,13 @@ function runMigrations(db: InstanceType<DatabaseConstructor>): void {
     if (!existingSymCols.has('nesting_depth')) {
       db.exec('ALTER TABLE symbols ADD COLUMN nesting_depth INTEGER');
     }
+  }
+
+  // Migration v7 → v8: add commit_files table for repo-level co-change capture.
+  // Additive — the table is created by CO_CHANGE_DDL (IF NOT EXISTS) in
+  // initializeDatabase; old indexes load without re-indexing.
+  if (dbVersion < 8) {
+    db.exec(CO_CHANGE_DDL);
   }
 }
 

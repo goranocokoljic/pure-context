@@ -38,6 +38,8 @@ import * as findCrossRepoUsagesTool from './tools/find-cross-repo-usages.js';
 import * as getSymbolHistoryTool from './tools/get-symbol-history.js';
 import * as analyzeDiffTool from './tools/analyze-diff.js';
 import * as getChurnMetricsTool from './tools/get-churn-metrics.js';
+import * as getCoChangeTool from './tools/get-co-change.js';
+import * as getSymbolRiskTool from './tools/get-symbol-risk.js';
 import * as getQualityMetricsTool from './tools/get-quality-metrics.js';
 import * as detectAntipatternsTool from './tools/detect-antipatterns.js';
 import * as findRefactoringOpportunitiesTool from './tools/find-refactoring-opportunities.js';
@@ -303,6 +305,16 @@ export function createMcpServer(): McpServer {
     description: getChurnMetricsTool.description,
     inputSchema: getChurnMetricsTool.inputSchema,
   }, typed((args) => getChurnMetricsTool.handler(args)));
+
+  server.registerTool(getCoChangeTool.name, {
+    description: getCoChangeTool.description,
+    inputSchema: getCoChangeTool.inputSchema,
+  }, typed((args) => getCoChangeTool.handler(args)));
+
+  server.registerTool(getSymbolRiskTool.name, {
+    description: getSymbolRiskTool.description,
+    inputSchema: getSymbolRiskTool.inputSchema,
+  }, typed((args) => getSymbolRiskTool.handler(args)));
 
   server.registerTool(getQualityMetricsTool.name, {
     description: getQualityMetricsTool.description,

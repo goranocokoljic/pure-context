@@ -16,9 +16,11 @@ For complete tool parameter docs, all navigation patterns, and known limitations
 
 ## What PureContext MCP is
 
-PureContext MCP is a structured code navigation server. It indexes codebases using tree-sitter AST parsing, stores symbol metadata in SQLite, and exposes MCP tools so you retrieve precisely the code you need — without reading entire files.
+PureContext MCP is a code-intelligence server for coding agents. It indexes codebases using tree-sitter AST parsing, stores symbol metadata in SQLite, and exposes MCP tools that do two things: let you **retrieve precisely the code you need** without reading whole files, and let you **assess the impact and risk of a change before you make it** — blast radius, temporal co-change, and a composite per-symbol risk score.
 
-**Token savings:** Retrieving a 45-line function by name costs ~150 tokens. Reading the 800-line file it lives in costs ~2,000 tokens. PureContext saves 88–98% of context tokens on typical navigation tasks.
+**Foundation — token efficiency:** Retrieving a 45-line function by name costs ~150 tokens; reading the 800-line file it lives in costs ~2,000. PureContext saves 88–98% of context tokens on typical navigation, which is what makes the impact/risk checks cheap enough to run on every edit.
+
+**Differentiation — safe change:** Before modifying unfamiliar code, you can ask what depends on it (`get_blast_radius`), what historically changes with it (`get_co_change`), and how risky it is to touch (`get_symbol_risk`) — the context a careful senior engineer has and a fresh agent doesn't.
 
 ---
 
@@ -52,6 +54,8 @@ Do not read entire files to find code. Use the tools:
 | Browse directory layout | `get_file_tree` |
 | Understand a function's dependencies | `get_context_bundle` |
 | Know what breaks if I change a symbol | `get_blast_radius` |
+| How risky is a symbol to change (composite verdict) | `get_symbol_risk` |
+| Files that historically change together with this one | `get_co_change` |
 | Find all call sites for a symbol | `find_references` |
 | Non-symbol file content (imports block, config) | `get_file_content` with `startLine`/`endLine` |
 | All implementations of an interface | `find_implementations` |
@@ -120,14 +124,18 @@ If the response includes `verdict: "no_match"`, the symbol does not exist in thi
 
 ```
 1. search_symbols({ query: "functionName", kind: "function" })
-2. get_churn_metrics({ repoId, symbolId })      → if churnScore > 6, warn the user
-3. get_symbol_history({ symbolId })             → understand recent change context
-4. get_blast_radius({ symbolId })               → know full impact scope
-5. get_context_bundle({ symbolId, maxDepth: 2 })
-6. get_symbol_source({ symbolId })
-7. [make the change]
-8. find_dead_code({ repoId })
+2. get_symbol_risk({ repoId, symbolId })        → composite verdict (band + factors + reasons)
+3. If band is "high": inspect co-changers and callers BEFORE editing
+   - get_co_change({ repoId, symbolId })        → files that move with it but don't import it
+   - get_blast_radius({ symbolId })             → full reverse-dependency impact
+   - get_symbol_history({ symbolId })           → recent change context
+4. get_context_bundle({ symbolId, maxDepth: 2 }) → also returns historicalNeighbors when co-change data exists
+5. get_symbol_source({ symbolId })
+6. [make the change — and the co-changing files, if they need to move together]
+7. find_dead_code({ repoId })
 ```
+
+> `get_symbol_risk` fuses churn, centrality, complexity, test gap, and co-change into one banded score with `reasons[]`. For a quick inline signal, pass `includeRisk: true` to `search_symbols` or `get_symbol_source` to get a compact `{ band, riskScore }` per result. Risk is **code-centered** — it models no author/ownership metrics.
 
 ### Find where something is called
 
