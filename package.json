@@ -87,6 +87,9 @@
     "prepublishOnly": "npm run build && npm test",
     "postinstall": "node scripts/check-sqlite.js"
   },
+  "overrides": {
+    "shell-quote": "1.8.4"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@sqlite.org/sqlite-wasm": "3.53.0-build1",

@@ -35,6 +35,7 @@ Running on Node < 18 now prints a clear, actionable message and exits — instea
 `install` now configures the MCP server to run under the user's **global/default** Node (Volta's default via `platform.json`, else the system Node), independent of any project's Node pin:
 
 - Claude Desktop config is written with the resolved absolute Node path.
+- Claude Code **hooks** (`~/.claude/settings.json`) are pinned to the same global Node, instead of whatever Node ran `install` (previously they inherited a project-pinned version under Volta).
 - `install claude` prints the exact `claude mcp add purecontext-mcp --scope user -- <node> <launcher>` command to register Claude Code at user scope.
 - Machine-specific absolute paths are only ever placed in **user-scope** config — never a project-committed `.mcp.json`, which stays portable (and now works on any project Node ≥ 18 thanks to the WASM fallback).
 

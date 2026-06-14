@@ -16,6 +16,7 @@ import {
   writeFileSync,
 } from 'fs';
 import { getSqliteFactory, type SqliteDatabase } from '../core/db/sqlite-loader.js';
+import { resolveServerLaunch } from './resolve-node.js';
 import { join, dirname, resolve } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
@@ -33,10 +34,16 @@ const CLAUDE_MD_PATH = join(CLAUDE_DIR, 'CLAUDE.md');
 
 // Builds a direct `node "<script>" <subcommand>` invocation that bypasses npx
 // and avoids npm registry SSL checks entirely (important on corporate proxies).
+//
+// The Node binary is the user's *global/default* Node (Volta default, else the
+// system Node) — NOT process.execPath, which would pin hooks to whatever Node
+// happened to run `install` (e.g. a project-pinned version under Volta). Hooks
+// are global tools and must be independent of the project they're installed from.
 function makeHookCmd(subcommand: string): string {
   const cliScript = resolve(__dirname, '..', 'index.js');
+  const nodeBin = resolveServerLaunch().command;
   const q = (p: string) => `"${p}"`;
-  return `${q(process.execPath)} ${q(cliScript)} ${subcommand}`;
+  return `${q(nodeBin)} ${q(cliScript)} ${subcommand}`;
 }
 
 // ─── CLAUDE.md block ──────────────────────────────────────────────────────────
@@ -121,7 +128,7 @@ export function cmdHooksInstall(): void {
   injectClaudeMd();
 
   console.log('\nHooks installed. Reopen Claude Code to activate them.\n');
-  console.log('Hooks registered (via npx purecontext-mcp hook-*):');
+  console.log('Hooks registered (invoked directly via your global Node, no npx):');
   console.log('  PostToolUse  (hook-posttooluse):       re-indexes edited files automatically');
   console.log('  PreCompact   (hook-precompact):        injects repo state before context compaction');
   console.log('  PreToolUse   (hook-pretooluse):        suggests PureContext read tools before editing');
