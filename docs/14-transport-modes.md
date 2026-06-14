@@ -16,7 +16,10 @@ Claude Code spawns `purecontext-mcp` as a child process and communicates over st
 **Claude Code setup:**
 
 ```bash
-# Using npx (recommended)
+# Recommended: installer registers the server (pinned to your global Node) + rules
+npx purecontext-mcp install claude
+
+# Or register manually with npx
 claude mcp add purecontext-mcp -- npx purecontext-mcp
 
 # Using global install

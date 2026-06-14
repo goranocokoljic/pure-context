@@ -39,10 +39,10 @@ purecontext-mcp config
 
 ### `install`
 
-Write PureContext workflow rules into the conventions file each AI tool expects.
+Set up PureContext for an AI tool: write its workflow-rules/instructions file **and** register the `purecontext-mcp` MCP server so its tools are actually available (not merely referenced by the rules). The server is pinned to your global Node — see [MCP server registration](#mcp-server-registration) below.
 
 ```bash
-# Auto-detect installed tools and install rules for all of them
+# Auto-detect installed tools and set up each
 npx purecontext-mcp install all
 
 # Install for a specific tool
@@ -51,7 +51,7 @@ npx purecontext-mcp install windsurf
 npx purecontext-mcp install continue
 npx purecontext-mcp install cline
 npx purecontext-mcp install roo-code
-npx purecontext-mcp install vscode
+npx purecontext-mcp install copilot
 npx purecontext-mcp install claude
 npx purecontext-mcp install claude-desktop
 ```
@@ -81,20 +81,37 @@ npx purecontext-mcp install all --dry-run       # preview which writers would ru
 npx purecontext-mcp install all --scope=global  # install globally without prompt
 ```
 
-**Scope behaviour per tool:**
+**Rules/instructions file per tool:**
 
 | Tool | Local | Global |
 |------|-------|--------|
 | `claude` | `CLAUDE.md` in project | `~/.claude/CLAUDE.md` + hooks |
 | `cursor` | `.cursor/rules/purecontext.mdc` | `~/.cursor/rules/purecontext.mdc` |
-| `windsurf` | `.windsurfrules` | `~/.windsurfrules` |
+| `windsurf` | `.windsurf/rules/purecontext.md` | `~/.windsurf/rules/purecontext.md` |
 | `continue` | `.continue/config.json` | `~/.continue/config.json` |
 | `cline` | `.clinerules` | local only (no global path) |
 | `roo-code` | `.roo/rules-code.md` | local only (no global path) |
-| `vscode` | `.github/copilot-instructions.md` | local only (no global path) |
+| `copilot` | `.github/copilot-instructions.md` | local only (no global path) |
 | `claude-desktop` | always global | always global |
 
-All writers are idempotent: re-running updates the marked block in place without touching anything outside it.
+These writers are idempotent: re-running updates the marked block in place without touching anything outside it.
+
+#### MCP server registration
+
+Besides the rules file, `install` registers the `purecontext-mcp` server with each agent so its tools are actually available. The server command is **pinned to your global/default Node** (Volta's default, else the system Node), independent of any project's Node pin, so it works in every project. Registration is at user scope and merges into existing config (other servers are preserved):
+
+| Tool | MCP config written |
+|------|--------------------|
+| `claude` | `claude mcp add --scope user` (`--scope local` for a `--scope=local` install) |
+| `claude-desktop` | `claude_desktop_config.json` |
+| `cursor` | `~/.cursor/mcp.json` |
+| `windsurf` | `~/.codeium/windsurf/mcp_config.json` |
+| `cline` | VS Code `globalStorage/.../cline_mcp_settings.json` |
+| `roo-code` | VS Code `globalStorage/.../mcp_settings.json` |
+| `continue` | `~/.continue/config.yaml` (`mcpServers` list) |
+| `copilot` | VS Code user `mcp.json` (`servers` map, `"type": "stdio"`) |
+
+For `claude`, registration uses the `claude` CLI (falling back to printing the command if it isn't on PATH). For `cline`, `roo-code`, `continue`, and `copilot` — whose config locations vary by editor and version — `install` writes only when the target config/dir already exists; otherwise it prints the entry to add manually rather than guess a path. Set `PCTX_SKIP_MCP_REGISTER=1` to skip server registration (rules only).
 
 ### `hooks`
 

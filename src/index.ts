@@ -168,7 +168,8 @@ Environment variables:
   PCTX_HOST         Override HTTP host
 
 Claude Code integration:
-  claude mcp add purecontext-mcp -- npx purecontext-mcp
+  purecontext-mcp install claude        Register the server (pinned to your global Node) + add rules
+  claude mcp add purecontext-mcp -- npx purecontext-mcp   (manual alternative)
 `.trimStart());
 }
 

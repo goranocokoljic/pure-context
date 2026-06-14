@@ -4,7 +4,10 @@
 ## Step 1 — Connect to Claude Code
 
 ```bash
-# Recommended: use npx (no global install needed, always up-to-date)
+# Recommended: registers the server (pinned to your global Node) + adds workflow rules
+npx purecontext-mcp install claude
+
+# Or register the server manually with npx:
 claude mcp add purecontext-mcp -- npx purecontext-mcp
 
 # Or, if installed globally:

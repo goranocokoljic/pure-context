@@ -29,12 +29,13 @@ It's built on **token-efficient retrieval** as the foundation: agents pull a sin
 ## Quick start
 
 ```bash
-# 1. Connect to Claude Code (no global install needed)
-claude mcp add purecontext-mcp -- npx purecontext-mcp@latest
-
-# 2. Inside your project, install the workflow rules
-#    (auto-detects Claude / Cursor / Windsurf / Continue / Cline / Roo Code / VS Code / Claude Desktop)
+# Inside your project: registers the MCP server (pinned to your global Node) AND
+# adds the workflow rules — auto-detects Claude / Cursor / Windsurf / Continue /
+# Cline / Roo Code / Copilot / Claude Desktop
 npx purecontext-mcp@latest install all
+
+# Prefer to wire up Claude Code by hand? Register the server manually:
+claude mcp add purecontext-mcp -- npx purecontext-mcp@latest
 ```
 
 Then in a Claude Code conversation:
@@ -363,17 +364,17 @@ npx purecontext-mcp@latest install all --dry-run
 npx purecontext-mcp@latest install --list      # show which IDEs were detected
 ```
 
-Supported tools and where each one writes:
+Supported tools and where each one writes its workflow rules (it also registers the `purecontext-mcp` MCP server with each — pinned to your global Node — in that tool's own MCP config):
 
 | Tool | Local | Global |
 |------|-------|--------|
 | `claude` | `CLAUDE.md` in project | `~/.claude/CLAUDE.md` + hooks |
 | `cursor` | `.cursor/rules/purecontext.mdc` | `~/.cursor/rules/purecontext.mdc` |
-| `windsurf` | `.windsurfrules` | `~/.windsurfrules` |
+| `windsurf` | `.windsurf/rules/purecontext.md` | `~/.windsurf/rules/purecontext.md` |
 | `continue` | `.continue/config.json` | `~/.continue/config.json` |
 | `cline` | `.clinerules` | local only |
 | `roo-code` | `.roo/rules-code.md` | local only |
-| `vscode` | `.github/copilot-instructions.md` | local only |
+| `copilot` | `.github/copilot-instructions.md` | local only |
 | `claude-desktop` | always global | always global |
 
 ### Manual install

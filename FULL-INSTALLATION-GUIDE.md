@@ -52,6 +52,14 @@ PureContext works with any MCP-compatible AI client. Choose the setup that match
 
 ### Claude Code (CLI)
 
+Easiest — let the installer register the server (pinned to your global Node) and add the workflow rules in one step:
+
+```bash
+npx purecontext-mcp@latest install claude
+```
+
+Or register the server manually:
+
 ```bash
 claude mcp add purecontext-mcp -- npx purecontext-mcp@latest
 ```
@@ -181,13 +189,13 @@ Without them, an AI agent given access to PureContext may default to reading ent
 
 ### Recommended: `purecontext-mcp install`
 
-PureContext ships with a multi-IDE installer that writes the workflow rules into the conventions file each tool expects. Run it once inside your project root:
+PureContext ships with a multi-IDE installer that writes the workflow rules into each tool's conventions file **and registers the `purecontext-mcp` MCP server** (pinned to your global Node — so it works in every project regardless of any per-project Node pin). Run it once inside your project root:
 
 ```bash
 npx purecontext-mcp install all
 ```
 
-This auto-detects which AI tools are configured in the project (by looking for marker files such as `.cursor/`, `.windsurfrules`, `CLAUDE.md`, `.continue/`, etc.) and installs the rules for each.
+This auto-detects which AI tools are configured in the project (by looking for marker files such as `.cursor/`, `.windsurf/`, `CLAUDE.md`, `.continue/`, etc.) and sets up each.
 
 When no `--scope` flag is given, the CLI prompts you to choose where to install:
 
@@ -228,12 +236,14 @@ npx purecontext-mcp install all --dry-run    # preview which writers would run
 |------|-------|--------|-------|
 | `claude` | `CLAUDE.md` in project | `~/.claude/CLAUDE.md` + hooks | Global installs PostToolUse re-index, PreCompact snapshot, and edit guard. |
 | `cursor` | `.cursor/rules/purecontext.mdc` | `~/.cursor/rules/purecontext.mdc` | MDC frontmatter with `alwaysApply: true`. |
-| `windsurf` | `.windsurfrules` | `~/.windsurfrules` | Marked block appended or replaced in place. |
+| `windsurf` | `.windsurf/rules/purecontext.md` | `~/.windsurf/rules/purecontext.md` | Marked block appended or replaced in place. |
 | `continue` | `.continue/config.json` | `~/.continue/config.json` | JSON-aware merge; other fields are preserved. |
 | `cline` | `.clinerules` | local only | No known global config path. |
 | `roo-code` | `.roo/rules-code.md` | local only | No known global config path. |
-| `vscode` | `.github/copilot-instructions.md` | local only | Picked up by GitHub Copilot in VS Code. |
+| `copilot` | `.github/copilot-instructions.md` | local only | Picked up by GitHub Copilot in VS Code. |
 | `claude-desktop` | always global | always global | Merges MCP server entry; leaves other servers untouched. |
+
+In addition to the rules file above, every tool also gets the `purecontext-mcp` **MCP server** registered (pinned to your global Node), so its tools are available — not just referenced by the rules. The server is written to each agent's own MCP config (`~/.cursor/mcp.json`, `~/.codeium/windsurf/mcp_config.json`, Continue's `config.yaml`, VS Code's user `mcp.json` for Copilot, the VS Code globalStorage settings for Cline/Roo, and `claude mcp add` for Claude Code). Where a config location can't be determined, `install` prints the entry to add manually. Set `PCTX_SKIP_MCP_REGISTER=1` to install rules only.
 
 ### Idempotency
 
@@ -261,7 +271,7 @@ To use these manually:
 cat AGENT_INSTRUCTIONS.md >> CLAUDE.md
 
 # Cursor — paste into .cursorrules or via Cursor Settings → Rules
-# Windsurf — paste into .windsurfrules or workspace memory
+# Windsurf — paste into .windsurf/rules/purecontext.md or workspace memory
 # Anything else — paste into whatever rule/memory config it supports
 ```
 
