@@ -41,6 +41,8 @@ The bottleneck in sequential indexing is tree-sitter WASM parsing — each WASM 
 
 Each worker loads its own WASM grammar instances. File batches are distributed across workers by the main thread. SQLite writes are serialized on the main thread (better-sqlite3 is synchronous).
 
+> **SQLite backend note:** the numbers here assume the native `better-sqlite3` engine (Node 18/20/22). On other Node versions PureContext falls back to a WASM SQLite engine (see [Installation](02-installation.md)); it is functionally identical (FTS5 included) but slower on write-heavy indexing, because the WASM database is held in memory and serialized to disk on flush rather than written natively in place. Indexing throughput is the main thing affected; query latency is much closer.
+
 ### Configuring worker threads
 
 ```json

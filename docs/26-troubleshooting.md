@@ -80,12 +80,16 @@ npm rebuild purecontext-mcp
 
 ---
 
-### "better-sqlite3 bindings failed to load"
+### "better-sqlite3 bindings failed to load" / native ABI mismatch
 
-The native `better-sqlite3` binary doesn't match your Node.js version or platform.
+The native `better-sqlite3` binary doesn't match your Node.js version or platform — e.g. `NODE_MODULE_VERSION 127 … requires 108` (an ABI mismatch, common under Volta or other per-project Node managers).
+
+**You usually don't need to do anything.** As of 1.10.0, PureContext automatically falls back to a pure-WASM SQLite engine when the native addon can't load, so it keeps working — you'll see `SQLite backend: WASM (@sqlite.org/sqlite-wasm)` in the logs. The fallback is full-featured (FTS5 included), just slower on large indexes.
+
+To restore the faster native engine, rebuild it for your current Node:
 
 ```bash
-# Fix: rebuild the native module
+# Fix: rebuild the native module for the current Node
 cd $(npm root -g)/purecontext-mcp
 npm rebuild better-sqlite3
 
@@ -94,6 +98,17 @@ npm rebuild better-sqlite3
 # Linux: apt install python3 make g++
 # Windows: npm install -g windows-build-tools
 ```
+
+---
+
+### "MCP error -32000: Connection closed" / server won't connect
+
+The MCP host shows this when the server process exits during startup. Two most common causes:
+
+1. **Node < 18.** PureContext requires Node ≥ 18. As of 1.10.0 it prints a clear "requires Node.js >= 18" message and exits, instead of failing opaquely. Run the command directly to see it: `node <…>/dist/bin.js --version`. Fix: upgrade Node (20 or 22 LTS recommended).
+2. **The server inherited the wrong Node** (Volta/nvm picked a project-pinned version). An MCP server is a global tool — pin it to your global Node so it doesn't inherit a project's pin. Re-run `npx purecontext-mcp install claude` and use the printed `claude mcp add … --scope user -- <node> <launcher>` command.
+
+A native ABI mismatch no longer causes this (the WASM fallback handles it), so a remaining `-32000` is almost always cause #1 or #2.
 
 ---
 

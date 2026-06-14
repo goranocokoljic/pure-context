@@ -9,7 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.10.0] - 2026-06-14
+
 ### Added
+
+**Node-version independence — WASM SQLite fallback (`@sqlite.org/sqlite-wasm`)**
+
+PureContext now runs on **any Node.js ≥ 18**. The native `better-sqlite3` engine remains the fast path on Node 18/20/22; on any other Node — or whenever the native binary fails to load (e.g. an ABI mismatch under a Volta-pinned project) — PureContext automatically falls back to a pure-WASM SQLite engine that is ABI-independent.
+
+- The WASM engine is FTS5-capable, so full-text search (`search_symbols`, `search_text`) works identically on the fallback. (`node:sqlite` and stock `sql.js` were evaluated and rejected — neither ships FTS5.)
+- The fallback is **full-featured, not degraded**: FTS5, transactions, BLOBs, and the entire schema work. The only difference from native is throughput (WASM is somewhat slower on large indexes).
+- Index database files use the standard SQLite format and are portable across the native and WASM engines.
+- Backend selection is automatic and logged (`SQLite backend: WASM (@sqlite.org/sqlite-wasm)`). The override `PCTX_SQLITE_BACKEND=wasm` forces the fallback.
+
+This eliminates the `MCP error -32000: Connection closed` failures caused by native ABI mismatches on Node versions without a matching prebuild (19/21/23/24+) or under per-project Node managers like Volta.
+
+**Startup Node-version guard**
+
+Running on Node < 18 now prints a clear, actionable message and exits — instead of crashing with an opaque `-32000 Connection closed`. A dependency-free launcher (`dist/bin.js`, now the package `bin`) checks the Node version *before* the heavy module graph (including any native addon) is loaded.
+
+**Install pins the server to a globally-available Node**
+
+`install` now configures the MCP server to run under the user's **global/default** Node (Volta's default via `platform.json`, else the system Node), independent of any project's Node pin:
+
+- Claude Desktop config is written with the resolved absolute Node path.
+- `install claude` prints the exact `claude mcp add purecontext-mcp --scope user -- <node> <launcher>` command to register Claude Code at user scope.
+- Machine-specific absolute paths are only ever placed in **user-scope** config — never a project-committed `.mcp.json`, which stays portable (and now works on any project Node ≥ 18 thanks to the WASM fallback).
 
 **Claude Code hook system overhaul**
 
@@ -34,6 +61,10 @@ Seven hook events are now supported (up from three):
 *WorktreeCreate* — Claude Code's Agent tool can create isolated git worktrees for sub-tasks. This hook calls `index-folder` on the new worktree automatically so PureContext tools work immediately inside it.
 
 Re-running `npx purecontext-mcp hooks --install` upgrades existing installations: old `node ~/.claude/hooks/purecontext-*.mjs` entries are replaced with the new CLI form, and the four new hook events are added.
+
+### Fixed
+
+- Native backend detection now probes the `better-sqlite3` binding (a throwaway in-memory open) during selection. Previously the loader committed to native after only `require()`-ing the JS wrapper and then threw at first `open()` under a mismatched ABI (e.g. Node 21), bypassing the WASM fallback.
 
 ---
 

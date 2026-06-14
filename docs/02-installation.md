@@ -44,6 +44,14 @@ The `@latest` tag is recommended in AI-client configurations so new versions are
 
 When your platform matches a row above, `npm install` completes with zero native compilation. For unsupported combinations, `npm install` falls back to a source build, which requires Python 3.x, a C++ toolchain, and `node-gyp`.
 
+### Runs on any Node ≥ 18 (WASM fallback)
+
+The native binary above is an **optimization, not a requirement**. At runtime, if the native `better-sqlite3` addon can't be loaded — you're on a Node version without a matching prebuild (19, 21, 23, 24+), a per-project Node manager like Volta pins a different version than the one the binary was built for, or the build simply isn't present — PureContext automatically falls back to a pure-**WASM** SQLite engine (`@sqlite.org/sqlite-wasm`) that is ABI-independent.
+
+The fallback is full-featured (FTS5 search, transactions, the whole schema) — only somewhat slower on large indexes. Backend selection is automatic and logged: you'll see `SQLite backend: WASM (@sqlite.org/sqlite-wasm)`. Set `PCTX_SQLITE_BACKEND=wasm` to force it.
+
+Net effect: **PureContext works on any Node ≥ 18**, with or without a version manager. Below Node 18 it exits at startup with a clear message rather than a cryptic failure.
+
 ---
 
 ## Verification
