@@ -63,6 +63,9 @@ import * as checkRenameSafeTool from './tools/check-rename-safe.js';
 import * as checkDeleteSafeTool from './tools/check-delete-safe.js';
 import * as checkMoveSafeTool from './tools/check-move-safe.js';
 import * as planRefactoringTool from './tools/plan-refactoring.js';
+import * as prepareChangeTool from './tools/prepare-change.js';
+import * as verifyChangeTool from './tools/verify-change.js';
+import * as compareChangeImpactTool from './tools/compare-change-impact.js';
 import * as getDebtReportTool from './tools/get-debt-report.js';
 import * as healthRadarTool from './tools/health-radar.js';
 import * as diffHealthRadarTool from './tools/diff-health-radar.js';
@@ -430,6 +433,21 @@ export function createMcpServer(): McpServer {
     description: planRefactoringTool.description,
     inputSchema: planRefactoringTool.inputSchema,
   }, typed((args) => planRefactoringTool.handler(args)));
+
+  server.registerTool(prepareChangeTool.name, {
+    description: prepareChangeTool.description,
+    inputSchema: prepareChangeTool.inputSchema,
+  }, typed((args) => prepareChangeTool.handler(args)));
+
+  server.registerTool(verifyChangeTool.name, {
+    description: verifyChangeTool.description,
+    inputSchema: verifyChangeTool.inputSchema,
+  }, typed((args) => verifyChangeTool.handler(args)));
+
+  server.registerTool(compareChangeImpactTool.name, {
+    description: compareChangeImpactTool.description,
+    inputSchema: compareChangeImpactTool.inputSchema,
+  }, typed((args) => compareChangeImpactTool.handler(args)));
 
   server.registerTool(getDebtReportTool.name, {
     description: getDebtReportTool.description,

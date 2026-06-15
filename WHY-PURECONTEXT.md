@@ -29,6 +29,19 @@ This is what sets PureContext apart from a fast symbol index: it doesn't just he
 
 ---
 
+## A closed loop, not just a warning
+
+The checks above are the *before*. PureContext closes the loop around the whole edit:
+
+1. **`prepare_change`** — before editing, state your intent (rename, delete, modify, extract) and a target. PureContext resolves the exact change set and returns one pre-flight verdict: the files you'll touch, the composite risk, the historically co-changing files you're *about to forget*, the tests to run, and any architectural flags — in plain English, with reasons, not a bare confidence number. If the target is ambiguous it tells you and asks; it never guesses.
+2. **You make the edit.** PureContext does not. Your agent already has a file-write tool; PureContext's job is judgment, not a second pair of hands.
+3. **`verify_change`** — after editing, hand back the real diff. PureContext reconciles what you *did* against what it *predicted*: which co-change partners you addressed, which you still haven't, what you changed that wasn't planned, and whether any changed code is still untested. "Complete," "incomplete," or "scope expanded" — with the reasons.
+4. **`compare_change_impact`** — snapshot the architecture before, and afterwards PureContext reports only what your change *introduced*: a new import cycle, a new layer violation. It never blames you for problems that were already there.
+
+That before → edit → verify → compare loop is the difference between a tool that *flags* risk and one that confirms the change was actually safe and complete.
+
+---
+
 ## What changes in practice
 
 ### Your AI assistant gets fewer hallucinations
@@ -75,7 +88,7 @@ Now Claude checks the blast radius, the historical co-changers, and a composite 
 
 It is not a replacement for reading code. There will always be times when you need to read a file carefully, understand edge cases, or review logic line by line. PureContext makes those moments targeted — you know which file, which function, which 45 lines matter — instead of exploratory.
 
-It is not a code editor or language server. It does not type-check, lint, or autocomplete. Those tools solve different problems.
+It is not a code editor or language server. It does not type-check, lint, or autocomplete. Those tools solve different problems. **It is not a second editor — it never applies your changes for you.** It tells the agent what's safe and what's still missing; the agent does the writing. Judgment, not actuation.
 
 It is not magic. The quality of its output depends on the quality of your codebase structure, documentation, and naming. Well-named functions with docstrings are searchable from the first index. Undocumented spaghetti becomes searchable with AI summarization enabled — but meaningful naming still wins.
 

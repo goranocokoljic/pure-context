@@ -250,30 +250,89 @@ plan_refactoring(repoId, goal: "general", filePath: "src/utils/helpers.ts")
 
 ---
 
+## The closed loop: prepare → edit → verify → compare
+
+The safety checks above are the *before*. PureContext also closes the loop *after* the edit — confirming the change was not just safe to start but actually **complete**. These three tools never edit code; they tell you what's safe and what's still missing, with reasons.
+
+**Before editing — `prepare_change`:** state the intent and target, get one impact verdict.
+
+```
+prepare_change(repoId, intent: "rename", targetSymbolId: "validateToken-id") →
+
+  verdict: "ready"
+  predictedChange: { changedFilePaths: [ ...12 files... ] }
+  risk: { band: "review" }
+  missingCoChange: [ "src/api/session-store.ts" ]   ← historically moves with this, NOT in your plan
+  coverageGaps: [ ]
+  reasons: [
+    "Aggregate change risk: review.",
+    "1 file historically co-changes with the target but is NOT in the predicted change: src/api/session-store.ts."
+  ]
+```
+
+It tells you up front the file you were about to forget. If the target is ambiguous it returns `verdict: "ambiguous_target"` with candidates and refuses to guess.
+
+**After editing — `verify_change`:** hand back the real diff plus the prediction.
+
+```
+verify_change(repoId, diff: "<git diff>",
+  predictedFilePaths: [ ...12... ],
+  predictedCoChange: [ "src/api/session-store.ts" ]) →
+
+  verdict: "incomplete"
+  unaddressedCoChange: [ "src/api/session-store.ts" ]   ← you planned around it; still untouched
+  unplannedChanges: [ ]
+  reasons: [ "1 historically co-changing file you planned around is still untouched: ..." ]
+```
+
+`complete` means every planned file was touched with no co-change or coverage gaps; `scope_expanded` flags files you changed that weren't predicted.
+
+**Architecture regression — `compare_change_impact`:** snapshot before, compare after.
+
+```
+get_architecture_snapshot(repoId, action: "create", label: "before-refactor")  → snapshotId
+... edit + re-index ...
+compare_change_impact(repoId, baselineSnapshotId: "<id>") →
+
+  verdict: "regressed"
+  newCycles: [ [ "src/auth/index.ts", "src/core/session.ts" ] ]   ← introduced by THIS change
+  newLayerViolations: [ ]
+```
+
+It reports only what the change *introduced* (or resolved) — never pre-existing issues.
+
+---
+
 ## The pre-change pattern
 
 For any significant structural change, this is the workflow:
 
 ```
-1. Run the relevant safety check
-   check_rename_safe / check_delete_safe / check_move_safe
-   → get the verdict and full impact list
+1. Pre-flight the change
+   prepare_change(intent, target)  — or  check_rename_safe / check_delete_safe / check_move_safe
+   → verdict + impact + the co-change files you're about to forget
 
-2. If safe: get the sequenced plan
+2. If safe: get the sequenced plan (optional, for larger refactors)
    plan_refactoring(goal: "...")
    → step-by-step with risk annotations
 
-3. Execute from leaf to hub, test after each step
+3. (optional) Snapshot the architecture
+   get_architecture_snapshot(action: "create")
 
-4. Re-index after all changes
+4. Execute from leaf to hub, test after each step
+
+5. Re-index after all changes
    index_folder(path, force: false)
-   → incremental, picks up only what changed
 
-5. Verify no dead code was created
+6. Verify the change is complete
+   verify_change(diff, predictedFilePaths, predictedCoChange)
+   → complete / incomplete / scope_expanded
+   compare_change_impact(baselineSnapshotId)
+   → did this introduce a new cycle / layer violation?
    find_dead_code(repoId)
    → check nothing is now unreferenced
 ```
 
 ---
 
-→ Reference: [MCP Tools Reference](docs/06-tools-reference.md) — `check_rename_safe`, `check_delete_safe`, `check_move_safe`, `plan_refactoring`
+→ Reference: [MCP Tools Reference](docs/06-tools-reference.md) — `prepare_change`, `verify_change`, `compare_change_impact`, `check_rename_safe`, `check_delete_safe`, `check_move_safe`, `plan_refactoring`

@@ -86,6 +86,29 @@ Context bundle for processOrder():
 
 ---
 
+## The one-call pre-flight: `prepare_change`
+
+The workflow below is the explicit, step-by-step version. When you just want the verdict, `prepare_change` runs the whole pre-flight in a single call — it resolves the target, predicts the files you'll touch, and returns the risk, the co-change partners you're about to forget, the tests, and any architectural flags, each with a plain-English reason.
+
+> "I want to rename validateToken. What's the impact?"
+
+```
+prepare_change(repoId, intent: "rename", targetSymbolId: "validateToken-id") →
+
+  verdict: "ready"
+  predictedChange: { changedFilePaths: [ ...12 files... ] }
+  risk: { band: "review" }
+  missingCoChange: [ "src/api/session-store.ts" ]   ← moves with this historically, NOT in your plan
+  reasons: [
+    "Aggregate change risk: review.",
+    "1 file historically co-changes with the target but is NOT in the predicted change: src/api/session-store.ts."
+  ]
+```
+
+It is **judgment, not actuation** — it never edits. If the target is ambiguous it returns `verdict: "ambiguous_target"` with candidates and asks you to pick, rather than guessing. Keep `predictedChange.changedFilePaths` and `missingCoChange[].filePath` — `verify_change` uses them afterward.
+
+---
+
 ## The complete pre-change workflow
 
 This is the pattern to use before any significant change:
@@ -117,6 +140,26 @@ This is the pattern to use before any significant change:
 ```
 
 > For a `high`-risk symbol, treat steps 3–4 as mandatory: the co-changers are the second-order edits most likely to break. For a quick inline signal, pass `includeRisk: true` to `search_symbols` to see each candidate's `{ band, riskScore }` before you pick one.
+
+---
+
+## Closing the loop: confirming the change was complete
+
+The steps above are the *before*. After you've made the change, `verify_change` reconciles what you actually did against the prediction — it's how you catch the co-change partner you meant to touch but didn't.
+
+> "Here's my diff. Did I cover everything?"
+
+```
+verify_change(repoId, diff: "<git diff>",
+  predictedFilePaths: [ ...from prepare_change... ],
+  predictedCoChange: [ "src/api/session-store.ts" ]) →
+
+  verdict: "incomplete"
+  unaddressedCoChange: [ "src/api/session-store.ts" ]   ← you planned around it; still untouched
+  unplannedChanges: [ ]
+```
+
+`complete` = every planned file touched, no co-change or coverage gaps; `incomplete` = a planned partner or untested symbol remains; `scope_expanded` = you touched files that weren't predicted. And `compare_change_impact` (against a `get_architecture_snapshot` baseline) tells you whether the change introduced a *new* import cycle or layer violation — never blaming it for pre-existing ones.
 
 ---
 
@@ -162,4 +205,4 @@ This transforms "I think this change is safe but I'm not sure" into "I know exac
 
 ---
 
-→ Reference: [MCP Tools Reference](../docs/06-tools-reference.md) — `get_symbol_risk`, `get_co_change`, `get_blast_radius`, `get_context_bundle`, `find_importers`, `find_dead_code`, `get_layer_violations`
+→ Reference: [MCP Tools Reference](docs/06-tools-reference.md) — `prepare_change`, `verify_change`, `compare_change_impact`, `get_symbol_risk`, `get_co_change`, `get_blast_radius`, `get_context_bundle`, `find_importers`, `find_dead_code`, `get_layer_violations`

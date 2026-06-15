@@ -36,16 +36,36 @@ Symbols deleted:
   validateBasicAuth()        apps/auth/basic.py         removed
 
 Blast radius of modified symbols: 47 files
-Review priority: HIGH (signature changes to authenticateUser and require_auth)
+
+Aggregate risk: HIGH
+  authenticate_user   high (78/100) — 6 dependents · churn 9/90d · signature changed
+  require_auth        high (71/100) — wraps 134 views · co-changes with middleware tests
+
+missingCoChange (historically move with the edited files, but NOT in this PR):
+  apps/auth/sso_config.py     (confidence 0.62)   ← SSO config usually changes with the auth flow
+  tests/auth/test_sso.py      (confidence 0.55)
+
+coverageGaps (changed symbols with no detected test):
+  OAuthCallbackView    apps/auth/views.py
+
+recommendedTests:
+  tests/auth/test_middleware.py · tests/auth/test_decorators.py
+
+architecturalFlags:
+  (none — changed files don't currently sit on a cycle or cross a layer boundary)
+
+Review priority: CRITICAL (signature breaks + high aggregate risk)
 ```
 
-In 30 seconds you know:
-- The signature of `authenticateUser` changed — everything that calls it may need to be checked
+In 30 seconds you know — without reading a diff:
+- The signature of `authenticateUser` changed and it scores **high** composite risk — everything that calls it must be checked
 - `require_auth` was modified — it wraps 134 view functions, so behavior changes here affect the entire application
 - Three symbols were deleted — are they truly dead, or are there call sites the PR missed?
 - The real blast radius is 47 files, not 40 (some impact is indirect)
+- **`missingCoChange` is the senior-reviewer instinct made explicit:** `sso_config.py` and `test_sso.py` historically move with the auth flow but aren't in this PR — likely an omission to ask the author about
+- `OAuthCallbackView` ships with no test
 
-This frames your entire review before you've read a diff.
+`analyze_diff` returns all of this in one call (the risk / co-change / test / flag sections default on; switch any off for cheap runs). This frames your entire review before you've read a diff.
 
 ---
 
@@ -170,6 +190,25 @@ The author left a TODO comment but didn't create a separate configuration key. T
 
 ---
 
+## Step 6: Did the migration make the architecture worse?
+
+A 40-file migration is exactly the kind of change that quietly introduces a new import cycle or layer violation. If a baseline architecture snapshot was taken on `main` (e.g. in CI before the branch diverged), `compare_change_impact` reports only what *this* change introduced.
+
+**You:** "Did this PR introduce any new import cycles or layer violations versus main?"
+
+```
+compare_change_impact(repoId, baselineSnapshotId: "main-baseline") →
+
+  verdict: "regressed"
+  newCycles: [ [ "apps/auth/oauth2.py", "apps/auth/views.py", "apps/auth/oauth2.py" ] ]
+  newLayerViolations: [ ]
+  resolvedCycles: [ ]
+```
+
+A new cycle between `oauth2.py` and `views.py` that did not exist on `main` — introduced by this PR. Unlike `analyze_diff`'s `architecturalFlags` (which flag *pre-existing* structure), this is a genuine regression to raise. (The PR author can run the same check locally before pushing — and `verify_change` to confirm they covered the `missingCoChange` files surfaced in Step 1.)
+
+---
+
 ## The review summary
 
 45 minutes, structured review. Findings:
@@ -177,7 +216,10 @@ The author left a TODO comment but didn't create a separate configuration key. T
 | Finding | Severity | Location |
 |---------|----------|----------|
 | `authenticate_user` called with old signature | **Blocking** | `admin/views.py:134`, `integrations/sso.py:67` |
+| New import cycle introduced (oauth2 ⇄ views) | **Blocking** | `auth/oauth2.py` ⇄ `auth/views.py` |
 | JWT secret reused as OAuth state signing key | **Major** — flag before merge | `auth/oauth2.py:156` |
+| SSO config historically co-changes but absent from PR | **Question for author** | `auth/sso_config.py` |
+| `OAuthCallbackView` ships with no test | **Minor** | `auth/views.py` |
 | Deleted symbols confirmed dead | **Pass** | legacy.py, sessions.py, basic.py |
 | `require_auth` shim correctly backward compatible | **Pass** | auth/decorators.py |
 | Legacy fallback path covered by tests | **Pass** | tests/auth/ |
@@ -197,3 +239,7 @@ You found two real issues — one blocking, one major — before reading most of
 **Use text search for string-level dependencies.** Symbol analysis doesn't catch JWT_SECRET usage in string context. Text search does.
 
 **Know when to stop.** With the two blocking issues identified and the critical path verified, you have what you need to write a meaningful review. You don't need to read all 40 diffs to give a quality review — you need to read the right ones.
+
+---
+
+→ Reference: [MCP Tools Reference](docs/06-tools-reference.md) — `analyze_diff`, `compare_change_impact`, `verify_change`, `prepare_change`, `find_references`, `get_blast_radius`, `get_symbol_history`, `search_text`

@@ -187,6 +187,21 @@ export interface PureContextConfig {
     maxRecommendedTests: number;
   };
   /**
+   * Refactoring-loop settings (Phase 79: prepare_change / verify_change /
+   * compare_change_impact). The pre-edit orchestrator and post-edit
+   * reconciliation reuse `changeSynthesis.*` for the synthesis caps; this block
+   * only governs target disambiguation.
+   */
+  refactoring: {
+    /**
+     * Maximum candidate symbols returned when prepare_change resolves a free-text
+     * query to a target. When the top candidate is not a clear winner, the tool
+     * returns these candidates with verdict "ambiguous_target" rather than
+     * guessing. Default 5.
+     */
+    maxCandidates: number;
+  };
+  /**
    * Which transport(s) to start.
    *   'stdio' — stdin/stdout (default; required for Claude Code)
    *   'http'  — HTTP + Streamable HTTP
@@ -385,6 +400,9 @@ export const DEFAULT_CONFIG: PureContextConfig = {
     maxSymbolsScored: 25,
     maxCoChangeGaps: 10,
     maxRecommendedTests: 15,
+  },
+  refactoring: {
+    maxCandidates: 5,
   },
   transport: 'stdio',
   http: {
@@ -680,6 +698,20 @@ export function validateConfig(raw: unknown): ValidationResult {
           if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
             errors.push(`changeSynthesis.${key} must be a non-negative integer`);
           }
+        }
+      }
+    }
+  }
+  if ('refactoring' in cfg) {
+    const c = cfg['refactoring'];
+    if (typeof c !== 'object' || c === null || Array.isArray(c)) {
+      errors.push('refactoring must be an object');
+    } else {
+      const r = c as Record<string, unknown>;
+      if ('maxCandidates' in r) {
+        const v = r['maxCandidates'];
+        if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) {
+          errors.push('refactoring.maxCandidates must be a positive integer');
         }
       }
     }

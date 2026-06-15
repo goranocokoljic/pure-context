@@ -131,6 +131,18 @@ Tunable factor weights for `get_symbol_risk`. Each scales the repo-relative (0â€
 | `risk.weights.testGap` | `number` | `0.15` | Whether the symbol appears untested |
 | `risk.weights.coChange` | `number` | `0.15` | How many files historically move with it |
 
+### Change synthesis & refactoring (`changeSynthesis.*`, `refactoring.*`)
+
+Bound the impact-aware change report (used by `analyze_diff`, `prepare_change`, `verify_change`) so it stays token-disciplined on large diffs.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `changeSynthesis.coChangeConfidenceThreshold` | `number` | `0.4` | Minimum directional co-change confidence for a historically-coupled file to be flagged as missing from a change |
+| `changeSynthesis.maxSymbolsScored` | `number` | `25` | Max changed symbols scored for risk per diff (the rest are ranked out by afferent coupling) |
+| `changeSynthesis.maxCoChangeGaps` | `number` | `10` | Max absent co-change partners reported |
+| `changeSynthesis.maxRecommendedTests` | `number` | `15` | Max recommended test files reported |
+| `refactoring.maxCandidates` | `number` | `5` | How many candidate symbols `prepare_change` returns when disambiguating a free-text `query` (verdict `ambiguous_target`) |
+
 ### Transport
 
 | Field | Type | Default | Description |

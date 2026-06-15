@@ -128,11 +128,16 @@ This is the part most code tools leave to humans. PureContext exposes it as MCP 
 | What files historically change *together* with this one (but don't import it)? | `get_co_change` |
 | How risky is this symbol to change, and why? | `get_symbol_risk` |
 | Is it safe to rename / delete / move this? | `check_rename_safe` · `check_delete_safe` · `check_move_safe` |
+| What's the impact *before* I edit, and what will I forget to touch? | `prepare_change` |
+| Did my applied change actually cover everything I planned? | `verify_change` |
+| Did my change introduce a new cycle or layer violation? | `compare_change_impact` |
 | What's the sequenced, risk-annotated plan for a larger refactor? | `plan_refactoring` |
 | Who calls this, and who do they call? | `get_call_hierarchy` · `find_references` |
 | What's churning or accumulating debt? | `get_churn_metrics` · `get_debt_report` · `health_radar` |
 
 **`get_symbol_risk`** is the composite verdict: it fuses change frequency (churn), centrality (how much depends on it), complexity, test-coverage gaps, and temporal co-change into one banded score (`low` / `review` / `high`) with human-readable reasons — never a black-box number, and deliberately **code-centered** (no author or productivity metrics). **`get_co_change`** surfaces the coupling the import graph can't see — the test, the migration, or the feature flag that always moves with a file. Together they let an agent edit unfamiliar code the way a cautious human does: check the blast radius, update what moves with it, and flag what it shouldn't touch alone.
+
+PureContext also closes the loop *around* an edit — **judgment, not actuation** (it never writes files; your agent does): **`prepare_change`** gives a pre-edit impact verdict for a stated intent (and flags the co-change partners you're about to forget), **`verify_change`** reconciles the real diff against that plan (`complete` / `incomplete` / `scope_expanded`), and **`compare_change_impact`** reports the *new* cycles or layer violations a change introduced — never blaming it for pre-existing ones.
 
 → Full tool list and parameters: [AGENT_REFERENCE.md](AGENT_REFERENCE.md) · safe-change workflow: [SAFE-CHANGES.md](SAFE-CHANGES.md)
 

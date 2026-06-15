@@ -27,12 +27,13 @@ The always-on instructions (mandatory workflow, decision rules, anti-patterns) l
 | Find files that historically change together with one | `get_co_change` |
 | Understand symbol-level git history | `get_symbol_history` |
 | Identify high-churn / high-risk files | `get_churn_metrics` |
-| Check if similar code exists across repos | `find_similar` |
-| Search all indexed repos at once | `search_cross_repo` |
+| Check if similar code exists across repos | `search_similar` |
+| Find which other repos consume a symbol | `find_cross_repo_usages` |
+| Search all indexed repos at once | `search_symbols` (set `repoIds`, or omit `repoId`) |
 | Trace a dbt column's lineage | `search_columns` |
 | Get per-file quality scores (complexity, coupling) | `get_quality_metrics` |
 | Find god classes, circular deps, dead code | `detect_antipatterns` |
-| Generate an architecture overview doc | `get_architecture_doc` |
+| Generate an architecture overview doc | `generate_docs` |
 | Find all implementations of an interface / abstract class | `find_implementations` |
 | Trace execution flow (callers / callees tree) | `get_call_hierarchy` |
 | Understand class inheritance (ancestors / descendants) | `get_class_hierarchy` |
@@ -42,6 +43,9 @@ The always-on instructions (mandatory workflow, decision rules, anti-patterns) l
 | Capture an architectural snapshot for before/after | `get_architecture_snapshot` |
 | Pre-flight check before rename / delete / move | `check_rename_safe` / `check_delete_safe` / `check_move_safe` |
 | Get a sequenced, risk-annotated refactoring plan | `plan_refactoring` |
+| Pre-edit impact verdict for an intended change | `prepare_change` |
+| Confirm an applied change is complete (plan vs actual) | `verify_change` |
+| Did my change introduce a new cycle / layer violation? | `compare_change_impact` |
 | 5-axis codebase health score (CI gate / dashboard) | `health_radar` |
 | Compare health before and after a refactoring | `diff_health_radar` |
 | Detailed debt report with per-file rankings | `get_debt_report` |
@@ -207,7 +211,7 @@ Per-file complexity, coupling, cohesion, and documentation coverage scores. Use 
 ### `detect_antipatterns`
 Detect common architectural anti-patterns (god classes, circular dependencies, dead code). Returns structured results with severity levels. Cannot detect runtime coupling or dynamic dispatch issues.
 
-### `get_architecture_doc`
+### `generate_docs`
 Auto-generate an architecture summary in Markdown or Mermaid format. Requires `ai.allowRemoteAI: true`.
 
 **Pre-refactoring workflow:**
@@ -215,7 +219,7 @@ Auto-generate an architecture summary in Markdown or Mermaid format. Requires `a
 get_quality_metrics  → find worst files
 detect_antipatterns  → find structural issues
 get_blast_radius     → understand impact scope
-get_architecture_doc → generate "before" snapshot
+generate_docs        → generate "before" overview
 [make changes]
 detect_antipatterns  → verify anti-patterns resolved
 ```
@@ -261,11 +265,14 @@ All impact sections default **on**; switch any off (`includeRisk`, `includeCoCha
 
 ## Cross-repo tools
 
-### `search_cross_repo`
-Search symbols across multiple indexed repositories simultaneously.
+### Searching all repos at once
+`search_symbols` (and `search_text`) search every indexed repo when you omit `repoId`/`repoIds`, or a chosen subset via `repoIds: [...]`. There is no separate cross-repo *search* tool.
 
-### `find_similar`
-Find semantically similar code across repos. Before implementing new functionality, call this to check if equivalent code already exists. Requires semantic search enabled.
+### `find_cross_repo_usages`
+Find which *other* indexed repos reference an identifier defined in a given repo — i.e. the downstream packages/services that consume a shared-library symbol. Word-boundary text search; heuristic, not type-resolved. Params: `sourceRepoId`, `symbolName`, `symbolKind?`, `targetRepoIds?`, `limit?`.
+
+### `search_similar`
+Find semantically similar code across repos (HNSW vector similarity). Before implementing new functionality, call this to check if equivalent code already exists. Requires semantic search enabled.
 
 Before modifying shared library code, use `get_blast_radius` with `crossRepo: true`.
 
@@ -368,6 +375,34 @@ Generate a sequenced, dependency-ordered plan for a structural change.
 ```
 
 Step ordering is heuristic — validate against actual dependency analysis.
+
+### The refactoring loop: `prepare_change` → edit → `verify_change` → `compare_change_impact`
+
+These three tools are **judgment, not actuation** — none of them edit code. You apply the change with your own tools; they tell you what's safe and what's still missing, each with a plain-English `reasons[]`.
+
+**`prepare_change`** — pre-edit verdict for a stated intent. Give it an `intent` (`rename` / `delete` / `modify` / `extract`) and a target (`targetSymbolId` **or** `query`).
+
+```json
+{ "repoId": "...", "intent": "rename", "targetSymbolId": "ab12cd34ef56" }
+```
+
+Returns `verdict`: `ready` (with `target`, `predictedChange`, `risk`, `missingCoChange`, `recommendedTests`, `coverageGaps`, `architecturalFlags`, `predictionId`, `reasons`), `ambiguous_target` (with `candidates[]` — re-call with the chosen `targetSymbolId`; it never guesses), or `no_target`. Keep `predictedChange.changedFilePaths` and `missingCoChange[].filePath` — `verify_change` needs them.
+
+**`verify_change`** — after you edit, reconcile the real diff against the prediction. Stateless: pass the prediction back inline.
+
+```json
+{ "repoId": "...", "diff": "<git diff>", "predictedFilePaths": ["..."], "predictedCoChange": ["..."] }
+```
+
+Returns `verdict` (`complete` / `incomplete` / `scope_expanded`), `unaddressedCoChange` (planned partners you still didn't touch — the headline), `addressedCoChange`, `unplannedChanges` (scope creep), `coverageGapsRemaining`. Co-change reconciliation is suppressed when `signalQuality` is `low` (shallow git history).
+
+**`compare_change_impact`** — did the change introduce a *new* cycle or layer violation? Snapshot the architecture *before* the change with `get_architecture_snapshot` (action `create`), then after editing + reindexing:
+
+```json
+{ "repoId": "...", "baselineSnapshotId": "<id from get_architecture_snapshot>" }
+```
+
+Returns `verdict` (`regressed` / `improved` / `unchanged` / `no_baseline`), `newCycles` / `newLayerViolations` (what the change introduced), and `resolvedCycles` / `resolvedLayerViolations`. Distinct from `analyze_diff`'s `architecturalFlags`, which flag *pre-existing* issues — this reports only the delta and never blames the change for problems it didn't create. With no baseline snapshot it returns `no_baseline` and degrades to current-state counts.
 
 ---
 
@@ -585,7 +620,7 @@ Per-file coverage map with `coverageRatio` per file and aggregated totals.
 ### Architecture review / onboarding
 ```
 1. list_repos → index_folder if needed
-2. get_architecture_doc({ repoId })        → generate project overview
+2. generate_docs({ repoId })               → generate project overview
 3. get_quality_metrics({ repoId })         → identify weakest files
 4. detect_antipatterns({ repoId })         → find structural issues
 5. get_repo_outline({ repoId })            → survey specific areas

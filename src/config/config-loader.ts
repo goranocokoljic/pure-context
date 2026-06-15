@@ -177,6 +177,10 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
         partial.changeSynthesis?.maxRecommendedTests ??
         DEFAULT_CONFIG.changeSynthesis.maxRecommendedTests,
     },
+    refactoring: {
+      maxCandidates:
+        partial.refactoring?.maxCandidates ?? DEFAULT_CONFIG.refactoring.maxCandidates,
+    },
     transport: partial.transport ?? DEFAULT_CONFIG.transport,
     http: {
       port: pctxPort ?? partial.http?.port ?? DEFAULT_CONFIG.http.port,

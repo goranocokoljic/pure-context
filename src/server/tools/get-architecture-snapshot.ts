@@ -23,6 +23,12 @@ import { randomBytes } from 'crypto';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { getCouplingMap } from '../../core/db/dep-store.js';
 import { findImportCycles } from '../../graph/graph-traversal.js';
+import {
+  computeCurrentCycles,
+  computeCurrentLayerViolations,
+  type StoredCycle,
+  type StoredLayerViolation,
+} from './compare-change-impact.js';
 import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
@@ -66,6 +72,14 @@ interface StoredMetrics {
   avgCoupling: number;
   avgComplexity: number;
   files: string[];
+  /**
+   * Cycle membership + layer violations (Phase 79). Stored so
+   * compare_change_impact can diff this snapshot against the live graph.
+   * Additive: snapshots created before Phase 79 lack these fields and are
+   * treated by compare_change_impact as "no usable baseline".
+   */
+  cycles?: StoredCycle[];
+  layerViolations?: StoredLayerViolation[];
 }
 
 interface SnapshotRecord {
@@ -199,7 +213,21 @@ function computeMetrics(db: Db, repoId: string): StoredMetrics {
       ? Math.round(complexityRow.avg * 100) / 100
       : 0;
 
-  return { fileCount, symbolCount, edgeCount, cycleCount, avgCoupling, avgComplexity, files: filePaths };
+  // Cycle membership + layer violations (Phase 79) — the diffable baseline data.
+  const cycles = computeCurrentCycles(db, repoId);
+  const layerViolations = computeCurrentLayerViolations(db, repoId);
+
+  return {
+    fileCount,
+    symbolCount,
+    edgeCount,
+    cycleCount,
+    avgCoupling,
+    avgComplexity,
+    files: filePaths,
+    cycles,
+    layerViolations,
+  };
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────

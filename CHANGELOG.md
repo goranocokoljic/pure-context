@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.11.0] - 2026-06-14
+
+### Added
+
+**Refactoring loop — `prepare_change` → `verify_change` → `compare_change_impact`**
+
+Three new read-only tools that turn PureContext from "flags risk" into "confirms the change was safe and complete." They are **judgment, not actuation** — none of them edit code; your agent applies the change, and these tell it what's safe and what's still missing, each with a plain-English `reasons[]` (not a bare confidence score). All three are thin consumers of the existing change-synthesis engine.
+
+- **`prepare_change`** — pre-edit verdict for a stated `intent` (`rename` / `delete` / `modify` / `extract`) and a target (`targetSymbolId` or free-text `query`). Resolves the concrete change set and returns the predicted files, composite risk, historically co-changing files MISSING from the change (the "you forgot to touch X" signal), recommended tests, coverage gaps, architectural flags, and a `predictionId`. Returns `ambiguous_target` with candidates when a query has no clear match — it never guesses.
+- **`verify_change`** — post-edit reconciliation of the real diff against the prediction: `unaddressedCoChange` (planned partners still untouched), `addressedCoChange`, `unplannedChanges` (scope creep), and `coverageGapsRemaining`. Verdict `complete` / `incomplete` / `scope_expanded`. Stateless — pass `predictedFilePaths` and `predictedCoChange` back from the prepare_change output. Co-change reconciliation is suppressed when the git signal is low.
+- **`compare_change_impact`** — before/after architecture *regression* delta against a baseline snapshot: `newCycles` and `newLayerViolations` introduced by the change (plus `resolvedCycles` / `resolvedLayerViolations`). Distinct from `analyze_diff`'s `architecturalFlags`, which flag pre-existing issues — this reports only the delta and never blames the change for problems it didn't create. Verdict `regressed` / `improved` / `unchanged` / `no_baseline`.
+
+**`get_architecture_snapshot` stores diffable cycle/layer data.** Snapshots now persist import-cycle membership and layer violations in their metrics (additive — snapshots created before 1.11.0 are treated as "no usable baseline" by `compare_change_impact`).
+
+### Configuration
+
+- `refactoring.maxCandidates` (default 5) — how many candidate symbols `prepare_change` returns when disambiguating a free-text query.
+
+---
+
 ## [1.10.0] - 2026-06-14
 
 ### Added
