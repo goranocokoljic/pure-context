@@ -172,6 +172,24 @@ describe('parseDiff', () => {
     expect(result[0]!.hunks[0]!.oldCount).toBe(1);
     expect(result[0]!.hunks[0]!.newCount).toBe(1);
   });
+
+  it('parses a diff with CRLF line endings (Windows)', () => {
+    // A diff saved to disk / produced by tooling on Windows carries `\r`.
+    // The trailing `\r` must not defeat the `$`-anchored path regexes, which
+    // would otherwise make the whole diff parse as zero files.
+    const crlf = SIMPLE_DIFF.replace(/\n/g, '\r\n');
+    const result = parseDiff(crlf);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.oldPath).toBe('src/foo.ts');
+    expect(result[0]!.newPath).toBe('src/foo.ts');
+    expect(result[0]!.hunks.length).toBeGreaterThan(0);
+    // Content must be clean of the carriage return.
+    for (const h of result[0]!.hunks) {
+      for (const c of [...h.addedContent, ...h.removedContent]) {
+        expect(c).not.toContain('\r');
+      }
+    }
+  });
 });
 
 // ─── getChangedNewRanges ──────────────────────────────────────────────────────

@@ -55,7 +55,12 @@ const DEV_NULL = '/dev/null';
  */
 export function parseDiff(text: string): FileDiff[] {
   const results: FileDiff[] = [];
-  const lines = text.split('\n');
+  // Split on CRLF or LF. `git diff` emits LF, but a diff saved to a file (or
+  // produced by tooling) on Windows can carry `\r`. Leaving the trailing `\r`
+  // on each line breaks the `$`-anchored path regexes below (`.` does not match
+  // `\r`, and `$` without the `m` flag does not match the position before it),
+  // which would make a CRLF diff parse as zero files.
+  const lines = text.split(/\r?\n/);
 
   let current: FileDiff | null = null;
   let currentHunk: DiffHunk | null = null;
