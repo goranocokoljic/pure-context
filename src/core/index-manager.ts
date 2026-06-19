@@ -35,7 +35,7 @@ import { buildGraph } from '../graph/graph-builder.js';
 import { join } from 'path';
 import { track } from './telemetry.js';
 import { discoverProviders } from '../providers/provider-registry.js';
-import { isGitRepo, readFileHistory, readRepoCommitFiles } from './git-log-reader.js';
+import { isGitRepo, readRepoFileHistories, readRepoCommitFiles } from './git-log-reader.js';
 import { updateFileGitMeta } from './db/file-store.js';
 import { insertGitCommits, deleteGitMetadataForFile } from './db/git-metadata-store.js';
 import { insertCommitFiles, deleteCommitFilesForRepo } from './db/co-change-store.js';
@@ -364,17 +364,18 @@ export async function indexFolder(
   if (toProcess.length > 0 && !options.skipGit && await isGitRepo(absRoot)) {
     logger.info(`Capturing git metadata for ${toProcess.length} file(s)`);
 
-    // Bounded concurrency — avoid spawning hundreds of git processes at once.
-    const GIT_CONCURRENCY = 4;
-    const filePaths = toProcess.map((f) => f.relPath);
-
-    for (let i = 0; i < filePaths.length; i += GIT_CONCURRENCY) {
-      const chunk = filePaths.slice(i, i + GIT_CONCURRENCY);
-      await Promise.all(
-        chunk.map(async (relPath) => {
-          try {
-            const meta = await readFileHistory(absRoot, relPath);
-            if (!meta) return;
+    // Single repo-level `git log` pass instead of 2 spawns per file. On a
+    // many-file repo the old per-file path spawned thousands of git processes
+    // (4-wide), which dominated indexing time — minutes on a fast disk, far
+    // worse on machines where each `git.exe` launch is scanned by antivirus.
+    const fileHistoryDepth = getConfig().git?.fileHistoryDepth ?? 0;
+    try {
+      const histories = await readRepoFileHistories(absRoot, { maxCommits: fileHistoryDepth });
+      if (histories) {
+        db.transaction(() => {
+          for (const { relPath } of toProcess) {
+            const meta = histories.get(relPath.replace(/\\/g, '/'));
+            if (!meta) continue;
 
             updateFileGitMeta(db, repoId, relPath, {
               lastCommitSha: meta.lastCommit.sha,
@@ -387,11 +388,11 @@ export async function indexFolder(
             // Replace stored commit history for this file.
             deleteGitMetadataForFile(db, repoId, relPath);
             insertGitCommits(db, repoId, relPath, meta.history);
-          } catch (err) {
-            logger.debug(`Git metadata skipped for ${relPath}: ${err}`);
           }
-        }),
-      );
+        })();
+      }
+    } catch (err) {
+      logger.debug(`Git metadata capture skipped: ${err}`);
     }
 
     logger.info('Git metadata capture complete');

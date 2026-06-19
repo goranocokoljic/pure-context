@@ -26,6 +26,8 @@ import {
   readFileHistory,
   readRepoMeta,
   parseRepoCommitFiles,
+  parseRepoFileHistories,
+  readRepoFileHistories,
   type CommitRecord,
 } from '../../src/core/git-log-reader.js';
 
@@ -294,5 +296,125 @@ describe('parseRepoCommitFiles', () => {
 
   it('returns empty array for empty output', () => {
     expect(parseRepoCommitFiles('')).toEqual([]);
+  });
+});
+
+describe('parseRepoFileHistories', () => {
+  const M = '@@PCXCOMMIT@@';
+
+  // Build a single-pass `git log --name-only --format=<M>%H|%an|%ae|%at|%s` stream.
+  function stream(
+    commits: Array<{ c: CommitRecord; files: string[] }>,
+  ): string {
+    const lines: string[] = [];
+    for (const { c, files } of commits) {
+      lines.push(`${M}${c.sha}|${c.authorName}|${c.authorEmail}|${c.date}|${c.message}`);
+      lines.push('');
+      lines.push(...files);
+      lines.push('');
+    }
+    return lines.join('\n');
+  }
+
+  const mk = (sha: string, date: number, message = 'msg'): CommitRecord => ({
+    sha,
+    authorName: 'Ada',
+    authorEmail: 'ada@x.com',
+    date,
+    message,
+  });
+
+  it('aggregates each file across commits, newest-first', () => {
+    // Commits arrive newest-first (as git log emits them).
+    const out = stream([
+      { c: mk('c3', 3003), files: ['src/a.ts', 'src/b.ts'] },
+      { c: mk('c2', 2002), files: ['src/a.ts'] },
+      { c: mk('c1', 1001), files: ['src/a.ts', 'src/c.ts'] },
+    ]);
+
+    const map = parseRepoFileHistories(out);
+
+    const a = map.get('src/a.ts')!;
+    expect(a.commitCount).toBe(3);
+    expect(a.history.map((h) => h.sha)).toEqual(['c3', 'c2', 'c1']);
+    expect(a.lastCommit.sha).toBe('c3'); // newest
+
+    expect(map.get('src/b.ts')!.commitCount).toBe(1);
+    expect(map.get('src/c.ts')!.commitCount).toBe(1);
+  });
+
+  it('caps history length at the historyLimit but keeps the full count', () => {
+    const commits = Array.from({ length: 25 }, (_, i) =>
+      ({ c: mk(`s${25 - i}`, 5000 - i), files: ['src/hot.ts'] }),
+    );
+    const map = parseRepoFileHistories(stream(commits), 10);
+
+    const hot = map.get('src/hot.ts')!;
+    expect(hot.history).toHaveLength(10);          // limited
+    expect(hot.history[0].sha).toBe('s25');        // newest kept
+    expect(hot.commitCount).toBe(25);              // full count preserved
+  });
+
+  it('caps reported commitCount at 501 ("500+")', () => {
+    const commits = Array.from({ length: 600 }, (_, i) =>
+      ({ c: mk(`x${i}`, 9000 - i), files: ['src/churny.ts'] }),
+    );
+    const map = parseRepoFileHistories(stream(commits), 10);
+    expect(map.get('src/churny.ts')!.commitCount).toBe(501);
+  });
+
+  it('normalizes backslashes in paths', () => {
+    const out = stream([{ c: mk('w1', 100), files: ['src\\win\\path.ts'] }]);
+    const map = parseRepoFileHistories(out);
+    expect(map.has('src/win/path.ts')).toBe(true);
+  });
+
+  it('returns an empty map for empty output', () => {
+    expect(parseRepoFileHistories('').size).toBe(0);
+  });
+});
+
+describe('readRepoFileHistories', () => {
+  const M = '@@PCXCOMMIT@@';
+
+  it('captures all files in a SINGLE git spawn', async () => {
+    const out = [
+      `${M}abc|Ada|ada@x.com|3003|feat: x`,
+      '',
+      'src/a.ts',
+      'src/b.ts',
+      '',
+    ].join('\n');
+
+    mockSpawn.mockReturnValueOnce(makeFakeProcess({ stdout: out }));
+
+    const map = await readRepoFileHistories('/repo');
+
+    expect(mockSpawn).toHaveBeenCalledTimes(1); // the whole point: one spawn
+    expect(map).not.toBeNull();
+    expect(map!.get('src/a.ts')!.lastCommit.sha).toBe('abc');
+    expect(map!.get('src/b.ts')!.commitCount).toBe(1);
+  });
+
+  it('omits -n for full history (maxCommits=0 default)', async () => {
+    mockSpawn.mockReturnValueOnce(makeFakeProcess({ stdout: '' }));
+    await readRepoFileHistories('/repo');
+    const args = mockSpawn.mock.calls[0][1] as string[];
+    expect(args).toContain('--name-only');
+    expect(args.indexOf('-n')).toBe(-1);
+  });
+
+  it('passes -n when a positive maxCommits is given', async () => {
+    mockSpawn.mockReturnValueOnce(makeFakeProcess({ stdout: '' }));
+    await readRepoFileHistories('/repo', { maxCommits: 500 });
+    const args = mockSpawn.mock.calls[0][1] as string[];
+    const nIdx = args.indexOf('-n');
+    expect(nIdx).toBeGreaterThan(-1);
+    expect(args[nIdx + 1]).toBe('500');
+  });
+
+  it('returns null when git fails', async () => {
+    mockSpawn.mockReturnValueOnce(makeFakeProcess({ exitCode: 128, stderr: 'fatal' }));
+    expect(await readRepoFileHistories('/repo')).toBeNull();
   });
 });

@@ -153,6 +153,7 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
     },
     git: {
       coChangeDepth: partial.git?.coChangeDepth ?? DEFAULT_CONFIG.git.coChangeDepth,
+      fileHistoryDepth: partial.git?.fileHistoryDepth ?? DEFAULT_CONFIG.git.fileHistoryDepth,
       megaCommitThreshold:
         partial.git?.megaCommitThreshold ?? DEFAULT_CONFIG.git.megaCommitThreshold,
     },

@@ -390,3 +390,122 @@ export async function readRepoCommitFiles(
 
   return parseRepoCommitFiles(logOutput);
 }
+
+// ─── Repo-level per-file history capture (single-pass) ─────────────────────────
+
+/**
+ * Cap on a file's reported commit count. Matches the legacy per-file
+ * `readFileHistory` behaviour where "501" means "500+".
+ */
+const FILE_HISTORY_COUNT_CAP = 501;
+
+/**
+ * Parse a `%H|%an|%ae|%at|%s` header (the marker already stripped) into a
+ * CommitRecord, or null when the line is malformed. Splits on the first four
+ * `|` so a `|` inside the subject is preserved.
+ */
+function parseCommitHeader(header: string): CommitRecord | null {
+  const idx1 = header.indexOf('|');
+  const idx2 = header.indexOf('|', idx1 + 1);
+  const idx3 = header.indexOf('|', idx2 + 1);
+  const idx4 = header.indexOf('|', idx3 + 1);
+  if (idx1 < 0 || idx2 < 0 || idx3 < 0 || idx4 < 0) return null;
+
+  const sha = header.slice(0, idx1).trim();
+  const authorName = header.slice(idx1 + 1, idx2).trim();
+  const authorEmail = header.slice(idx2 + 1, idx3).trim();
+  const date = parseInt(header.slice(idx3 + 1, idx4).trim(), 10);
+  const message = header.slice(idx4 + 1).trim();
+  if (!sha || isNaN(date)) return null;
+
+  return { sha, authorName, authorEmail, date, message };
+}
+
+export interface RepoFileHistoryOptions {
+  /** Depth of the single `git log` pass. 0 = full history (default). */
+  maxCommits?: number;
+  /** Commits kept in each file's `history` array (newest first). Default 10. */
+  historyLimit?: number;
+}
+
+/**
+ * Parse the output of `git log --name-only --format=<marker>%H|%an|%ae|%at|%s`
+ * into per-file git metadata, aggregating every file across all commits in the
+ * stream. Commits arrive newest-first, so each file's `history` is naturally
+ * newest-first and `lastCommit` is the first commit that touched it.
+ */
+export function parseRepoFileHistories(
+  output: string,
+  historyLimit = 10,
+): Map<string, FileGitMeta> {
+  const agg = new Map<string, { history: CommitRecord[]; count: number }>();
+  let current: CommitRecord | null = null;
+
+  for (const rawLine of output.split('\n')) {
+    const line = rawLine.replace(/\r$/, '');
+    if (line.startsWith(COMMIT_MARKER)) {
+      current = parseCommitHeader(line.slice(COMMIT_MARKER.length));
+      continue;
+    }
+    const trimmed = line.trim();
+    if (!trimmed || !current) continue;
+
+    const filePath = trimmed.replace(/\\/g, '/');
+    let entry = agg.get(filePath);
+    if (!entry) {
+      entry = { history: [], count: 0 };
+      agg.set(filePath, entry);
+    }
+    entry.count++;
+    if (entry.history.length < historyLimit) entry.history.push(current);
+  }
+
+  const result = new Map<string, FileGitMeta>();
+  for (const [filePath, entry] of agg) {
+    if (entry.history.length === 0) continue;
+    result.set(filePath, {
+      lastCommit: entry.history[0]!,
+      commitCount: Math.min(entry.count, FILE_HISTORY_COUNT_CAP),
+      history: entry.history,
+    });
+  }
+  return result;
+}
+
+/**
+ * Read per-file commit history for the WHOLE repository in a SINGLE `git log`
+ * invocation, returning a map of repo-relative path → `FileGitMeta`.
+ *
+ * This replaces N×2 per-file `readFileHistory` spawns (one `--follow` log +
+ * one `--follow` count each) with one repo-level pass — the dominant cost of
+ * indexing a many-file repo, especially on machines where process spawning is
+ * expensive (e.g. antivirus scanning every `git.exe` launch).
+ *
+ * Tradeoff vs `readFileHistory`: this pass does NOT use `--follow`, so commit
+ * history for a renamed file only covers commits since its most recent rename
+ * (consistent with the repo-level co-change capture, `readRepoCommitFiles`).
+ *
+ * @param repoRoot  Absolute path to the git working tree root.
+ * @param opts      Depth + per-file history limit. `maxCommits: 0` = full history.
+ * @returns         Map keyed by forward-slash repo-relative path, or `null` when
+ *                  the directory is not a git repo / git is unavailable.
+ */
+export async function readRepoFileHistories(
+  repoRoot: string,
+  opts: RepoFileHistoryOptions = {},
+): Promise<Map<string, FileGitMeta> | null> {
+  const historyLimit = opts.historyLimit ?? 10;
+  const maxCommits = opts.maxCommits ?? 0;
+
+  const args = ['log', '--name-only', `--format=${COMMIT_MARKER}%H|%an|%ae|%at|%s`];
+  if (maxCommits > 0) args.push('-n', String(maxCommits));
+
+  let logOutput: string;
+  try {
+    logOutput = await runGit(args, repoRoot, REPO_LOG_TIMEOUT_MS);
+  } catch {
+    return null;
+  }
+
+  return parseRepoFileHistories(logOutput, historyLimit);
+}

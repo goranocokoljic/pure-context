@@ -31,7 +31,16 @@ export function splitVueSFC(source: Buffer, filePath: string): ProcessedBlock[] 
   const str = source.toString('utf8');
 
   // ── Validate tag balance ──────────────────────────────────────────────────
-  const openCount = countMatches(str, /<script\b/gi);
+  // A real SFC top-level <script> block always starts at column 0. Anchoring
+  // the OPEN match to the start of a line (multiline ^) ignores the many ways
+  // "<script" legitimately appears *inside* a block without being a tag:
+  //   • a regex literal in the script:   const re = /<script\b...<\/script>/g
+  //   • an HTML string in script/template: '        <script src="...">'
+  //     (whose closing tag is conventionally escaped as <\/script> to survive
+  //      Vue's own compiler, so it never matches the plain close below).
+  // The CLOSE match stays unanchored so single-line blocks
+  // (`<script>…</script>`) still balance and parse correctly.
+  const openCount = countMatches(str, /^<script\b/gim);
   const closeCount = countMatches(str, /<\/script>/gi);
   if (openCount !== closeCount) {
     throw new ParseError(
@@ -47,7 +56,9 @@ export function splitVueSFC(source: Buffer, filePath: string): ProcessedBlock[] 
   // ── Extract script blocks ─────────────────────────────────────────────────
   // Captures: group 1 = attributes (everything between <script and >)
   //           group 2 = inner content
-  const SCRIPT_RE = /<script([^>]*)>([\s\S]*?)<\/script>/gi;
+  // Open anchored to column 0 (see above); non-greedy content stops at the
+  // first plain </script>.
+  const SCRIPT_RE = /^<script\b([^>]*)>([\s\S]*?)<\/script>/gim;
   const blocks: ProcessedBlock[] = [];
   let match: RegExpExecArray | null;
 

@@ -142,6 +142,41 @@ describe('splitVueSFC', () => {
     expect(blocks[0]!.content.toString()).toContain('const x = 1');
   });
 
+  // ── Embedded "<script" that is NOT a top-level SFC tag ──────────────────────
+  // Real top-level <script> blocks start at column 0; "<script" appearing
+  // mid-line (regex literals, JS strings, indented template markup) must not be
+  // counted as a tag.
+
+  it('ignores a <script regex literal inside the script body', () => {
+    // Mirrors a real component (TextEditor.vue): a regex that matches <script>…</script>.
+    const sfc = buf(
+      '<script setup>\n' +
+      '  const scriptRegex = /<script\\b[^>]*>[\\s\\S]*?<\\/script\\b[^>]*>/g\n' +
+      '  const el = document.createElement("script")\n' +
+      '</script>',
+    );
+    const blocks = splitVueSFC(sfc, 'TextEditor.vue');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.content.toString('utf8')).toContain('scriptRegex');
+  });
+
+  it('ignores indented <script> HTML strings inside the script body', () => {
+    // Mirrors Sudoku.vue: JS strings that build HTML containing <script> tags,
+    // indented and with closes escaped as <\/script> to survive Vue's compiler.
+    const sfc = buf(
+      '<script setup>\n' +
+      '  const html = `\n' +
+      '        <script type="text/javascript" src="/a.js"><\\/script>\n' +
+      '        <script>window.go()<\\/script>\n' +
+      '  `\n' +
+      '  useGame(html)\n' +
+      '</script>',
+    );
+    const blocks = splitVueSFC(sfc, 'Sudoku.vue');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.content.toString('utf8')).toContain('useGame');
+  });
+
   // ── Error cases ─────────────────────────────────────────────────────────────
 
   it('throws ParseError for unclosed <script> tag', () => {

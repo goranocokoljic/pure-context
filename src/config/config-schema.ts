@@ -142,6 +142,15 @@ export interface PureContextConfig {
      */
     coChangeDepth: number;
     /**
+     * Depth of the single repo-level `git log --name-only` pass that captures
+     * per-file commit history (last commit, commit count, recent commits) at
+     * index time. 0 = full history (default) — one cheap git call regardless of
+     * file count. Set a positive bound (e.g. 5000) only for very large monorepos
+     * where full-history output would be excessive; files untouched within the
+     * window then receive no git metadata.
+     */
+    fileHistoryDepth: number;
+    /**
      * Commits touching more than this many files are treated as mega-commits
      * (reformats, lockfile sweeps, codemods) and excluded / down-weighted in
      * co-change scoring so they do not manufacture spurious coupling.
@@ -384,6 +393,7 @@ export const DEFAULT_CONFIG: PureContextConfig = {
   },
   git: {
     coChangeDepth: 300,
+    fileHistoryDepth: 0,
     megaCommitThreshold: 30,
   },
   risk: {
@@ -651,6 +661,12 @@ export function validateConfig(raw: unknown): ValidationResult {
         const v = git['coChangeDepth'];
         if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
           errors.push('git.coChangeDepth must be a non-negative integer (0 = disabled)');
+        }
+      }
+      if ('fileHistoryDepth' in git) {
+        const v = git['fileHistoryDepth'];
+        if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+          errors.push('git.fileHistoryDepth must be a non-negative integer (0 = full history)');
         }
       }
       if ('megaCommitThreshold' in git) {
