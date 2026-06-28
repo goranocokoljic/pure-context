@@ -45,19 +45,26 @@ Agents and integrations built against `v1.x` will not break until `v2.0`.
 | `ai.*` config group | May change as AI summarization matures |
 | Response field order | JSON objects — do not rely on ordering |
 
-For the full list of stable tools and their exact parameter/response contracts, see [docs/API_STABILITY.md](API_STABILITY.md).
+For the full list of tools and their exact parameter/response contracts, see the [MCP Tools Reference](06-tools-reference.md).
 
 ---
 
 ## Stable tools (1.x)
 
-All tools listed in [MCP Tools Reference](06-tools-reference.md) are stable in 1.x, with the exception of tools in the experimental list below which are marked `@experimental` until a future stabilization release.
+**Every tool listed in the [MCP Tools Reference](06-tools-reference.md) is stable in 1.x** under the SemVer policy above: a tool's name and required parameters will not change or be removed within the `1.x` line, and new tools arrive as minor releases. There is currently no separate `@experimental` tool tier — the reference is the single source of truth for the tool surface.
 
-**Stable tool list:**
-`index_folder` · `index_repo` · `resolve_repo` · `list_repos` · `search_symbols` · `search_text` · `get_symbol_source` · `get_file_outline` · `get_repo_outline` · `get_file_tree` · `get_context_bundle` · `get_blast_radius` · `find_importers` · `find_dead_code` · `get_savings_stats` · `get_layer_violations`
+The tool surface has grown well beyond the original 1.0 core. Families added since:
 
-**Experimental:**
-`invalidate_cache` · `get_file_content` · `get_symbols` · `find_references` · `search_semantic` · `search_cross_repo` · `find_similar` · `get_symbol_history` · `get_churn_metrics` · `get_quality_metrics` · `detect_antipatterns` · `get_architecture_doc` · `search_columns`
+| Family | Tools | Since |
+|--------|-------|-------|
+| Relationship analysis | `find_implementations`, `get_call_hierarchy`, `get_class_hierarchy`, `find_cycles`, `get_coupling_map` | 1.2.0 |
+| Architecture & visualization | `get_layer_violations`, `detect_antipatterns`, `render_diagram` (+ variants), `get_architecture_snapshot` | 1.2.0+ |
+| Git & temporal | `get_symbol_history`, `get_churn_metrics`, `get_co_change`, `get_symbol_risk` | 1.8.0 |
+| Change & refactoring | `analyze_diff`, `prepare_change`, `verify_change`, `compare_change_impact`, `merge_readiness` | 1.9.0–1.12.0 |
+| Harness freshness & consistency | `index_file`, `check_index_staleness`, `check_consistency` | 1.12.0 |
+| Active context | `get_task_context` (`mode:"associative"`) | 1.13.0 |
+
+When a tool is on track for removal in a future major, it follows the deprecation process below (`_deprecated: true` in responses for one minor cycle first).
 
 ---
 
@@ -65,7 +72,7 @@ All tools listed in [MCP Tools Reference](06-tools-reference.md) are stable in 1
 
 The following `SymbolKind` values are stable in 1.x:
 
-`function` · `class` · `method` · `const` · `type` · `interface` · `enum` · `component` · `composable` · `hook` · `route` · `decorator` · `middleware`
+`function` · `class` · `method` · `const` · `type` · `interface` · `enum` · `component` · `composable` · `hook` · `route` · `decorator` · `middleware` · `property` · `model` · `view` · `struct` · `macro` · `signal`
 
 New kinds may be added in minor releases. Clients should handle unknown kinds gracefully (do not throw on unknown kind values).
 
@@ -102,13 +109,16 @@ See [CHANGELOG.md](../CHANGELOG.md) for the full version history.
 
 | Version | Highlights |
 |---------|-----------|
-| `1.0.0` | Stable release: prebuilt binaries, 19 languages, 20+ framework adapters, FTS5 search, HNSW semantic search, Web UI, rate limiting, Docker |
-| `1.1.0` | `find_references`, `get_file_content`, `get_symbols`, `invalidate_cache` |
-| `1.2.0` | search debug mode, `context_lines`/`verify`, GitHub API indexing, Gemini Flash |
-| `1.3.0` | context providers, dbt, `search_columns`, OpenAPI, SQL handler |
-| `1.4.0` | 15 new language handlers (34 total) |
-| `1.5.0` | cross-repo search, code similarity, MCP Resources |
-| `1.6.0` | git & history integration |
-| `1.7.0` | AI-powered architecture analysis |
-| `1.8.0` | enhanced Web UI |
-| `1.9.0` | distribution & platform (registry, webhooks, GitHub Actions, VS Code extension) |
+| `1.0.0` | Core symbol indexing (TS/JS): prebuilt binaries, 19 languages, 20+ framework adapters, FTS5 search, HNSW semantic search, Web UI, rate limiting, Docker |
+| `1.1.0` | New tools: `find_references`, `get_file_content`, `get_symbols`, `invalidate_cache` |
+| `1.2.0` | Advanced relationship analysis (call/class hierarchy, cycles, coupling) |
+| `1.3.0` | Search quality (FTS5 ranking, synonyms); dbt `search_columns`, OpenAPI, SQL |
+| `1.4.0` | New MCP tools + expanded language handlers |
+| `1.5.0` | New language handlers; cross-repo search, code similarity, MCP Resources |
+| `1.7.0` | Svelte and Astro single-file-component support (Phase 75) |
+| `1.8.0` | Temporal risk intelligence — `get_co_change`, `get_symbol_risk` (Phase 76) |
+| `1.9.0` | Change-impact synthesis — `analyze_diff` reviews by impact (Phase 77) |
+| `1.10.0` | Node-version independence — WASM SQLite fallback (Phase 78) |
+| `1.11.0` | Refactoring loop — `prepare_change` → `verify_change` → `compare_change_impact` (Phase 79) |
+| `1.12.0` | Harness Loop Fit — `index_file`, `check_consistency`, `merge_readiness`, gate envelope (Phase 80) |
+| `1.13.0` | Active context reconstruction — `get_task_context` associative mode (Phase 81) |

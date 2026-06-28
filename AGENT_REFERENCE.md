@@ -9,6 +9,7 @@ The always-on instructions (mandatory workflow, decision rules, anti-patterns) l
 
 | I need to… | Use |
 |---|---|
+| Orient on a task — get the relevant symbols + files from a task description | `get_task_context` |
 | Find a function/class/method by name | `search_symbols` |
 | Find code by what it does (meaning, not name) | `search_semantic` |
 | Find a literal string, comment, or config value | `search_text` |
@@ -189,6 +190,9 @@ Directory tree with file counts. Use when you need to understand the project's f
 
 ### `find_references`
 Find all usage sites for a symbol across the repo. Use before renaming or modifying a symbol.
+
+### `get_task_context`
+Assemble a focused context bundle from a natural-language task description — the symbols and files most relevant to the work. The cold-start orientation front door. In the default `mode:"associative"` it discovers seed symbols, then **walks the real dependency + co-change graph** (imports, callers, historically co-changing files), so a structurally essential but lexically dissimilar symbol can be surfaced — not just keyword matches. Each item carries a `role` derived from the graph edge (`dependency`/`caller`/`historical`/`primary`) and `provenance`; the result adds `evidenceGaps` (`lowConfidenceSeeds`/`droppedByBudget`/`unselectedCoChange`) and `suggestedProbes[]` so you can decide whether to probe further. Works with zero embeddings (ranks by graph provenance). Pass `mode:"flat"` for legacy single-pass similarity. Fanout is governed by config `taskContext.*`.
 
 ---
 

@@ -46,6 +46,7 @@ Do not read entire files to find code. Use the tools:
 
 | Goal | Tool |
 |------|------|
+| Orient on a task (relevant symbols + files from a description) | `get_task_context` |
 | Find a function/class/method by name | `search_symbols` |
 | Find code by what it does | `search_semantic` |
 | Find a literal string, comment, or config value | `search_text` |
@@ -56,6 +57,12 @@ Do not read entire files to find code. Use the tools:
 | Know what breaks if I change a symbol | `get_blast_radius` |
 | How risky is a symbol to change (composite verdict) | `get_symbol_risk` |
 | Files that historically change together with this one | `get_co_change` |
+| Impact verdict BEFORE editing existing code | `prepare_change` |
+| Dedup / pattern check before writing NEW code | `check_consistency` |
+| Re-index a file right after editing it (mid-task) | `index_file` |
+| Confirm a finished edit is complete (plan vs actual) | `verify_change` |
+| Did my change add a cycle / layer violation? | `compare_change_impact` |
+| One go/no-go before merging a change | `merge_readiness` |
 | Find all call sites for a symbol | `find_references` |
 | Non-symbol file content (imports block, config) | `get_file_content` with `startLine`/`endLine` |
 | All implementations of an interface | `find_implementations` |
@@ -104,6 +111,34 @@ Every response includes a `_tokenEstimate`. Use it to decide whether to fetch mo
 
 **Do not re-search when `search_symbols` returns `negative_evidence`.**
 If the response includes `verdict: "no_match"`, the symbol does not exist in this codebase. Report the gap to the user rather than trying variant queries.
+
+---
+
+## Changing code safely — close the loop
+
+PureContext is **judgment, not actuation** — it never edits files. You make the edit; these tools tell you what's safe before you start and what you missed after you finish. Run the loop for any non-trivial change:
+
+```
+1. get_task_context({ repoId, task })       → orient: relevant symbols/files + evidenceGaps
+2a. EXISTING code → prepare_change({ repoId, intent, targetSymbolId | query })
+                                            → predicted files, risk, missingCoChange, tests, gate
+                                            → keep predictedFilePaths + missingCoChange for step 5
+2b. NEW symbol   → check_consistency({ repoId, name, kind, signature, intendedFilePath })
+                                            → duplicates, pattern to follow, where it belongs
+3. [make the edit]
+4. index_file({ repoId, filePaths })        → refresh the index, O(one file) — NOT index_folder
+5. verify_change({ repoId, diff, predictedFilePaths, predictedCoChange })
+                                            → unaddressedCoChange, unplannedChanges, coverage gaps
+6. merge_readiness({ repoId, diff, ... })   → one go/no-go: completeness + architecture regression
+```
+
+**Gate envelope.** `prepare_change`, `verify_change`, `compare_change_impact`, `check_consistency`, and `merge_readiness` each return `{ gate: "pass" | "warn" | "block", gateReasons, nextAction }`. Branch on `gate`: `pass` = proceed · `warn` = proceed with judgment · `block` = fix what `gateReasons` lists first.
+
+- **`prepare_change`** intents: `rename` / `delete` / `modify` / `extract`. Returns `ambiguous_target` + candidates when a `query` has no clear winner (it never guesses) and `no_target` when nothing matches.
+- **`verify_change`** is **stateless** — pass `predictedFilePaths` and `predictedCoChange` back inline from `prepare_change`. Co-change reconciliation is suppressed on low git signal (it won't invent "you forgot X").
+- **`compare_change_impact`** reports only the regression *delta* vs a baseline `get_architecture_snapshot` — new cycles / layer violations the change introduced, never pre-existing ones.
+
+> Mid-task freshness is the linchpin: after every write call `index_file` (single-file, repo-size-independent), never `index_folder` (it re-scans the whole tree and stalls). See `docs/HARNESS-CONTRACT.md` for full greenfield/brownfield loop recipes.
 
 ---
 
@@ -203,13 +238,17 @@ If the response includes `verdict: "no_match"`, the symbol does not exist in thi
 
 ## Keeping the index fresh
 
-The file watcher triggers incremental re-indexing automatically. If the index seems stale:
+Searches are only as good as the index. The cheap, mid-task path is the single most important freshness habit:
 
 ```
-index_folder({ path, force: false })   → incremental (changed files only)
-index_folder({ path, force: true })    → full re-index
+index_file({ repoId, filePaths })      → re-index just the files you edited (O(one file))
+check_index_staleness({ repoId, filePaths }) → is the index current? (no discovery pass)
+index_folder({ path })                 → cold start / first index of a repo (re-scans the whole tree)
+index_folder({ path, force: true })    → full re-index (rebuild everything)
 invalidate_cache({ repoId })           → clear hashes, then index_folder
 ```
+
+**After editing a file, call `index_file` — never `index_folder`.** `index_folder` stats every file in the tree (discovery-bound, slow on large repos); `index_file` skips discovery entirely and re-indexes only what you pass. Reserve `index_folder` for the first index of a repo. Use `check_index_staleness` at task start to decide between a cold `index_folder` and targeted `index_file`.
 
 ### Claude Code hooks (optional but recommended)
 
@@ -219,15 +258,16 @@ Install the PureContext hooks to keep the index in sync automatically and preser
 npx purecontext-mcp hooks --install
 ```
 
-This installs three hooks into `~/.claude/settings.json`:
+The hooks register as CLI commands in `~/.claude/settings.json` (no scripts copied — they update with the package). Highlights:
 
-| Hook | When it fires | What it does |
-|------|--------------|-------------|
-| **Index hook** | After `Edit` / `Write` | Re-indexes the modified file immediately |
-| **Session snapshot** | Before context compaction | Injects indexed repo list into the next turn so orientation is preserved |
-| **Edit guard** | Before `Edit` / `Write` | Soft warning suggesting `get_blast_radius` and `get_symbol_source` first |
+| Hook event | What it does |
+|------------|-------------|
+| **PostToolUse** | After `Edit`/`Write`, re-indexes the modified file via the cheap `index_file` path (bootstraps a full index on first sight) |
+| **PreToolUse** | Soft edit guard — suggests `get_blast_radius` / `get_symbol_source` before editing |
+| **PreCompact** | Injects the indexed-repo list before context compaction so orientation survives |
+| **SubagentStart** | Injects condensed repo orientation for newly spawned subagents |
 
-All hooks are Node.js scripts — they work identically on Windows, Linux, and macOS.
+All hooks are Node.js — identical on Windows, Linux, and macOS.
 
 ---
 

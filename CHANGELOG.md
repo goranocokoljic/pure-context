@@ -11,6 +11,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.13.0] - 2026-06-28
+
+### Added
+
+**Active context reconstruction — `get_task_context` associative mode**
+
+`get_task_context` no longer does a single-shot "top-N similarity → one AI selection" pass. In the new default `associative` mode it discovers seed symbols, then **walks the real dependency and temporal graph** around them — imports (forward deps), callers (reverse deps via blast radius), and historically co-changing files — so a structurally essential but lexically dissimilar symbol (a dependency, a caller, a co-change partner) can now be selected.
+
+- Each returned item carries a `role` **derived from the graph edge that surfaced it** (`dependency` / `caller` / `historical` / `primary`), plus a `provenance` object (`{ via, seedId?, confidence? }`). The AI keeps only the prose `relevanceReason`.
+- New top-level `evidenceGaps` (`lowConfidenceSeeds`, `droppedByBudget`, `unselectedCoChange`) and `suggestedProbes[]` tell the agent what it still hasn't seen — the agent is the router and decides whether to probe further (no server-side reflective loop).
+- Works **with zero embeddings**: when no AI/embedding provider is configured, results rank by graph provenance instead of keyword similarity — the floor rises from "top-N keyword guess" to "seeds + real graph neighborhood" (pure SQL).
+- `_meta` gains `mode`, `seedsExpanded`, and `poolSize`.
+- Pass `mode:"flat"` for the legacy single-pass similarity selection — **byte-identical to pre-1.13.0 output** (regression-guarded).
+
+These are thin consumers of existing engines (`get_context_bundle`, `get_blast_radius`, `get_co_change`) — no new analysis engine.
+
+### Configuration
+
+- `taskContext.seedCount` (default 8) — top-N discovery hits expanded via the graph.
+- `taskContext.expansionDepth` (default 1) — dep-graph hops walked per seed (forward + reverse).
+- `taskContext.maxPool` (default 60) — candidate pool cap before ranking.
+- `taskContext.maxCoChangePartners` (default 5) — co-change partner files pulled per seed.
+- `taskContext.maxSymbolsPerPartner` (default 5) — symbols pulled per co-change partner file.
+
+---
+
+## [1.12.0] - 2026-06-28
+
+### Added
+
+**Harness Loop Fit — making PureContext usable inside automated codegen harnesses**
+
+PureContext is the persistent cross-process brain a harness lacks: it tells the generating agent what already exists, what it's drifting from, and what it forgot — without re-reading the codebase from scratch every run. New tools across index freshness, greenfield consistency, and brownfield merge-gating:
+
+- **`index_file`** — targeted re-index of one or a few files **without** the full-tree discovery pass `index_folder` performs (O(one file), independent of repo size). This is the mid-run freshness path: call it after writing a file so subsequent searches reflect current state. Firing `index_folder` after every edit is discovery-bound and stalls; `index_file` does not.
+- **`check_index_staleness`** — cheaply check whether the index is current with no discovery pass. Pass `filePaths` for a per-file `fresh`/`stale` verdict (stored content hash vs disk); omit them for a repo-level summary. Use at task start to choose a cold `index_folder` vs targeted `index_file`.
+- **`check_consistency`** — the greenfield pre-write front door: given an intended new symbol (name/kind/signature/target dir) it returns `duplicates` ("you already wrote this"), `patternFit` (sibling exemplars), `placement`, and `existingApiPointer`. Runs on **structural search alone — no embedding provider required** (`mode:"structural"`); `signalQuality:"low"` suppresses dedup on a sparse index.
+- **`merge_readiness`** — one pre-merge go/no-go that folds `verify_change` (completeness vs the prediction) and `compare_change_impact` (architecture regression vs a baseline snapshot) into a single `{ gate, reasons[], unresolved[] }`. Thin consumer — no new analysis.
+
+**Normalized gate envelope.** `prepare_change`, `verify_change`, `compare_change_impact`, `check_consistency`, and `merge_readiness` each return a stable `{ gate: "pass"|"warn"|"block", gateReasons[], nextAction }` a harness can branch on with a single field — additive to their detailed verdicts.
+
+**`index-file` CLI subcommand + PostToolUse hook.** The Claude Code PostToolUse hook now calls the cheap targeted re-index (`purecontext-mcp index-file --repo <dir> <file...>`) instead of a full `index-folder`, bootstrapping a full index automatically the first time a repo is seen.
+
+**`docs/HARNESS-CONTRACT.md`** — greenfield + brownfield loop recipes, freshness rules (`index_file` mid-run, never `index_folder`), and the stable gate-envelope contract.
+
+### Fixed
+
+- **No-op re-index churn.** `index_folder` used to skip persisting the content hash for files that yield 0 symbols and 0 imports, so those files were re-read and re-parsed on every run. The hash is now always persisted (delete-then-upsert even when empty), so a true no-op reports `filesIndexed: 0`. `reindexFiles` also now clears stale rows when an edit empties a file's last symbol (parity with a full index).
+
+### Configuration
+
+- `consistency.maxDuplicates` (default 5) — max duplicate candidates returned by `check_consistency`.
+- `consistency.maxPatternFit` (default 5) — max sibling/pattern-fit exemplars returned.
+- `consistency.maxApiPointer` (default 20) — max existing-symbol names listed for the target directory.
+
+---
+
 ## [1.11.0] - 2026-06-14
 
 ### Added

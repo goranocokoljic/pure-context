@@ -87,6 +87,32 @@ Force a full re-index of a repo or a single file, clearing all content hashes.
 
 ---
 
+### `index_file`
+
+Targeted re-index of one or a few specific files **without** the full-tree discovery pass `index_folder` performs — O(one file), independent of repo size. This is the mid-run freshness path: call it after writing/editing a file so subsequent searches reflect current state. Firing `index_folder` after every edit is discovery-bound and stalls; `index_file` does not. Paths that no longer exist on disk are treated as deletions.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repoId` | `string` | yes | Repo ID from `index_folder` or `resolve_repo` |
+| `filePaths` | `string[]` | yes | One or more file paths (absolute or repo-relative) to re-index; missing files are treated as deletions |
+
+---
+
+### `check_index_staleness`
+
+Cheaply check whether the index is current — **no discovery pass**. Pass `filePaths` for a per-file `fresh`/`stale` verdict (compares the stored content hash against disk); omit them for a repo-level summary (indexed? + last-indexed time + counts). Use at task start to decide between a cold `index_folder` and a targeted `index_file`.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repoId` | `string` | yes | Repo ID from `index_folder` or `resolve_repo` |
+| `filePaths` | `string[]` | no | Files to check; omit for a repo-level summary |
+
+---
+
 ## Symbol Search & Retrieval
 
 ### `search_symbols`
@@ -873,6 +899,55 @@ Before/after architecture *regression* delta. Distinct from `analyze_diff`'s `ar
 **Returns:** `{ verdict: "regressed" | "improved" | "unchanged" | "no_baseline", baselineSnapshotId?, newCycles, resolvedCycles, newLayerViolations, resolvedLayerViolations, currentCycleCount, currentLayerViolationCount, reasons }`
 
 **Workflow:** `get_architecture_snapshot` (create) → edit → reindex → `compare_change_impact`. Snapshots created before v1.11.0 lack the stored cycle/layer data and return `no_baseline`.
+
+---
+
+### `check_consistency`
+
+The greenfield pre-write front door (mirror of `prepare_change`, zero history): given an intended **new** symbol, it returns `duplicates` ("you already wrote this"), `patternFit` (sibling exemplars to follow), `placement` (where similar code lives), and `existingApiPointer` (existing symbols in the target directory). Runs on **structural search alone — no embedding provider required** (`mode:"structural"`); `signalQuality:"low"` suppresses dedup on a sparse index so it never invents a duplicate.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repoId` | `string` | yes | Repo ID from `index_folder` or `resolve_repo` |
+| `name` | `string` | yes | The intended new symbol name (e.g. `"WindsurfConnector"`, `"parseExpenseRow"`) |
+| `kind` | `SymbolKind` | no | Intended symbol kind — narrows pattern matching |
+| `signature` | `string` | no | Intended one-line signature — improves matching |
+| `intendedFilePath` | `string` | no | Where you intend to put it (repo-relative) — enables `placement` + `existingApiPointer` |
+| `codeSnippet` | `string` | no | Optional draft body (reserved for future semantic dedup) |
+
+**Returns:** `{ duplicates, patternFit, placement, existingApiPointer, signalQuality, gate, gateReasons, nextAction, mode: "structural" }`
+
+---
+
+### `merge_readiness`
+
+One pre-merge go/no-go that folds `verify_change` (completeness vs the `prepare_change` prediction) and `compare_change_impact` (architecture regression vs a baseline snapshot) into a single envelope. Thin consumer — no new analysis.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repoId` | `string` | yes | Repo ID from `index_folder` or `resolve_repo` |
+| `diff` | `string` | yes | Unified diff of the completed change (output of `git diff`) |
+| `predictedFilePaths` | `string[]` | no | `predictedChange.changedFilePaths` from `prepare_change` (default `[]` — runs unscoped) |
+| `predictedCoChange` | `string[]` | no | `missingCoChange[].filePath` from `prepare_change` |
+| `baselineSnapshotId` | `string` | no | Snapshot taken BEFORE the change (for the regression check) |
+
+**Returns:** `{ gate: "pass" | "warn" | "block", reasons, unresolved, nextAction, verify, architecture }` — `unresolved[]` lists exactly what stands between the diff and a clean merge (unaddressed co-change, untested changed symbols, new cycles, new layer violations).
+
+---
+
+## Gate Envelope
+
+`prepare_change`, `verify_change`, `compare_change_impact`, `check_consistency`, and `merge_readiness` each return a stable, harness-branchable envelope **additive** to their detailed verdicts:
+
+```jsonc
+{ "gate": "pass" | "warn" | "block", "gateReasons": ["…"], "nextAction": "…" }
+```
+
+`pass` = proceed · `warn` = proceed with judgment · `block` = unfinished or regressed work. A harness can branch on the single `gate` field. See [`HARNESS-CONTRACT.md`](HARNESS-CONTRACT.md) for the full greenfield/brownfield loop recipes and freshness rules.
 
 ---
 

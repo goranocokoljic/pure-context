@@ -117,6 +117,7 @@ Powers `get_co_change`, `get_symbol_risk`, and `get_context_bundle`'s `historica
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `git.coChangeDepth` | `number` | `300` | Recent commits captured at the repo root (one `git log --name-only`) for co-change analysis. `0` disables capture entirely — zero extra git work, identical behavior to before. |
+| `git.fileHistoryDepth` | `number` | `0` | Per-file history depth captured at index time. `0` = full history; a positive value bounds the walk for giant monorepos where git capture dominates indexing time. |
 | `git.megaCommitThreshold` | `number` | `30` | Commits touching more files than this (reformats, lockfile sweeps, codemods) are excluded / down-weighted so they don't manufacture spurious coupling. |
 
 ### Change-risk weights (`risk.weights.*`)
@@ -142,6 +143,28 @@ Bound the impact-aware change report (used by `analyze_diff`, `prepare_change`, 
 | `changeSynthesis.maxCoChangeGaps` | `number` | `10` | Max absent co-change partners reported |
 | `changeSynthesis.maxRecommendedTests` | `number` | `15` | Max recommended test files reported |
 | `refactoring.maxCandidates` | `number` | `5` | How many candidate symbols `prepare_change` returns when disambiguating a free-text `query` (verdict `ambiguous_target`) |
+
+### Greenfield consistency (`consistency.*`)
+
+Caps each section of the `check_consistency` pre-write report (Phase 80).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `consistency.maxDuplicates` | `number` | `5` | Max duplicate candidates returned ("you already wrote this") |
+| `consistency.maxPatternFit` | `number` | `5` | Max sibling/pattern-fit exemplars returned |
+| `consistency.maxApiPointer` | `number` | `20` | Max existing-symbol names listed for the target directory |
+
+### Active context reconstruction (`taskContext.*`)
+
+Govern how far `get_task_context`'s `mode:"associative"` walk fans out from its seed symbols before ranking (Phase 81). `mode:"flat"` ignores this block entirely.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `taskContext.seedCount` | `number` | `8` | Top-N discovery hits expanded via the dep/temporal graph (≥1) |
+| `taskContext.expansionDepth` | `number` | `1` | Dep-graph hops walked per seed, forward + reverse (≥1) |
+| `taskContext.maxPool` | `number` | `60` | Candidate pool cap before ranking (≥1) |
+| `taskContext.maxCoChangePartners` | `number` | `5` | Co-change partner files pulled per seed (≥0) |
+| `taskContext.maxSymbolsPerPartner` | `number` | `5` | Symbols pulled per co-change partner file (≥0) |
 
 ### Transport
 

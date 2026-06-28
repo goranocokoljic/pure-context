@@ -22,6 +22,17 @@ purecontext-mcp --transport both
 
 CLI flags override the corresponding `config.json` fields.
 
+### `index-file`
+
+Targeted re-index of specific files **without** the full-tree discovery pass `index_folder` performs — the cheap freshness path. This is what the Claude Code PostToolUse hook runs after an Edit/Write, and it is O(one file) regardless of repo size. If the repo has not been indexed yet, it bootstraps once with a full index (first-edit "just works").
+
+```bash
+purecontext-mcp index-file --repo <dir> <file...>
+```
+
+- `--repo <dir>` — repository root (defaults to the current working directory).
+- `<file...>` — one or more file paths (absolute or repo-relative). Files that no longer exist on disk are treated as deletions.
+
 ### `config`
 
 Manage configuration.
