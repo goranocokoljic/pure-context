@@ -23,6 +23,7 @@
 import { z } from 'zod';
 import { parseDiff } from '../../core/diff-parser.js';
 import { buildMeta } from './_meta.js';
+import { gateVerifyChange } from './gate-envelope.js';
 import { handler as analyzeDiffHandler } from './analyze-diff.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
@@ -195,5 +196,11 @@ export async function handler(args: {
   };
   if (predictionId) out.predictionId = predictionId;
 
-  return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] };
+  const env = gateVerifyChange({
+    verdict: out.verdict,
+    unaddressedCoChange: out.unaddressedCoChange,
+    coverageGapsRemaining: out.coverageGapsRemaining,
+  });
+
+  return { content: [{ type: 'text', text: JSON.stringify({ ...out, ...env }, null, 2) }] };
 }

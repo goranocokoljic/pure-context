@@ -286,10 +286,16 @@ function findRepoRoot(filePath: string): string | null {
   }
 }
 
-function reindexRepo(repoRoot: string): void {
+/**
+ * Targeted re-index of the edited files in one repo. Uses the cheap single-file
+ * path (index-file) rather than a full index-folder so the PostToolUse hook runs
+ * sub-second instead of stalling ~11s on every edit. index-file bootstraps a full
+ * index itself when the repo has not been indexed yet.
+ */
+function reindexFilesInRepo(repoRoot: string, filePaths: string[]): void {
   const selfScript = process.argv[1];
-  if (!selfScript) return;
-  spawnSync(process.execPath, [selfScript, 'index-folder', '--path', repoRoot], {
+  if (!selfScript || filePaths.length === 0) return;
+  spawnSync(process.execPath, [selfScript, 'index-file', '--repo', repoRoot, ...filePaths], {
     stdio: 'ignore',
     timeout: 60_000,
   });
@@ -345,13 +351,18 @@ export async function cmdHookPostToolUse(): Promise<void> {
       }
     }
 
-    const roots = new Set<string>();
+    // Group edited files by repo root, then targeted-reindex each root once
+    // (batches a MultiEdit's files into a single index-file call).
+    const byRoot = new Map<string, string[]>();
     for (const fp of paths) {
       const root = findRepoRoot(fp);
-      if (root) roots.add(root);
+      if (!root) continue;
+      const list = byRoot.get(root) ?? [];
+      list.push(fp);
+      byRoot.set(root, list);
     }
 
-    for (const root of roots) reindexRepo(root);
+    for (const [root, files] of byRoot) reindexFilesInRepo(root, files);
   } catch { /* never block the edit */ }
 
   process.exit(0);

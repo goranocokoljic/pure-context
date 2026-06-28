@@ -55,12 +55,20 @@ function debugLog(msg) {
   } catch { /* never block */ }
 }
 
-export function reindexRepo(repoRoot) {
-  spawnSync('npx', ['--prefer-offline', 'purecontext-mcp', 'index-folder', '--path', repoRoot], {
-    stdio: 'ignore',
-    timeout: 60_000,
-    shell: process.platform === 'win32',
-  });
+export function reindexFilesInRepo(repoRoot, filePaths) {
+  if (!filePaths || filePaths.length === 0) return;
+  // Cheap targeted re-index of just the edited files (index-file), not a full
+  // index-folder — keeps the PostToolUse hook sub-second. index-file bootstraps
+  // a full index itself the first time a repo is seen.
+  spawnSync(
+    'npx',
+    ['--prefer-offline', 'purecontext-mcp', 'index-file', '--repo', repoRoot, ...filePaths],
+    {
+      stdio: 'ignore',
+      timeout: 60_000,
+      shell: process.platform === 'win32',
+    },
+  );
 }
 
 async function main() {
@@ -78,16 +86,19 @@ async function main() {
 
     const debug = process.env.PURECONTEXT_DEBUG === '1';
     const paths = extractPaths(toolName, toolInput);
-    const roots = new Set();
+    const byRoot = new Map();
 
     for (const filePath of paths) {
       const root = findRepoRoot(filePath);
-      if (root) roots.add(root);
+      if (!root) continue;
+      const list = byRoot.get(root) ?? [];
+      list.push(filePath);
+      byRoot.set(root, list);
     }
 
-    for (const root of roots) {
-      if (debug) debugLog(`Reindexing ${root} after ${toolName}`);
-      reindexRepo(root);
+    for (const [root, files] of byRoot) {
+      if (debug) debugLog(`Targeted reindex of ${files.length} file(s) in ${root} after ${toolName}`);
+      reindexFilesInRepo(root, files);
     }
   } catch { /* never block the edit */ }
 

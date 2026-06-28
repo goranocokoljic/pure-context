@@ -12,6 +12,10 @@ import { track } from '../core/telemetry.js';
 
 // ── Tool modules ──────────────────────────────────────────────────────────────
 import * as indexFolderTool from './tools/index-folder.js';
+import * as indexFileTool from './tools/index-file.js';
+import * as checkIndexStalenessTool from './tools/check-index-staleness.js';
+import * as checkConsistencyTool from './tools/check-consistency.js';
+import * as mergeReadinessTool from './tools/merge-readiness.js';
 import * as listReposTool from './tools/list-repos.js';
 import * as resolveRepoTool from './tools/resolve-repo.js';
 import * as searchSymbolsTool from './tools/search-symbols.js';
@@ -178,6 +182,26 @@ export function createMcpServer(): McpServer {
     description: indexFolderTool.description,
     inputSchema: indexFolderTool.inputSchema,
   }, typed((args) => indexFolderTool.handler(args)));
+
+  server.registerTool(indexFileTool.name, {
+    description: indexFileTool.description,
+    inputSchema: indexFileTool.inputSchema,
+  }, typed((args) => indexFileTool.handler(args)));
+
+  server.registerTool(checkIndexStalenessTool.name, {
+    description: checkIndexStalenessTool.description,
+    inputSchema: checkIndexStalenessTool.inputSchema,
+  }, typed((args) => checkIndexStalenessTool.handler(args)));
+
+  server.registerTool(checkConsistencyTool.name, {
+    description: checkConsistencyTool.description,
+    inputSchema: checkConsistencyTool.inputSchema,
+  }, typed((args) => checkConsistencyTool.handler(args)));
+
+  server.registerTool(mergeReadinessTool.name, {
+    description: mergeReadinessTool.description,
+    inputSchema: mergeReadinessTool.inputSchema,
+  }, typed((args) => mergeReadinessTool.handler(args)));
 
   server.registerTool(listReposTool.name, {
     description: listReposTool.description,

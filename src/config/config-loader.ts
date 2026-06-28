@@ -182,6 +182,26 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
       maxCandidates:
         partial.refactoring?.maxCandidates ?? DEFAULT_CONFIG.refactoring.maxCandidates,
     },
+    consistency: {
+      maxDuplicates:
+        partial.consistency?.maxDuplicates ?? DEFAULT_CONFIG.consistency.maxDuplicates,
+      maxPatternFit:
+        partial.consistency?.maxPatternFit ?? DEFAULT_CONFIG.consistency.maxPatternFit,
+      maxApiPointer:
+        partial.consistency?.maxApiPointer ?? DEFAULT_CONFIG.consistency.maxApiPointer,
+    },
+    taskContext: {
+      seedCount:
+        partial.taskContext?.seedCount ?? DEFAULT_CONFIG.taskContext.seedCount,
+      expansionDepth:
+        partial.taskContext?.expansionDepth ?? DEFAULT_CONFIG.taskContext.expansionDepth,
+      maxPool:
+        partial.taskContext?.maxPool ?? DEFAULT_CONFIG.taskContext.maxPool,
+      maxCoChangePartners:
+        partial.taskContext?.maxCoChangePartners ?? DEFAULT_CONFIG.taskContext.maxCoChangePartners,
+      maxSymbolsPerPartner:
+        partial.taskContext?.maxSymbolsPerPartner ?? DEFAULT_CONFIG.taskContext.maxSymbolsPerPartner,
+    },
     transport: partial.transport ?? DEFAULT_CONFIG.transport,
     http: {
       port: pctxPort ?? partial.http?.port ?? DEFAULT_CONFIG.http.port,

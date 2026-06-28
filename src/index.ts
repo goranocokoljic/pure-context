@@ -95,7 +95,7 @@ import './adapters/hibernate.js';
 import './adapters/sqlalchemy.js';
 import './adapters/django-orm.js';
 import { startServer } from './server/mcp-server.js';
-import { cmdInit, cmdCheck, cmdShow, cmdHealth, cmdExport, cmdImport, cmdFetch, cmdListPublic, cmdIndexFolder, cmdAnalyzeDiff, cmdDetectAntipatterns } from './config/cli.js';
+import { cmdInit, cmdCheck, cmdShow, cmdHealth, cmdExport, cmdImport, cmdFetch, cmdListPublic, cmdIndexFolder, cmdIndexFile, cmdAnalyzeDiff, cmdDetectAntipatterns } from './config/cli.js';
 import { runKeysCommand } from './config/keys-cli.js';
 import { runWorkspacesCommand } from './config/workspaces-cli.js';
 import { runHooksCommand, cmdHookPreToolUse, cmdHookPostToolUse, cmdHookPreCompact, cmdHookWorktreeCreate, cmdHookWorktreeRemove, cmdHookTaskCompleted, cmdHookSubagentStart } from './cli/hooks.js';
@@ -142,6 +142,7 @@ Usage:
   purecontext-mcp fetch <owner/repo> --version <tag>  Fetch a specific version
   purecontext-mcp list-public             List repos available in the public registry
   purecontext-mcp index-folder [--path <dir>]   Index a folder (defaults to cwd)
+  purecontext-mcp index-file --repo <dir> <f..> Targeted re-index of specific files (cheap)
   purecontext-mcp analyze-diff --diff-file <f>  Analyze PR diff, print JSON impact report
   purecontext-mcp detect-antipatterns [--fail-on-critical]  Scan for anti-patterns
   purecontext-mcp hooks --install         Register Claude Code hooks in ~/.claude/settings.json
@@ -366,6 +367,13 @@ async function main(): Promise<void> {
   if (args[0] === 'index-folder') {
     await bootstrap();
     await cmdIndexFolder(args.slice(1));
+    process.exit(0);
+  }
+
+  // ── index-file sub-command (PostToolUse hook: cheap targeted re-index) ─────
+  if (args[0] === 'index-file') {
+    await bootstrap();
+    await cmdIndexFile(args.slice(1));
     process.exit(0);
   }
 

@@ -764,9 +764,11 @@ Per-file coverage map with `coverageRatio` and aggregated totals.
 
 ### `get_task_context`
 
-Assemble a focused, token-bounded context bundle for a natural-language task description (the symbols and files most relevant to the work).
+Assemble a focused context bundle for a natural-language task description (the symbols and files most relevant to the work). In the default `associative` mode it discovers seed symbols, then walks the real dependency + co-change graph around them (imports, callers, historically co-changing files), derives each symbol's `role` from the edge that surfaced it (`dependency`/`caller`/`historical`/`primary`), and returns `provenance` per item plus `evidenceGaps` (`lowConfidenceSeeds`/`droppedByBudget`/`unselectedCoChange`) and `suggestedProbes` so the agent can decide whether to probe further. AI ranking is used when configured; otherwise results are ranked by graph provenance (works with zero embeddings). Pass `mode:"flat"` for the legacy single-pass similarity selection.
 
-**Parameters:** `{ repoId, task, maxTokens? }`
+**Parameters:** `{ repoId, task, maxSymbols?, includeSource?, model?, mode? }`
+
+Fanout is governed by config `taskContext.{seedCount, expansionDepth, maxPool, maxCoChangePartners, maxSymbolsPerPartner}`.
 
 ---
 

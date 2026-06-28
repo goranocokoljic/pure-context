@@ -409,6 +409,44 @@ export async function cmdIndexFolder(cliArgs: string[]): Promise<void> {
 }
 
 /**
+ * `purecontext-mcp index-file --repo <dir> <file...>`
+ * Targeted re-index of specific files WITHOUT a full-tree discovery pass — the
+ * cheap freshness path used by the PostToolUse hook after an Edit/Write. Falls
+ * back to a one-time full index_folder when the repo has not been indexed yet
+ * (first-edit bootstrap), so the hook stays "just works".
+ */
+export async function cmdIndexFile(cliArgs: string[]): Promise<void> {
+  const repoIdx = cliArgs.indexOf('--repo');
+  const repoPath = repoIdx >= 0 ? resolvePath(cliArgs[repoIdx + 1]) : process.cwd();
+
+  // Every non-flag argument (excluding the --repo value) is a file path.
+  const filePaths = cliArgs.filter((a, i) => {
+    if (a.startsWith('--')) return false;
+    if (repoIdx >= 0 && i === repoIdx + 1) return false;
+    return true;
+  });
+
+  if (filePaths.length === 0) {
+    console.error('Usage: purecontext-mcp index-file --repo <dir> <file...>');
+    process.exit(1);
+  }
+
+  const { computeRepoId } = await import('../core/db/schema.js');
+  const repoId = computeRepoId(repoPath);
+
+  const { handler } = await import('../server/tools/index-file.js');
+  const result = await handler({ repoId, filePaths });
+
+  if (result.isError) {
+    // Repo not indexed yet — bootstrap once with a full index.
+    await cmdIndexFolder(['--path', repoPath]);
+    return;
+  }
+  const text = result.content[0];
+  if (text.type === 'text') console.log(text.text);
+}
+
+/**
  * `purecontext-mcp analyze-diff --diff <patch> [--diff-file <path>] [--repo <path>]`
  * Parse a unified git diff and print an impact analysis as JSON.
  * Exits non-zero when reviewPriority is "critical".

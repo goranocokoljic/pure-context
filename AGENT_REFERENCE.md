@@ -46,6 +46,10 @@ The always-on instructions (mandatory workflow, decision rules, anti-patterns) l
 | Pre-edit impact verdict for an intended change | `prepare_change` |
 | Confirm an applied change is complete (plan vs actual) | `verify_change` |
 | Did my change introduce a new cycle / layer violation? | `compare_change_impact` |
+| One go/no-go before merging a completed change | `merge_readiness` |
+| Cheap single-file re-index after a write (mid-run) | `index_file` |
+| Is the index current for these files? (no discovery) | `check_index_staleness` |
+| Pre-write dedup/drift check for a NEW symbol (greenfield) | `check_consistency` |
 | 5-axis codebase health score (CI gate / dashboard) | `health_radar` |
 | Compare health before and after a refactoring | `diff_health_radar` |
 | Detailed debt report with per-file rankings | `get_debt_report` |
@@ -85,6 +89,20 @@ Index a local directory. Returns `repoId`. Re-indexing is incremental — only c
 - `path` (required) — absolute path to project root
 - `force` (optional) — set `true` to force re-index of all files, even unchanged ones
 - `fileLimit` (optional) — override the configured file limit for this run
+
+### `index_file`
+Targeted re-index of one or a few specific files WITHOUT the full-tree discovery pass `index_folder` performs — O(one file), independent of repo size. This is the mid-run freshness path: call it after writing/editing a file so subsequent searches reflect current state. Firing `index_folder` after every edit is discovery-bound and stalls; `index_file` does not.
+
+- `repoId` (required)
+- `filePaths` (required) — absolute or repo-relative; paths missing from disk are treated as deletions
+
+The PostToolUse hook uses this automatically when installed.
+
+### `check_index_staleness`
+Cheaply check whether the index is current — no discovery pass. Pass `filePaths` for a per-file `fresh`/`stale` verdict (compares stored content hash vs disk); omit them for a repo-level summary (indexed? + last-indexed time + counts). Use at task start to decide cold `index_folder` vs targeted `index_file`.
+
+- `repoId` (required)
+- `filePaths` (optional)
 
 ### `resolve_repo`
 Convert a local path to its `repoId` without indexing. Use when the project is already indexed but you don't have the `repoId` at hand.
@@ -403,6 +421,30 @@ Returns `verdict` (`complete` / `incomplete` / `scope_expanded`), `unaddressedCo
 ```
 
 Returns `verdict` (`regressed` / `improved` / `unchanged` / `no_baseline`), `newCycles` / `newLayerViolations` (what the change introduced), and `resolvedCycles` / `resolvedLayerViolations`. Distinct from `analyze_diff`'s `architecturalFlags`, which flag *pre-existing* issues — this reports only the delta and never blames the change for problems it didn't create. With no baseline snapshot it returns `no_baseline` and degrades to current-state counts.
+
+**`merge_readiness`** — one pre-merge go/no-go that folds `verify_change` (completeness) and `compare_change_impact` (architecture regression) into a single envelope. Thin consumer — no new analysis.
+
+```json
+{ "repoId": "...", "diff": "<git diff>", "predictedFilePaths": ["..."], "predictedCoChange": ["..."], "baselineSnapshotId": "<id>" }
+```
+
+Returns `gate` (`pass` / `warn` / `block`), `reasons[]`, and `unresolved[]` (the exact list of unaddressed co-change, untested changed symbols, new cycles, and new layer violations standing between the diff and a clean merge). `block` → fix `unresolved[]` and re-run.
+
+### The normalized gate envelope
+
+`prepare_change`, `verify_change`, `compare_change_impact`, `check_consistency`, and `merge_readiness` each return a stable `{ gate: "pass"|"warn"|"block", gateReasons[], nextAction }` a harness can branch on with one field — additive to their detailed verdicts. `pass` = proceed; `warn` = proceed with judgment; `block` = unfinished/regressed work.
+
+### `check_consistency` — the greenfield pre-write front door
+
+Before creating a NEW symbol/file (greenfield, where there is no git history yet), check it against the growing index — structural search only, no embedding provider needed (`mode: "structural"`).
+
+```json
+{ "repoId": "...", "name": "WindsurfConnector", "kind": "class", "intendedFilePath": "src/connectors/windsurf.ts" }
+```
+
+Returns `duplicates` ("you already wrote this"), `patternFit` (closest existing siblings to mirror), `placement` (does the intended path fit where siblings live?), `existingApiPointer` (what already lives in the target dir), and the gate envelope. On a near-empty index it returns `signalQuality: "low"` and suppresses duplicate claims (never invents "already exists").
+
+> **Using PureContext inside an automated harness?** See `docs/HARNESS-CONTRACT.md` for the greenfield and brownfield loop recipes, the freshness rules (`index_file` mid-run, never `index_folder`), and the stable gate-envelope contract.
 
 ---
 

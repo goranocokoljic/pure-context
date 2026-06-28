@@ -211,6 +211,35 @@ export interface PureContextConfig {
     maxCandidates: number;
   };
   /**
+   * Greenfield consistency-check settings (Phase 80: check_consistency — the
+   * pre-write front door). Caps the size of each section returned.
+   */
+  consistency: {
+    /** Maximum duplicate candidates returned. Default 5. */
+    maxDuplicates: number;
+    /** Maximum sibling/pattern-fit exemplars returned. Default 5. */
+    maxPatternFit: number;
+    /** Maximum existing-symbol names listed for the target directory. Default 20. */
+    maxApiPointer: number;
+  };
+  /**
+   * Active context reconstruction settings (Phase 81: get_task_context
+   * `mode:'associative'`). Govern how far the seed → dependency/co-change graph
+   * walk fans out before ranking. `mode:'flat'` ignores this block entirely.
+   */
+  taskContext: {
+    /** Top-N discovery hits expanded via the dep/temporal graph. Default 8. (≥1) */
+    seedCount: number;
+    /** Dep-graph hops walked per seed (forward + reverse). Default 1. (≥1) */
+    expansionDepth: number;
+    /** Candidate pool cap before ranking (forward/reverse are file-granular). Default 60. (≥1) */
+    maxPool: number;
+    /** Co-change partner files pulled per seed. Default 5. (≥0) */
+    maxCoChangePartners: number;
+    /** Symbols pulled per co-change partner file. Default 5. (≥0) */
+    maxSymbolsPerPartner: number;
+  };
+  /**
    * Which transport(s) to start.
    *   'stdio' — stdin/stdout (default; required for Claude Code)
    *   'http'  — HTTP + Streamable HTTP
@@ -413,6 +442,18 @@ export const DEFAULT_CONFIG: PureContextConfig = {
   },
   refactoring: {
     maxCandidates: 5,
+  },
+  consistency: {
+    maxDuplicates: 5,
+    maxPatternFit: 5,
+    maxApiPointer: 20,
+  },
+  taskContext: {
+    seedCount: 8,
+    expansionDepth: 1,
+    maxPool: 60,
+    maxCoChangePartners: 5,
+    maxSymbolsPerPartner: 5,
   },
   transport: 'stdio',
   http: {
@@ -728,6 +769,46 @@ export function validateConfig(raw: unknown): ValidationResult {
         const v = r['maxCandidates'];
         if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) {
           errors.push('refactoring.maxCandidates must be a positive integer');
+        }
+      }
+    }
+  }
+  if ('consistency' in cfg) {
+    const c = cfg['consistency'];
+    if (typeof c !== 'object' || c === null || Array.isArray(c)) {
+      errors.push('consistency must be an object');
+    } else {
+      const cs = c as Record<string, unknown>;
+      for (const key of ['maxDuplicates', 'maxPatternFit', 'maxApiPointer'] as const) {
+        if (key in cs) {
+          const v = cs[key];
+          if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+            errors.push(`consistency.${key} must be a non-negative integer`);
+          }
+        }
+      }
+    }
+  }
+  if ('taskContext' in cfg) {
+    const c = cfg['taskContext'];
+    if (typeof c !== 'object' || c === null || Array.isArray(c)) {
+      errors.push('taskContext must be an object');
+    } else {
+      const tc = c as Record<string, unknown>;
+      for (const key of ['seedCount', 'expansionDepth', 'maxPool'] as const) {
+        if (key in tc) {
+          const v = tc[key];
+          if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) {
+            errors.push(`taskContext.${key} must be a positive integer`);
+          }
+        }
+      }
+      for (const key of ['maxCoChangePartners', 'maxSymbolsPerPartner'] as const) {
+        if (key in tc) {
+          const v = tc[key];
+          if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+            errors.push(`taskContext.${key} must be a non-negative integer`);
+          }
         }
       }
     }

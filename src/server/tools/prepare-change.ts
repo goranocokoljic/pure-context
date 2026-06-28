@@ -29,6 +29,7 @@ import { getSymbolById } from '../../core/db/symbol-store.js';
 import { getImportersOf } from '../../core/db/dep-store.js';
 import { getConfig } from '../../config/config-loader.js';
 import { buildMeta } from './_meta.js';
+import { gatePrepareChange } from './gate-envelope.js';
 import { synthesizeChange, type ChangeSynthesis } from './change-synthesis.js';
 import { handler as searchSymbolsHandler } from './search-symbols.js';
 import { handler as findReferencesHandler } from './find-references.js';
@@ -115,6 +116,12 @@ interface SearchResultShape {
 
 interface FindReferencesShape {
   references: Array<{ filePath: string }>;
+}
+
+/** Attach the normalized gate envelope (Task 486) and serialize. */
+function emit(out: PrepareChangeOutput): CallToolResult {
+  const env = gatePrepareChange({ verdict: out.verdict, risk: out.risk });
+  return { content: [{ type: 'text', text: JSON.stringify({ ...out, ...env }, null, 2) }] };
 }
 
 function parseJsonResult<T>(result: CallToolResult): T | null {
@@ -255,7 +262,7 @@ export async function handler(args: {
           reasons: [`Symbol "${targetSymbolId}" not found in repo "${repoId}".`],
           _meta: buildMeta({ timingMs: Date.now() - t0 }),
         };
-        return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] };
+        return emit(out);
       }
       target = { symbolId: sym.id, name: sym.name, kind: sym.kind, filePath: sym.filePath };
     } else {
@@ -280,7 +287,7 @@ export async function handler(args: {
           ],
           _meta: buildMeta({ timingMs: Date.now() - t0 }),
         };
-        return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] };
+        return emit(out);
       }
 
       if (!isClearWinner(candidates)) {
@@ -294,7 +301,7 @@ export async function handler(args: {
           ],
           _meta: buildMeta({ timingMs: Date.now() - t0 }),
         };
-        return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] };
+        return emit(out);
       }
 
       const top = candidates[0]!;
@@ -349,7 +356,7 @@ export async function handler(args: {
     if (includeArchitectureFlags) out.architecturalFlags = syn.architecturalFlags;
     out.signalQuality = syn.signalQuality;
 
-    return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] };
+    return emit(out);
   } finally {
     db.close();
   }

@@ -23,7 +23,10 @@ import {
   handler,
   buildPlanningPrompt,
   parsePlanResponse,
+  expandSeeds,
 } from '../../src/server/tools/get-task-context.js';
+import { openDatabase } from '../../src/core/db/schema.js';
+import { ftsSearchSymbols } from '../../src/core/db/symbol-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -90,6 +93,21 @@ describe('buildPlanningPrompt', () => {
   it('handles empty candidates list', () => {
     const prompt = buildPlanningPrompt('some task', []);
     expect(prompt).toContain('some task');
+  });
+
+  it('is byte-identical with and without an empty provenance map', () => {
+    // Flat mode passes undefined; a symbol with no provenance entry must render the same line.
+    const withUndefined = buildPlanningPrompt('t', [fakeSymbol]);
+    const withEmptyMap = buildPlanningPrompt('t', [fakeSymbol], new Map());
+    expect(withEmptyMap).toBe(withUndefined);
+  });
+
+  it('appends a provenance hint when provided', () => {
+    const prov = new Map([
+      [fakeSymbol.id, { via: 'importedBy' as const, seedId: 's1', seedName: 'LoginController' }],
+    ]);
+    const prompt = buildPlanningPrompt('t', [fakeSymbol], prov);
+    expect(prompt).toContain('via=importedBy(seed=LoginController)');
   });
 });
 
@@ -266,7 +284,10 @@ describe('get_task_context handler', () => {
       expect(typeof item['signature']).toBe('string');
       expect(typeof item['summary']).toBe('string');
       expect(typeof item['relevanceReason']).toBe('string');
-      expect(['primary', 'dependency', 'test', 'config']).toContain(item['role']);
+      // Associative mode (default) may derive 'caller'/'historical' from graph edges.
+      expect(['primary', 'dependency', 'caller', 'historical', 'test', 'config']).toContain(
+        item['role'],
+      );
     }
   });
 
@@ -285,10 +306,12 @@ describe('get_task_context handler', () => {
     expect(meta['tokens_saved']).toBeUndefined();
   });
 
-  it('includes candidatesDiscovered and symbolsSelected in _meta', async () => {
+  it('includes candidatesDiscovered and symbolsSelected in _meta (flat invariant)', async () => {
+    // In flat mode, selection comes only from discovery, so discovered >= selected.
     const result = await handler({
       repoId,
       task: 'add logging to the core module',
+      mode: 'flat',
     });
 
     const data = parse(result);
@@ -298,5 +321,169 @@ describe('get_task_context handler', () => {
     expect(meta['candidatesDiscovered'] as number).toBeGreaterThanOrEqual(
       meta['symbolsSelected'] as number,
     );
+  });
+});
+
+// ─── Flat mode: backward-compat shape ─────────────────────────────────────────
+
+describe('get_task_context mode:flat (backward compatibility)', () => {
+  it('omits all associative-only fields', async () => {
+    const result = await handler({
+      repoId,
+      task: 'process symbols in the indexer',
+      mode: 'flat',
+    });
+
+    const data = parse(result);
+    // Top-level associative fields must be absent.
+    expect('evidenceGaps' in data).toBe(false);
+    expect('suggestedProbes' in data).toBe(false);
+
+    // _meta must not carry associative markers.
+    const meta = data['_meta'] as Record<string, unknown>;
+    expect('mode' in meta).toBe(false);
+    expect('seedsExpanded' in meta).toBe(false);
+    expect('poolSize' in meta).toBe(false);
+
+    // contextItems must not carry provenance.
+    const items = data['contextItems'] as Array<Record<string, unknown>>;
+    for (const item of items) {
+      expect('provenance' in item).toBe(false);
+      expect(['primary', 'dependency', 'test', 'config']).toContain(item['role']);
+    }
+  });
+});
+
+// ─── Associative mode: new behavior ───────────────────────────────────────────
+
+describe('get_task_context mode:associative (default)', () => {
+  it('adds evidenceGaps, suggestedProbes, and associative _meta', async () => {
+    const result = await handler({
+      repoId,
+      task: 'process symbols in the indexer',
+    });
+
+    const data = parse(result);
+
+    const gaps = data['evidenceGaps'] as Record<string, unknown>;
+    expect(gaps).toBeDefined();
+    expect(Array.isArray(gaps['lowConfidenceSeeds'])).toBe(true);
+    expect(typeof gaps['droppedByBudget']).toBe('number');
+    expect(Array.isArray(gaps['unselectedCoChange'])).toBe(true);
+
+    expect(Array.isArray(data['suggestedProbes'])).toBe(true);
+
+    const meta = data['_meta'] as Record<string, unknown>;
+    expect(meta['mode']).toBe('associative');
+    expect(typeof meta['seedsExpanded']).toBe('number');
+    expect(typeof meta['poolSize']).toBe('number');
+  });
+
+  it('suppresses co-change on low/sparse signal (empty unselectedCoChange)', async () => {
+    // The fixture's files appear in too few commits for a confident co-change signal,
+    // so unselectedCoChange must stay empty rather than invent "you forgot X".
+    const result = await handler({ repoId, task: 'index a file' });
+    const data = parse(result);
+    const gaps = data['evidenceGaps'] as Record<string, unknown>;
+    expect(gaps['unselectedCoChange']).toEqual([]);
+  });
+
+  it('context items may carry graph-derived provenance', async () => {
+    const result = await handler({
+      repoId,
+      task: 'process symbols in the indexer',
+      maxSymbols: 20,
+    });
+    const data = parse(result);
+    const items = data['contextItems'] as Array<Record<string, unknown>>;
+
+    for (const item of items) {
+      if ('provenance' in item) {
+        const prov = item['provenance'] as Record<string, unknown>;
+        expect(['seed', 'imports', 'importedBy', 'coChange']).toContain(prov['via']);
+        // Role must be consistent with the edge type.
+        const via = prov['via'];
+        const role = item['role'];
+        if (via === 'imports') expect(role).toBe('dependency');
+        if (via === 'importedBy') expect(role).toBe('caller');
+        if (via === 'coChange') expect(role).toBe('historical');
+        if (via === 'seed') expect(role).toBe('primary');
+      }
+    }
+  });
+});
+
+// ─── expandSeeds (Stage 1.5) ──────────────────────────────────────────────────
+
+describe('expandSeeds', () => {
+  const cfg = {
+    seedCount: 8,
+    expansionDepth: 1,
+    maxPool: 60,
+    maxCoChangePartners: 5,
+    maxSymbolsPerPartner: 5,
+  };
+
+  function discover(task: string, limit = 10) {
+    const db = openDatabase(repoId);
+    try {
+      return ftsSearchSymbols(db, repoId, task, { limit });
+    } finally {
+      db.close();
+    }
+  }
+
+  it('pool is a superset of the discovery candidates', () => {
+    const candidates = discover('symbol');
+    expect(candidates.length).toBeGreaterThan(0);
+    const db = openDatabase(repoId);
+    try {
+      const exp = expandSeeds(db, repoId, candidates, cfg);
+      const poolIds = new Set(exp.pool.map((s) => s.id));
+      for (const c of candidates) expect(poolIds.has(c.id)).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('marks the top seedCount candidates with via=seed provenance', () => {
+    const candidates = discover('symbol');
+    const db = openDatabase(repoId);
+    try {
+      const exp = expandSeeds(db, repoId, candidates, cfg);
+      const seeds = candidates.slice(0, cfg.seedCount);
+      for (const s of seeds) {
+        expect(exp.provenance.get(s.id)?.via).toBe('seed');
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('suppresses co-change on low/sparse signal', () => {
+    const candidates = discover('symbol');
+    const db = openDatabase(repoId);
+    try {
+      const exp = expandSeeds(db, repoId, candidates, cfg);
+      // Fixture files appear in too few commits → signalQuality 'low' → suppressed,
+      // so no co-change partner symbols are injected.
+      expect(exp.coChangeSuppressed).toBe(true);
+      expect(exp.coChangePartnerFiles.size).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('respects the maxPool cap and reports droppedByBudget', () => {
+    const candidates = discover('symbol', 10);
+    const db = openDatabase(repoId);
+    try {
+      const tiny = { ...cfg, maxPool: 3 };
+      const exp = expandSeeds(db, repoId, candidates, tiny);
+      expect(exp.pool.length).toBeLessThanOrEqual(3);
+      expect(exp.droppedByBudget).toBeGreaterThanOrEqual(0);
+    } finally {
+      db.close();
+    }
   });
 });

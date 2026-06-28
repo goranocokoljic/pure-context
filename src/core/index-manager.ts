@@ -217,11 +217,6 @@ export async function indexFolder(
             continue;
           }
 
-          if (pr.symbols.length === 0 && pr.imports.length === 0) {
-            filesSkipped++;
-            continue;
-          }
-
           allImports.push(...pr.imports);
 
           deleteByFile(db, repoId, relPath);
@@ -231,6 +226,11 @@ export async function indexFolder(
           }
           symbolsFound += pr.symbols.length;
 
+          // Always persist the file record — even when this file yielded 0 symbols
+          // AND 0 imports. Skipping the upsert here was the cause of the recurring
+          // re-parse churn: such files were never recorded, so every subsequent
+          // no-op index re-read and re-parsed them. Recording the hash lets the
+          // next run recognise them as unchanged and skip them.
           upsertFile(db, repoId, relPath, hash, content);
           cache.set(relPath, hash);
 
@@ -248,12 +248,6 @@ export async function indexFolder(
       try {
         const { symbols, imports } = await processFile(relPath, content, adapters);
 
-        if (symbols.length === 0 && imports.length === 0) {
-          // No handler and no adapter matched — skip silently
-          filesSkipped++;
-          continue;
-        }
-
         allImports.push(...imports);
 
         // Persist: clear old data for this file, insert new
@@ -264,7 +258,10 @@ export async function indexFolder(
         }
         symbolsFound += symbols.length;
 
-        // Update file record (hash already computed in step 5)
+        // Update file record (hash already computed in step 5). We persist even
+        // when symbols.length === 0 && imports.length === 0 so a true no-op
+        // re-index recognises the file next time instead of re-parsing it on
+        // every run (the recurring-churn fix).
         upsertFile(db, repoId, relPath, hash, content);
         cache.set(relPath, hash);
 
@@ -528,6 +525,16 @@ export async function reindexFiles(
     try {
       const { symbols, imports } = await processFile(relPath, content, adapters);
 
+      // Always clear this file's prior rows so a re-index FULLY replaces them —
+      // even when the edit removed the file's last symbol/import. Leaving stale
+      // rows here would let a targeted re-index diverge from a full index_folder
+      // (parity), so the empty case clears rows and updates the hash too.
+      deleteByFile(db, repoId, relPath);
+      deleteEdgesByFile(db, repoId, relPath);
+
+      const hash = computeHash(content);
+      upsertFile(db, repoId, relPath, hash, content);
+
       if (symbols.length === 0 && imports.length === 0) {
         filesSkipped++;
         continue;
@@ -535,15 +542,10 @@ export async function reindexFiles(
 
       allImports.push(...imports);
 
-      deleteByFile(db, repoId, relPath);
-      deleteEdgesByFile(db, repoId, relPath);
       if (symbols.length > 0) {
         insertSymbols(db, repoId, symbols);
       }
       symbolsFound += symbols.length;
-
-      const hash = computeHash(content);
-      upsertFile(db, repoId, relPath, hash, content);
 
       logger.debug(`Re-indexed ${relPath}: ${symbols.length} symbols`);
     } catch (err) {

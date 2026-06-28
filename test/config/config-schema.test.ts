@@ -96,4 +96,28 @@ describe('validateConfig', () => {
     expect(validateConfig({ changeSynthesis: { maxSymbolsScored: -1 } }).valid).toBe(false);
     expect(validateConfig({ changeSynthesis: { maxCoChangeGaps: 1.5 } }).valid).toBe(false);
   });
+
+  it('accepts valid taskContext config', () => {
+    const { valid } = validateConfig({
+      taskContext: {
+        seedCount: 4,
+        expansionDepth: 2,
+        maxPool: 40,
+        maxCoChangePartners: 3,
+        maxSymbolsPerPartner: 0,
+      },
+    });
+    expect(valid).toBe(true);
+  });
+
+  it('rejects invalid taskContext values', () => {
+    expect(validateConfig({ taskContext: 'no' }).valid).toBe(false);
+    // seedCount/expansionDepth/maxPool must be positive integers.
+    expect(validateConfig({ taskContext: { seedCount: 0 } }).valid).toBe(false);
+    expect(validateConfig({ taskContext: { expansionDepth: 0 } }).valid).toBe(false);
+    expect(validateConfig({ taskContext: { maxPool: 1.5 } }).valid).toBe(false);
+    // partner caps must be non-negative integers.
+    expect(validateConfig({ taskContext: { maxCoChangePartners: -1 } }).valid).toBe(false);
+    expect(validateConfig({ taskContext: { maxSymbolsPerPartner: 2.5 } }).valid).toBe(false);
+  });
 });
