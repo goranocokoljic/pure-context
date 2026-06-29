@@ -46,3 +46,6 @@ test/benchmarks/results
 dev-docs/
 PUBLISH-MANUAL.md
 reference/
+
+# Local dev helper — repoints a sibling project's MCP server to this local build
+repoint-cmf-mcp.mjs
