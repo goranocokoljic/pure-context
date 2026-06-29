@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.14.0] - 2026-06-29
+
+### Changed
+
+**Agent instructions now teach the change-safety workflow.** The always-on rules that `install` writes into every IDE (Cursor, Windsurf, Cline, Copilot, Continue, Claude) previously covered only navigation. They now teach the full close-the-loop workflow introduced in 1.8.0–1.13.0:
+
+- **Orient** with `get_task_context`, then **before editing** run `prepare_change` (existing code) or `check_consistency` (new code), **edit**, **refresh** with `index_file`, **verify** with `verify_change`, and gate a merge with `merge_readiness`.
+- The gate-envelope contract (`{ gate: "pass" | "warn" | "block" }`) and the `index_file`-not-`index_folder` mid-task freshness rule are now explicit.
+
+This makes the tools shipped in 1.8.0–1.13.0 discoverable to agents — previously they existed but the installed guidance never mentioned them.
+
+**Agent rules are now single-sourced** from `assets/agent-rules.md` (shipped in the package). The `install` command reads it at runtime, so the rules can no longer drift from a hardcoded copy.
+
+### Documentation
+
+- Documented the full tool surface for 1.10.0–1.13.0 that was missing from the public docs: `index_file`, `check_index_staleness`, `check_consistency`, `merge_readiness`, the gate envelope, `get_task_context` associative mode, the `index-file` CLI subcommand, and the `consistency.*` / `taskContext.*` config blocks.
+- Noted `get_task_context`'s no-embeddings behavior: seed discovery falls back to FTS token matching, so a pure natural-language task that shares no tokens with indexed symbols returns no seeds (reported in `suggestedProbes`) — configure embeddings, phrase with real terms, or fall back to `search_symbols`.
+
+---
+
 ## [1.13.0] - 2026-06-28
 
 ### Added

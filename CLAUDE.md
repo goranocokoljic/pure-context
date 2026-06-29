@@ -268,7 +268,7 @@ Use PureContext MCP tools to read and change code. Never read whole files to fin
 ### Mandatory workflow
 
 1. **Start every session**: `list_repos()` → get `repoId` (required for all tools). Not indexed? `index_folder({ path })`.
-2. **Orient on a task**: `get_task_context({ repoId, task })` → the symbols and files most relevant to the work, walked over the real dependency + co-change graph (not just keyword matches), plus `evidenceGaps` for what you haven't seen yet.
+2. **Orient on a task**: `get_task_context({ repoId, task })` → the symbols and files most relevant to the work, walked over the real dependency + co-change graph (not just keyword matches), plus `evidenceGaps` for what you haven't seen yet. If it returns nothing, your task text shares no terms with indexed symbols and no embeddings are configured — name a real symbol/term, or fall back to `search_symbols`/`search_semantic`.
 3. **Find code**: `search_symbols` (by name) → read `summary`/`signature` → `get_symbol_source` only for what you'll edit. `search_semantic` for concepts, `search_text` for literals.
 
 ### Changing code safely — close the loop

@@ -796,6 +796,8 @@ Assemble a focused context bundle for a natural-language task description (the s
 
 Fanout is governed by config `taskContext.{seedCount, expansionDepth, maxPool, maxCoChangePartners, maxSymbolsPerPartner}`.
 
+**No-embeddings behavior:** seed discovery falls back to FTS token matching when no embedding provider is configured. A pure natural-language task that shares no tokens with indexed symbol names returns no seeds (reported in `suggestedProbes`). For best results either configure embeddings, phrase the task with real symbol/domain terms, or fall back to `search_symbols` / `search_semantic`.
+
 ---
 
 ## Distribution Tools
