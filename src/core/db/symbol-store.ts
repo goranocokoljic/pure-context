@@ -143,6 +143,18 @@ function buildFtsContent(s: SymbolRecord): string {
   if (s.frameworkMeta?.['luaApiAlias'] && typeof s.frameworkMeta['luaApiAlias'] === 'string') {
     parts.push(s.frameworkMeta['luaApiAlias'] as string);
   }
+  // UI-framework kinds: add the kind as an FTS token. Hook/component names
+  // never contain the words "hook"/"component", so vocabulary queries
+  // ("hook to create a workflow") could not retrieve them into the candidate
+  // pool at all on large mixed monorepos (the novu lesson, Phase 71/88).
+  // hook ↔ composable are the same concept across frameworks (and adapter
+  // routing on mixed monorepos can tag React hooks 'composable'), so both
+  // kinds get both tokens.
+  if (s.kind === 'hook' || s.kind === 'composable') {
+    parts.push('hook composable');
+  } else if (s.kind === 'component') {
+    parts.push('component');
+  }
   return parts.filter(Boolean).join(' ');
 }
 

@@ -26,6 +26,7 @@ import { getBlastRadius } from '../../graph/graph-traversal.js';
 import { countCommits } from '../../core/db/co-change-store.js';
 import { getCoChange, type CoChangeResult } from './co-change.js';
 import { getConfig } from '../../config/config-loader.js';
+import { isTestFilePath as isTestFile } from '../../core/test-paths.js';
 
 export interface RiskFactor {
   /** Repo-relative normalized value in [0,1] (percentile rank or binary). */
@@ -79,16 +80,8 @@ function band(score: number): SymbolRiskResult['band'] {
   return 'low';
 }
 
-// ─── Test-coverage heuristic (mirrors find_untested_symbols) ──────────────────
-
-function isTestFile(filePath: string): boolean {
-  const norm = filePath.replace(/\\/g, '/');
-  if (/(?:^|\/)(?:tests?|specs?|__tests__)\//.test(norm)) return true;
-  if (/[._](?:test|spec)\.[a-z]+$/.test(norm)) return true;
-  const filename = norm.split('/').pop() ?? '';
-  if (/^(?:test|spec)_/.test(filename)) return true;
-  return false;
-}
+// ─── Test-coverage heuristic ──────────────────────────────────────────────────
+// Shared predicate (Task 549 — was one of five private copies).
 
 /**
  * True when any of the pre-collected test-file contents contains a

@@ -90,6 +90,56 @@ function enrichPathSummary(method: string, path: string, op: OpenApiOperation): 
 // ─── Byte-offset helpers ──────────────────────────────────────────────────────
 
 /**
+ * One-pass index of mapping-key → byte offset over the whole source.
+ *
+ * Large real-world specs (GitHub ~10–30 MB, Stripe ~7–20 MB) contain thousands
+ * of paths/schemas; scanning the full buffer per key (the old findKeyOffset
+ * behaviour) made extraction O(keys × bytes) — minutes per file. This builds
+ * the offsets in two O(bytes) regex passes; findKeyOffset falls back to the
+ * old scan only on a map miss.
+ */
+function buildKeyOffsetIndex(source: Buffer): Map<string, number> {
+  const map = new Map<string, number>();
+  const text = source.toString('utf8');
+  // Char offsets equal byte offsets only for pure-ASCII content; otherwise
+  // convert incrementally (matches arrive in ascending index order per pass).
+  const ascii = text.length === source.length;
+
+  const record = (key: string, charIdx: number, cursor: { char: number; byte: number }) => {
+    if (map.has(key)) return;
+    let byteIdx = charIdx;
+    if (!ascii) {
+      cursor.byte += Buffer.byteLength(text.slice(cursor.char, charIdx), 'utf8');
+      cursor.char = charIdx;
+      byteIdx = cursor.byte;
+    }
+    map.set(key, byteIdx);
+  };
+
+  // Pass 1 — line-anchored keys (YAML and pretty-printed JSON):
+  //   key: … | "key": … | 'key': … | - key: …
+  const lineKey = /^[ \t]*(?:- )?(?:"([^"\n]*)"|'([^'\n]*)'|([^\s'"#\n][^:\n]*?))[ \t]*:(?=[ \t]|$)/gm;
+  const cursor1 = { char: 0, byte: 0 };
+  for (let m = lineKey.exec(text); m; m = lineKey.exec(text)) {
+    const key = m[1] ?? m[2] ?? m[3];
+    if (key === undefined) continue;
+    // Offset of the key itself (skip "  - " style indentation), mirroring the
+    // old behaviour of pointing at the opening quote for quoted forms.
+    const keyStart = m[0].indexOf(m[1] !== undefined ? `"${m[1]}"` : m[2] !== undefined ? `'${m[2]}'` : key);
+    record(key, m.index + Math.max(0, keyStart), cursor1);
+  }
+
+  // Pass 2 — quoted keys anywhere (covers minified JSON on one giant line).
+  const jsonKey = /"((?:[^"\\\n]|\\.)*)"[ \t]*:/g;
+  const cursor2 = { char: 0, byte: 0 };
+  for (let m = jsonKey.exec(text); m; m = jsonKey.exec(text)) {
+    record(m[1], m.index, cursor2);
+  }
+
+  return map;
+}
+
+/**
  * Search the raw source Buffer for the first occurrence of `key` as a YAML/JSON
  * mapping key, returning the byte offset of the match (or 0 if not found).
  *
@@ -98,7 +148,9 @@ function enrichPathSummary(method: string, path: string, op: OpenApiOperation): 
  *   'key':      (YAML single-quoted)
  *    key:       (YAML bare)
  */
-function findKeyOffset(source: Buffer, key: string): number {
+function findKeyOffset(source: Buffer, key: string, index?: Map<string, number>): number {
+  const indexed = index?.get(key);
+  if (indexed !== undefined) return indexed;
   // Try JSON double-quoted form first
   const jsonForm = `"${key}"`;
   let idx = source.indexOf(jsonForm);
@@ -117,7 +169,7 @@ function findKeyOffset(source: Buffer, key: string): number {
 
 // ─── Path extraction ──────────────────────────────────────────────────────────
 
-function extractPaths(spec: OpenApiSpec, source: Buffer, filePath: string): SymbolRecord[] {
+function extractPaths(spec: OpenApiSpec, source: Buffer, filePath: string, keyIndex?: Map<string, number>): SymbolRecord[] {
   const symbols: SymbolRecord[] = [];
   if (!spec.paths) return symbols;
 
@@ -138,7 +190,7 @@ function extractPaths(spec: OpenApiSpec, source: Buffer, filePath: string): Symb
 
       const summary = enrichPathSummary(methodUpper, path, op);
 
-      const startByte = findKeyOffset(source, path);
+      const startByte = findKeyOffset(source, path, keyIndex);
       const endByte = startByte + Buffer.byteLength(path, 'utf8');
 
       symbols.push({
@@ -175,7 +227,7 @@ function buildSchemaSignature(name: string, schema: JsonSchema): string {
   return `interface ${name} { ${propList}${suffix} }`.slice(0, 120);
 }
 
-function extractSchemas(spec: OpenApiSpec, source: Buffer, filePath: string): SymbolRecord[] {
+function extractSchemas(spec: OpenApiSpec, source: Buffer, filePath: string, keyIndex?: Map<string, number>): SymbolRecord[] {
   const symbols: SymbolRecord[] = [];
 
   // OpenAPI 3.x: components.schemas
@@ -191,7 +243,7 @@ function extractSchemas(spec: OpenApiSpec, source: Buffer, filePath: string): Sy
     const signature = buildSchemaSignature(name, schema);
     const summary = schema.description ?? signature;
 
-    const startByte = findKeyOffset(source, name);
+    const startByte = findKeyOffset(source, name, keyIndex);
     const endByte = startByte + Buffer.byteLength(name, 'utf8');
 
     symbols.push({
@@ -273,8 +325,9 @@ export const openApiHandler: LanguageHandler = {
     const spec = parseSpec(source);
     if (!spec || !isOpenApiSpec(spec)) return [];
 
-    const pathSymbols = extractPaths(spec, source, filePath);
-    const schemaSymbols = extractSchemas(spec, source, filePath);
+    const keyIndex = buildKeyOffsetIndex(source);
+    const pathSymbols = extractPaths(spec, source, filePath, keyIndex);
+    const schemaSymbols = extractSchemas(spec, source, filePath, keyIndex);
 
     return [...pathSymbols, ...schemaSymbols];
   },

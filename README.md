@@ -321,6 +321,24 @@ If your team runs a shared PureContext server, connect with an HTTP transport in
 }
 ```
 
+### Data directory
+
+Indexes, config, and telemetry live under `~/.purecontext/` by default. Set the
+`PCTX_DATA_DIR` environment variable to relocate everything (useful for CI, test
+isolation, or keeping experiments away from your real indexes):
+
+```bash
+PCTX_DATA_DIR=/tmp/pctx-scratch npx purecontext-mcp
+```
+
+The test suite sets this automatically (`test/setup.ts`), so `npm test` never
+touches your real `~/.purecontext`.
+
+**Branches:** an index is keyed on the folder path, not the git branch. After
+switching branches in place, re-run `index_folder` — it re-parses changes and
+prunes files the branch does not have. For parallel branch work, use one git
+worktree per branch: separate paths get independent indexes.
+
 → [Full installation guide](FULL-INSTALLATION-GUIDE.md)
 
 ---

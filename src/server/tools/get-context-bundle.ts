@@ -15,8 +15,8 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const name = 'get_context_bundle';
 
 export const description =
-  'Forward-walk the dependency graph from a symbol to collect everything needed to understand it. ' +
-  'Returns the symbol plus all transitively imported files and their symbols. ' +
+  "Forward-walk the dependency graph from a symbol's FILE to collect everything needed to understand it. " +
+  'Returns the symbol plus transitively imported files and their symbols (file-granular, depth-capped). ' +
   'Includes a token estimate so you can gauge context size before loading. ' +
   'When git co-change data exists (git.coChangeDepth > 0), also returns ' +
   'historicalNeighbors — files that historically change together with the ' +

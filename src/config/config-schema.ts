@@ -252,6 +252,18 @@ export interface PureContextConfig {
      * 0 = uncapped. Default: 100.
      */
     maxWildcardFanout: number;
+    /**
+     * Namespace prefixes that are NEVER locally resolvable (Task 548). A repo
+     * file may DECLARE `package android.util` (vendored AOSP shims, per-module
+     * JVM unit-test stubs shadowing android.util.Log — a standard Android
+     * pattern), but an import of such a namespace means the platform SDK, not
+     * that file. Reserved imports produce no edge (external), and files
+     * declaring a reserved package are not resolution targets. A prefix `p`
+     * matches package `p` and everything under `p.`.
+     * Set to [] to disable — e.g. on an AOSP fork that genuinely owns
+     * `android.*`. Defaults cover the JVM/Android platform namespaces.
+     */
+    reservedNamespaces: string[];
   };
   /**
    * Which transport(s) to start.
@@ -471,6 +483,18 @@ export const DEFAULT_CONFIG: PureContextConfig = {
   },
   graph: {
     maxWildcardFanout: 100,
+    reservedNamespaces: [
+      'android',
+      'androidx',
+      'java',
+      'javax',
+      'kotlin',
+      'kotlinx',
+      'dalvik',
+      'com.android.internal',
+      'sun',
+      'jdk',
+    ],
   },
   transport: 'stdio',
   http: {
@@ -840,6 +864,14 @@ export function validateConfig(raw: unknown): ValidationResult {
         const v = gr['maxWildcardFanout'];
         if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
           errors.push('graph.maxWildcardFanout must be a non-negative integer (0 = uncapped)');
+        }
+      }
+      if ('reservedNamespaces' in gr) {
+        const v = gr['reservedNamespaces'];
+        if (!Array.isArray(v) || v.some((n) => typeof n !== 'string' || n.length === 0)) {
+          errors.push(
+            'graph.reservedNamespaces must be an array of non-empty strings ([] = disabled)',
+          );
         }
       }
     }

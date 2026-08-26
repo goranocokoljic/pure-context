@@ -25,3 +25,24 @@ if (typeof g['window'] === 'object' && g['window'] !== null) {
     win['document'] = { currentScript: null };
   }
 }
+
+/**
+ * Keep the suite out of the real ~/.purecontext (Task 551).
+ *
+ * Every DB path goes through getIndexDir(), which honours PCTX_DATA_DIR.
+ * Without this, negative-path tests leave stray databases (deadbeef*.db,
+ * nonexistent*.db, …) next to real user indexes — and a `npm test` run
+ * can delete an index a live benchmark is writing to.
+ *
+ * A stable shared temp dir (not per-worker) mirrors the old shared-homedir
+ * semantics; the OS owns cleanup. An explicitly pre-set PCTX_DATA_DIR
+ * (e.g. CI) is respected.
+ */
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { mkdirSync } from 'fs';
+if (!process.env['PCTX_DATA_DIR']) {
+  const testDataDir = join(tmpdir(), 'purecontext-vitest');
+  mkdirSync(testDataDir, { recursive: true });
+  process.env['PCTX_DATA_DIR'] = testDataDir;
+}

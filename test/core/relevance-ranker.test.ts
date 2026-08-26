@@ -2082,3 +2082,106 @@ describe('rankSymbols — unexported visibility penalty', () => {
     expect(results[0]!.debugScore?.unexportedPenalty).toBe(0);
   });
 });
+
+
+// ─── Java/Groovy gated ranking rules (Phase 88, Task 544 — jenkins) ──────────
+
+describe('rankSymbols — Java/Groovy generic-verb identity scaling + camelCompound boost', () => {
+  const JG = { isJavaGroovyMixed: true };
+
+  it('scales identityExact to 1/3 for a generic single-verb name in a multi-word query', () => {
+    const run = sym('run', { kind: 'method', filePath: 'core/src/main/java/hudson/model/Run.java' });
+    const results = rankSymbols([run], 'set the result status of a build run', true, undefined, JG);
+    expect(results[0]!.debugScore?.identityExact).toBe(20);
+  });
+
+  it('keeps the full identityExact for a non-generic single-token name (reload)', () => {
+    const reload = sym('reload', { kind: 'method', filePath: 'core/src/main/java/hudson/model/Run.java' });
+    const results = rankSymbols([reload], 'reload a build record from disk please', true, undefined, JG);
+    expect(results[0]!.debugScore?.identityExact).toBe(60);
+  });
+
+  it('does NOT scale outside the Java/Groovy gate (TS pool)', () => {
+    const run = sym('run', { kind: 'method', filePath: 'src/tasks/run.ts' });
+    const results = rankSymbols([run], 'set the result status of a build run', true);
+    expect(results[0]!.debugScore?.identityExact).toBe(60);
+  });
+
+  it('awards camelCompoundBoost when all camelCase name parts appear in the query', () => {
+    const setResult = sym('setResult', { kind: 'method', filePath: 'core/src/main/java/hudson/model/Run.java' });
+    const results = rankSymbols([setResult], 'set the result status of a build run', true, undefined, JG);
+    expect(results[0]!.debugScore?.camelCompoundBoost).toBe(30);
+  });
+
+  it('no camelCompoundBoost when a name part is missing from the query', () => {
+    const setDescription = sym('setDescription', { kind: 'method', filePath: 'core/src/main/java/hudson/model/Run.java' });
+    const results = rankSymbols([setDescription], 'set the result status of a build run', true, undefined, JG);
+    expect(results[0]!.debugScore?.camelCompoundBoost).toBe(0);
+  });
+
+  it('compound-named target outranks the generic-verb identity match under the gate', () => {
+    const run = sym('run', { kind: 'method', filePath: 'core/src/main/java/hudson/model/Run.java' });
+    const setResult = sym('setResult', { kind: 'method', filePath: 'core/src/main/java/hudson/model/Run.java' });
+    const results = rankSymbols([run, setResult], 'set the result status of a build run', false, undefined, JG);
+    expect(results[0]!.symbol.name).toBe('setResult');
+  });
+
+  it('java-dominant pool activates the gate without an explicit option', () => {
+    const run = sym('run', { kind: 'method', filePath: 'core/src/main/java/hudson/model/Run.java' });
+    const setResult = sym('setResult', { kind: 'method', filePath: 'core/src/main/java/hudson/model/Run.java' });
+    const other = sym('getLog', { kind: 'method', filePath: 'core/src/main/java/hudson/model/Run.java' });
+    const results = rankSymbols([run, setResult, other], 'set the result status of a build run');
+    expect(results[0]!.symbol.name).toBe('setResult');
+  });
+});
+
+
+// ─── Haskell kind hints (Phase 88, Task 545) ─────────────────────────────────
+
+describe('rankSymbols — Haskell kind hints (.hs gated)', () => {
+  const hs = (name: string, kind: SymbolRecord['kind'], filePath = 'src/PostgREST/Auth.hs') =>
+    sym(name, { kind, filePath });
+
+  it('"function …" query boosts a .hs function (+35)', () => {
+    const r = rankSymbols([hs('getAuthResult', 'function')], 'function that validates the JWT secret', true);
+    expect(r[0]!.debugScore?.kindHintBoost).toBe(35);
+  });
+
+  it('"function …" query penalizes a .hs class (−20)', () => {
+    const r = rankSymbols([hs('AuthResult', 'class')], 'function that validates the JWT secret', true);
+    expect(r[0]!.debugScore?.kindHintBoost).toBe(-20);
+  });
+
+  it('"record …" query boosts a .hs class and penalizes a function', () => {
+    const r = rankSymbols(
+      [hs('ApiRequest', 'class'), hs('parse', 'function')],
+      'record capturing the parsed HTTP request',
+      true,
+    );
+    const byName = new Map(r.map((x) => [x.symbol.name, x.debugScore?.kindHintBoost]));
+    expect(byName.get('ApiRequest')).toBe(35);
+    expect(byName.get('parse')).toBe(-20);
+  });
+
+  it('"sum type …" query lifts the data type above its constructor const', () => {
+    const r = rankSymbols(
+      [hs('ActRelationInfo QualifiedIdentifier', 'const'), hs('QualifiedIdentifier', 'class')],
+      'data type pairing a schema name with a relation name qualified identifier',
+    );
+    expect(r[0]!.symbol.name).toBe('QualifiedIdentifier');
+  });
+
+  it('spaced instance/constructor names get −15 on multi-word queries', () => {
+    const r = rankSymbols([hs('ToHeaderValue PreferCount', 'class')], 'prefer count header value', true);
+    expect(r[0]!.debugScore?.kindHintBoost).toBe(-15);
+  });
+
+  it('does not fire outside .hs files', () => {
+    const r = rankSymbols(
+      [sym('AuthResult', { kind: 'class', filePath: 'src/auth.ts' })],
+      'function that validates the JWT secret',
+      true,
+    );
+    expect(r[0]!.debugScore?.kindHintBoost).toBe(0);
+  });
+});

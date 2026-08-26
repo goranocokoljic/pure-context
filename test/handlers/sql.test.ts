@@ -168,6 +168,48 @@ describe('sqlHandler — plain SQL DDL', () => {
   });
 });
 
+// ─── psql extension schema placeholder (@extschema@) ─────────────────────────
+
+describe('sqlHandler — @extschema@ placeholder prefix (TimescaleDB-style)', () => {
+  const EXTSCHEMA_SQL = `
+CREATE OR REPLACE FUNCTION @extschema@.create_hypertable(
+  relation REGCLASS,
+  dimension _timescaledb_internal.dimension_info
+) RETURNS TABLE(hypertable_id INT, created BOOL) AS '@MODULE_PATHNAME@' LANGUAGE C;
+
+CREATE OR REPLACE PROCEDURE @extschema@.refresh_continuous_aggregate(
+  continuous_aggregate REGCLASS
+) LANGUAGE C AS '@MODULE_PATHNAME@';
+
+CREATE TABLE @extschema@.settings (key TEXT PRIMARY KEY);
+`.trimStart();
+  const buf = Buffer.from(EXTSCHEMA_SQL);
+  const syms = () => sqlHandler.extractSymbols(null as unknown as Tree, buf, 'sql/ddl_api.sql');
+
+  it('extracts create_hypertable with the placeholder schema stripped', () => {
+    const s = syms().find((x) => x.name === 'create_hypertable');
+    expect(s).toBeDefined();
+    expect(s!.kind).toBe('function');
+  });
+
+  it('extracts refresh_continuous_aggregate procedure', () => {
+    const s = syms().find((x) => x.name === 'refresh_continuous_aggregate');
+    expect(s).toBeDefined();
+    expect(s!.kind).toBe('function');
+    expect(s!.signature).toContain('PROCEDURE');
+  });
+
+  it('extracts settings table behind the placeholder', () => {
+    const s = syms().find((x) => x.name === 'settings');
+    expect(s).toBeDefined();
+    expect(s!.kind).toBe('class');
+  });
+
+  it('does not leak the @extschema@ prefix into any symbol name', () => {
+    expect(syms().every((x) => !x.name.includes('@'))).toBe(true);
+  });
+});
+
 // ─── CTE extraction ───────────────────────────────────────────────────────────
 
 describe('sqlHandler — CTE extraction', () => {

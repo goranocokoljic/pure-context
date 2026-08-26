@@ -11,6 +11,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.22.0] - 2026-08-26 — Phase 89: Graph Integrity + Edge Hygiene
+
+Driven by the 1.18.0 verification report on a production Android automotive
+tree (and its follow-ups). Headline: the graph is now correct when built AND
+stays correct as it is used.
+
+### Fixed (critical)
+
+- **Incremental re-index no longer destroys the dependency graph.** Re-parsing
+  a file used to delete its INCOMING edges too (they only regenerated when each
+  importer was itself re-indexed), so the prescribed `index_file`-after-write
+  loop rotted the graph monotonically. Reprocessing now clears outgoing edges
+  only; both-direction deletion is reserved for files actually removed from
+  disk.
+- **Newly added files now receive incoming edges.** Raw import statements are
+  persisted per file (schema v9 → v10, `import_records` table), so when a new
+  file arrives the graph re-resolves from stored records — no re-parsing.
+  Pre-v10 indexes re-parse once, automatically, to backfill.
+- **`index_folder` prunes files that vanished from disk** (`filesPruned` in the
+  response). An in-place branch switch previously accreted the union of every
+  branch ever indexed; only deleting the database recovered. Worktree-per-branch
+  guidance is now documented as the intended pattern.
+
+### Added
+
+- **`graph.reservedNamespaces` config** (default: `android`, `androidx`,
+  `java`, `javax`, `kotlin`, `kotlinx`, `dalvik`, `com.android.internal`,
+  `sun`, `jdk`): imports of platform namespaces never resolve to local files —
+  vendored AOSP shims and unit-test stubs declaring `package android.util` no
+  longer capture `import android.util.Log` (31% of edges on the report's
+  corpus). `[]` disables (AOSP-fork opt-out). Applies to DI-edge type matching
+  BEFORE package stripping.
+- **Production → test-source-set edges eliminated** (28.6% of edges on the
+  report's corpus): a shared test-path predicate (`src/core/test-paths.ts`,
+  replacing five private copies) now covers Gradle (`src/test/`,
+  `src/androidTest/`, `src/testFixtures/`) and .NET (`*.Tests/`) layouts;
+  resolvers and DI edges drop test-set candidates for non-test importers.
+- **Blast-radius honesty:** `get_blast_radius` now returns
+  `granularity: "file"`, the effective `depth`, and `truncated: true` when the
+  walk hit its depth cap with unexplored dependents (previously a silent
+  cutoff); descriptions corrected (edges are file-level).
+- **Library entry point:** `import { bootstrapLibrary, indexFolder } from
+  'purecontext-mcp/lib'` drives the indexer programmatically with no MCP
+  server side effect.
+
+### Changed
+
+- **ONE registration list** (`src/core/bootstrap-registry.ts`) replaces four
+  hand-kept handler/adapter lists that had drifted (the benchmark harness's
+  secondary runner had 21 of 41 handlers; adapter ORDER differed between main
+  process and workers).
+- The test suite writes to a temp directory via `PCTX_DATA_DIR`
+  (`test/setup.ts`) — `npm test` no longer touches `~/.purecontext`.
+- `src/graph/di-edges.ts` and `src/server/tools/compare-change-impact.ts` no
+  longer contain raw NUL bytes (git diff/blame/grep work again; PureContext can
+  index its own source). A hygiene guard test keeps the whole `src/` tree
+  NUL-free and asserts `src/version.ts` matches `package.json`.
+
+---
+
+## [1.21.0] - 2026-08-26
+
+### Fixed
+
+**Phase 88 — Search-Quality Repair Sweep.** Benchmark-driven repair of the known hard zeros and the two biggest retrieval/ranking defects. Each fix was diagnosed retrieval-vs-ranking first; ranking changes are per-language gated (no global formula change).
+
+- **SQL (`sql.ts`): `@extschema@.` placeholder support.** TimescaleDB-style PGXS extension scripts declare their entire public API as `CREATE FUNCTION @extschema@.name(...)` — the placeholder made the CREATE regex fail and none of those functions were indexed. `CREATE TABLE/VIEW/FUNCTION/PROCEDURE` now accept an optional `@schema@.` prefix (stripped from the stored name). timescaledb benchmark: 0/4/8 → 60/76/84 (P@1/P@3/R@5).
+- **OpenAPI (`openapi.ts`): one-pass key-offset index.** `findKeyOffset` re-scanned the whole buffer per path/schema — O(keys × bytes), 6.2 s for one 10 MB GitHub spec, hours for large spec repos (the real cause of the old "rest-api-description: 3+ hours, 0 files" report; the previously blamed `\w+` regex never existed). `buildKeyOffsetIndex` builds byte offsets in two O(bytes) passes (line-anchored YAML/pretty-JSON keys + quoted keys anywhere for minified JSON; non-ASCII-safe); the old scan remains as fallback on map miss. 11× faster per file.
+- **FTS (`symbol-store.ts`): UI-kind alias tokens.** Symbols of kind `hook`/`composable` now index the tokens "hook composable" (cross-framework synonyms) and `component` indexes "component". Hook names never contain the word "hook", so vocabulary queries ("hook to create a workflow") could not retrieve them into the FTS candidate pool at all on large mixed monorepos. novu: 0/0/0 → 28/28/40.
+- **Search (`search-symbols.ts` + harness): OR-fallback on near-empty AND pools.** The OR merge now fires when the AND pool has fewer than 5 candidates (was: only 0) — a near-empty AND pool means low recall, not precision; AND hits still rank first.
+- **Ranker (`relevance-ranker.ts`), Java/Groovy-gated (auto-active for Java-dominant pools):** (1) single-token generic-verb names (`run`, `execute`, `get`, …) have identityExact scaled to ⅓ on multi-word queries — they hit +60 via one query word or its verb synonym and outranked the real target on nearly every jenkins query; (2) new `camelCompoundBoost` +30 when ALL camelCase name parts appear in the query (analog of the underscore compound boost). jenkins: 4/8/12 → 36/60/72 (now ahead of the competitor's 32/48/56); gradle 8/12/20 → 16/32/44; groovy 12/24/36 → 32/44/44; maven 52/52/56.
+- **Ranker, Haskell-gated (`.hs`/`.lhs`):** queries announce the kind ("function that…", "record…", "sum type…") — honour it both ways (+35 matching kind, −20 contradicting kind), and penalize spaced typeclass-instance/constructor names (−15) that outrank the real type by word overlap. postgrest-hs: 0/28/36 → 16/40/52; pandoc 0/4/8 → 8/20/20.
+- **Swift (`swift.ts`): extension ID collision.** `extension Foo` in the same file as `class Foo` produced the same symbol ID and `INSERT OR REPLACE` let the last extension overwrite the primary declaration — destroying its doc comment (swift-nio: every `ChannelPipeline` row was a bare "Swift extension:" stub). Extension IDs are now keyed by byte position. swift-nio: 0/4/4 → 4/8/12.
+- **Objective-C (`objective-c.ts`): GNUstep `GS_GENERIC_CLASS` macro.** `@interface GS_GENERIC_CLASS(NSArray, __covariant ElementT)` captured the macro as the class name, so NSArray/NSString/NSDictionary/… were entirely absent from the libs-base index. The macro call is normalized to its first argument before interface matching.
+- **Benchmark harness parity (`run_benchmark.ts`):** the harness's dim2 search path had silently drifted from production — it lacked the Phase-71 hook OR-fallback clause AND passed no `RankOptions` to `rankSymbols` (mixed-monorepo/frontend/Java-Groovy/Angular boosts were never measured). It now imports the production helpers (`hasReactHookQuery`, `detectMixedMonorepo`, `detectJavaGroovyMixed` — newly exported) instead of duplicating them.
+
+### Benchmark notes
+
+18 repos re-run; full per-repo movement table with coverage-vs-ranking attribution in `dev-docs/benchmarks/BENCHMARK-RESULTS.md` ("Phase 88 re-run notes"). nuxt's drop from the Phase-49-era table value is a stale-baseline correction (isolation-verified pre-88; Phase 75 predicted the shift when `.vue` indexing was fixed); nestjs-ecommerce 84→80 is run-to-run FTS-pool-boundary variance on a 2-point margin, not a Phase-88 effect.
+
+---
+
 ## [1.20.0] - 2026-08-26
 
 ### Added

@@ -418,8 +418,10 @@ export async function handler(args: {
           // Also fire when query asks for a React hook (use*/hook) but AND pool has
           // no use[A-Z] symbols — hook names rarely satisfy all AND terms.
           const isHookQuery = hasReactHookQuery(args.query);
+          // < 5: a near-empty AND pool almost always means low recall, not a
+          // precise hit — merge in the OR pool (AND hits still rank first).
           const needsOrFallback =
-            symbols.length === 0 ||
+            symbols.length < 5 ||
             !hasServiceMethodCandidate(symbols) ||
             symbols.every((s) => isLibraryPath(s.filePath)) ||
             (isHookQuery && !symbols.some((s) => /^use[A-Z]/.test(s.name)));
@@ -616,7 +618,7 @@ function round4(n: number): number {
  * token starts with 'use' and has ≥ 4 chars (filters out the English word
  * "use"), OR the query contains the word 'hook' / 'hooks'.
  */
-function hasReactHookQuery(query: string): boolean {
+export function hasReactHookQuery(query: string): boolean {
   const words = query.toLowerCase().split(/[\s-]+/).filter(Boolean);
   const firstMeaningful = words.find((w) => !isStopWord(w) && w.length >= 2);
   if (firstMeaningful && firstMeaningful.startsWith('use') && firstMeaningful.length >= 4) return true;
@@ -630,7 +632,7 @@ function hasReactHookQuery(query: string): boolean {
  *
  * Uses the already-fetched FTS5 candidate pool — no extra DB queries.
  */
-function detectMixedMonorepo(symbols: SymbolRecord[]): boolean {
+export function detectMixedMonorepo(symbols: SymbolRecord[]): boolean {
   let hasFrontend = false;
   let hasBackend = false;
   for (const s of symbols) {
@@ -656,7 +658,7 @@ function detectMixedMonorepo(symbols: SymbolRecord[]): boolean {
  * indicating a mixed Java+Groovy repo (gradle, jenkins, groovy) where Groovy
  * `def` methods may be outranked by numerically-dominant Java methods.
  */
-function detectJavaGroovyMixed(symbols: SymbolRecord[]): boolean {
+export function detectJavaGroovyMixed(symbols: SymbolRecord[]): boolean {
   let hasJava = false;
   let hasGroovy = false;
   for (const s of symbols) {

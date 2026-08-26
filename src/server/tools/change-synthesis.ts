@@ -41,6 +41,7 @@ import { getAllDepEdges } from '../../core/db/dep-store.js';
 import { buildAdjacencyList, findCycles } from './detect-antipatterns.js';
 import { assignLayer, isAllowed } from './get-layer-violations.js';
 import { getConfig } from '../../config/config-loader.js';
+import { isTestFilePath as isTestFile } from '../../core/test-paths.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -81,15 +82,8 @@ export interface ChangeSynthesis {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Mirror of symbol-risk's test-file heuristic (kept local to stay MCP-free). */
-function isTestFile(filePath: string): boolean {
-  const norm = filePath.replace(/\\/g, '/');
-  if (/(?:^|\/)(?:tests?|specs?|__tests__)\//.test(norm)) return true;
-  if (/[._](?:test|spec)\.[a-z]+$/.test(norm)) return true;
-  const filename = norm.split('/').pop() ?? '';
-  if (/^(?:test|spec)_/.test(filename)) return true;
-  return false;
-}
+// Test-file classification: shared predicate (Task 549 — was one of five
+// private copies). Imported at the top of the file.
 
 const BAND_RANK: Record<'low' | 'review' | 'high', number> = { low: 0, review: 1, high: 2 };
 

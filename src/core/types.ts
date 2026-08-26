@@ -199,6 +199,13 @@ export interface IndexResult {
    * reasoning over a truncated index silently.
    */
   limitReached: boolean;
+  /**
+   * Files removed from the index because they no longer exist on disk
+   * (Task 562 — keeps an in-place branch switch from accreting the union of
+   * every branch). Absent on targeted re-index (reindexFiles takes explicit
+   * deletions instead) and when discovery was truncated by fileLimit.
+   */
+  filesPruned?: number;
   /** Files discovery found before fileLimit was applied. */
   totalBeforeLimit: number;
 }

@@ -18,6 +18,7 @@
 
 import type Database from 'better-sqlite3';
 import { logger } from './logger.js';
+import { isTestFilePath } from './test-paths.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,32 +39,9 @@ const STRUCTURAL_KINDS = new Set(['type', 'interface', 'enum']);
 // Minimum symbol name length to avoid false positives on very short names.
 const MIN_NAME_LENGTH = 3;
 
-// Directories whose path segments indicate test files.
-const TEST_DIR_SEGMENTS = new Set(['test', 'tests', '__tests__', 'spec', 'specs']);
-
-// File extensions that mark test files regardless of directory.
-const TEST_FILE_SUFFIXES = [
-  '.test.ts', '.test.tsx', '.test.js', '.test.jsx',
-  '.spec.ts', '.spec.tsx', '.spec.js', '.spec.jsx',
-];
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function isTestFilePath(filePath: string): boolean {
-  const normalized = filePath.replace(/\\/g, '/');
-
-  for (const suffix of TEST_FILE_SUFFIXES) {
-    if (normalized.endsWith(suffix)) return true;
-  }
-
-  const segments = normalized.split('/');
-  // Check every directory segment except the filename itself.
-  for (let i = 0; i < segments.length - 1; i++) {
-    if (TEST_DIR_SEGMENTS.has((segments[i] ?? '').toLowerCase())) return true;
-  }
-
-  return false;
-}
+// Test-file classification lives in the shared predicate (Task 549) — this was
+// one of five private copies.
 
 /** Escape a string so it can be used safely inside a RegExp literal. */
 function escapeRegex(s: string): string {

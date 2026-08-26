@@ -33,6 +33,7 @@ import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SymbolKind } from '../../core/types.js';
+import { isTestFilePath as isTestFile } from '../../core/test-paths.js';
 
 export const name = 'find_untested_symbols';
 
@@ -131,25 +132,8 @@ interface UntestedSymbol {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
-/**
- * Returns true when a file path looks like a test file by convention.
- */
-function isTestFile(filePath: string): boolean {
-  // Normalise separators
-  const norm = filePath.replace(/\\/g, '/');
-
-  // Path-segment match: /test/, /tests/, /spec/, /specs/, /__tests__/
-  if (/(?:^|\/)(?:tests?|specs?|__tests__)\//.test(norm)) return true;
-
-  // Filename suffix: .test.ts, .spec.ts, .test.js, _test.go, etc.
-  if (/[._](?:test|spec)\.[a-z]+$/.test(norm)) return true;
-
-  // Filename prefix: test_foo.py, spec_foo.rb
-  const filename = norm.split('/').pop() ?? '';
-  if (/^(?:test|spec)_/.test(filename)) return true;
-
-  return false;
-}
+// Test-file classification: shared predicate (Task 549 — was one of five
+// private copies). Imported at the top of the file.
 
 /**
  * Extract all identifier tokens from source text.

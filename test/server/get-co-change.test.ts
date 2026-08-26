@@ -37,8 +37,11 @@ function parse(result: { content: Array<{ text: string }> }) {
 describe('Phase 76 tools (get_co_change / get_symbol_risk / bundle)', () => {
   let mods: Awaited<ReturnType<typeof loadModules>>;
 
+  let prevDataDir: string | undefined;
+
   beforeAll(async () => {
     dataDir = mkdtempSync(join(tmpdir(), 'pctx-p76-'));
+    prevDataDir = process.env['PCTX_DATA_DIR'];
     process.env['PCTX_DATA_DIR'] = dataDir;
     mods = await loadModules();
 
@@ -86,7 +89,13 @@ describe('Phase 76 tools (get_co_change / get_symbol_risk / bundle)', () => {
   });
 
   afterAll(() => {
-    delete process.env['PCTX_DATA_DIR'];
+    // Restore (not delete) so the global test guard from test/setup.ts
+    // keeps later test files in this worker out of the real ~/.purecontext.
+    if (prevDataDir === undefined) {
+      delete process.env['PCTX_DATA_DIR'];
+    } else {
+      process.env['PCTX_DATA_DIR'] = prevDataDir;
+    }
     if (dataDir) rmSync(dataDir, { recursive: true, force: true });
   });
 

@@ -10,8 +10,10 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 export const name = 'get_blast_radius';
 
 export const description =
-  'Reverse-walk the dependency graph to find all files that (transitively) import a symbol. ' +
-  'Use this to assess the impact of changing or deleting a symbol before making edits.';
+  "Reverse-walk the dependency graph to find files that (transitively) import the symbol's FILE. " +
+  'Use this to assess the impact of changing or deleting a symbol before making edits. ' +
+  'Granularity is file-level: every symbol in the same file returns the same radius. ' +
+  'The walk stops at `depth` hops (default 3) — `truncated: true` means deeper dependents exist.';
 
 export const inputSchema = {
   repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
@@ -43,6 +45,11 @@ export function handler(args: { repoId: string; symbolId: string; depth?: number
         text: JSON.stringify(
           {
             symbolId: args.symbolId,
+            // dep_edges is file-to-file — symbol-level edges are a future
+            // phase. Stated so agents do not over-trust the precision.
+            granularity: 'file',
+            depth: args.depth ?? 3,
+            truncated: result.truncated,
             affectedFiles: result.files.length,
             affectedSymbols: result.symbols.length,
             _tokenEstimate: result.tokenEstimate,

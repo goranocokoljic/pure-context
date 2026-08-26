@@ -102,9 +102,18 @@ function makeBufferResponse(buf: Buffer, status = 200): Response {
 
 // ─── Setup / teardown ─────────────────────────────────────────────────────────
 
+let prevDataDir: string | undefined;
+
 beforeEach(() => {
   testHome = join(tmpdir(), `pctx-test-home-${Date.now()}`);
   mkdirSync(testHome, { recursive: true });
+
+  // fetch-public-index prefers PCTX_DATA_DIR over homedir(), and test/setup.ts
+  // (Task 551) sets it globally to a STABLE shared dir — which would let the
+  // manifest cache persist across tests and mask fetch-failure cases. Point it
+  // at this test's fresh per-test home instead.
+  prevDataDir = process.env['PCTX_DATA_DIR'];
+  process.env['PCTX_DATA_DIR'] = join(testHome, '.purecontext');
 
   vi.clearAllMocks();
 
@@ -119,6 +128,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (prevDataDir === undefined) {
+    delete process.env['PCTX_DATA_DIR'];
+  } else {
+    process.env['PCTX_DATA_DIR'] = prevDataDir;
+  }
   if (existsSync(testHome)) {
     rmSync(testHome, { recursive: true, force: true });
   }

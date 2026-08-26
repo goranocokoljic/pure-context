@@ -299,3 +299,32 @@ describe('Swift handler — extractImports', () => {
     expect(imports.map((i) => i.specifier)).toContain('UIKit');
   });
 });
+
+// ─── Extension ID collision (Phase 88, Task 546) ─────────────────────────────
+
+describe('Swift handler — extension does not clobber the primary declaration', () => {
+  it('class + same-file extensions keep distinct IDs and the class summary survives', async () => {
+    const { tree, buf } = await parse(`
+/// An ordered list of handlers.
+public final class ChannelPipeline {
+  public init() {}
+}
+
+extension ChannelPipeline {
+  public func addHandler() {}
+}
+
+extension ChannelPipeline {
+  public func removeHandler() {}
+}
+`);
+    const syms = swiftHandler.extractSymbols(tree, buf, 'ChannelPipeline.swift');
+    const pipelineRows = syms.filter((s) => s.name === 'ChannelPipeline' && s.kind === 'class');
+    // one class + two extensions, all with unique IDs
+    expect(pipelineRows.length).toBe(3);
+    expect(new Set(pipelineRows.map((s) => s.id)).size).toBe(3);
+    const classRow = pipelineRows.find((s) => !s.frameworkMeta?.['swift_extension']);
+    expect(classRow).toBeDefined();
+    expect(classRow!.summary).toContain('ordered list of handlers');
+  });
+});

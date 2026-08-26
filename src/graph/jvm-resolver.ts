@@ -36,6 +36,7 @@ import type Database from 'better-sqlite3';
 import { getDeclaredPackages } from '../core/db/file-store.js';
 import { getConfig } from '../config/config-loader.js';
 import { logger } from '../core/logger.js';
+import { isTestFilePath } from '../core/test-paths.js';
 
 // ─── Public surface ───────────────────────────────────────────────────────────
 
@@ -151,6 +152,11 @@ export interface JvmResolverOptions {
    * explode dep_edges). 0 = uncapped. Default: config `graph.maxWildcardFanout`.
    */
   maxWildcardFanout?: number;
+  /**
+   * Namespace prefixes that never resolve locally (Task 548). Default:
+   * config `graph.reservedNamespaces`; [] disables the check.
+   */
+  reservedNamespaces?: string[];
 }
 
 export function createJvmResolver(
@@ -161,7 +167,22 @@ export function createJvmResolver(
 ): JvmResolver {
   const maxWildcardFanout =
     options?.maxWildcardFanout ?? getConfig().graph.maxWildcardFanout;
+  const reservedNamespaces =
+    options?.reservedNamespaces ?? getConfig().graph.reservedNamespaces;
   let fanoutWarned = false;
+
+  /**
+   * Reserved-namespace check (Task 548): `android.util.Log` means the
+   * platform SDK even when a repo file declares `package android.util`
+   * (vendored AOSP shims, unit-test stubs). Prefix `p` matches `p` and
+   * everything under `p.`. Empty list = disabled (AOSP-fork opt-out).
+   */
+  function isReserved(name: string): boolean {
+    for (const ns of reservedNamespaces) {
+      if (name === ns || name.startsWith(ns + '.')) return true;
+    }
+    return false;
+  }
 
   /**
    * Deterministically cap a package-wide expansion. Logged once per
@@ -187,11 +208,14 @@ export function createJvmResolver(
 
   const declared = getDeclaredPackages(db, repoId);
 
-  // file → package
+  // file → package. Files DECLARING a reserved package are never registered
+  // as resolution targets (mirrors go-resolver's vendor/ skip: filter at
+  // registration, so no candidate set ever contains them — this also keeps
+  // them out of the basename/symbol-table fallbacks).
   const filePkg = new Map<string, string>();
   for (const f of jvmFiles) {
     const pkg = declared.get(f) ?? derivePackageFromPath(f);
-    if (pkg) filePkg.set(f, pkg);
+    if (pkg && !isReserved(pkg)) filePkg.set(f, pkg);
   }
 
   // package → files
@@ -265,8 +289,25 @@ export function createJvmResolver(
     return sameModule.length > 0 ? sameModule : candidates;
   }
 
+  /**
+   * Production → test-source-set edges do not exist (Task 549, report Issue
+   * B): a file under src/main/ cannot depend on src/test/ — the dependency
+   * only runs the other way. When the IMPORTER is not itself a test file,
+   * test-source-set candidates are dropped BEFORE the same-module preference
+   * and the all-candidates fallback, so a genuine main-source candidate is
+   * never displaced by a stub. Empty after filtering ⇒ no edge (the target
+   * was a shadow/stub, not a dependency).
+   */
+  function dropTestCandidates(candidates: string[], sourceFile: string): string[] {
+    if (candidates.length === 0 || isTestFilePath(sourceFile)) return candidates;
+    return candidates.filter((f) => !isTestFilePath(f));
+  }
+
   function packageFiles(pkg: string, sourceFile: string): string[] {
-    return (pkgFiles.get(pkg) ?? []).filter((f) => f !== sourceFile);
+    return dropTestCandidates(
+      (pkgFiles.get(pkg) ?? []).filter((f) => f !== sourceFile),
+      sourceFile,
+    );
   }
 
   function resolveInPackage(pkg: string, name: string, sourceFile: string): string[] {
@@ -279,7 +320,10 @@ export function createJvmResolver(
     if (candidates.length === 0) {
       candidates = [...(pkgSymbols.get(pkg)?.get(name) ?? [])];
     }
-    candidates = candidates.filter((f) => f !== sourceFile);
+    candidates = dropTestCandidates(
+      candidates.filter((f) => f !== sourceFile),
+      sourceFile,
+    );
     return preferSameModule(candidates, sourceFile);
   }
 
@@ -312,6 +356,11 @@ export function createJvmResolver(
     resolve(specifier: string, sourceFile: string): string[] {
       let spec = specifier.trim().replace(/;$/, '').trim();
       if (spec.length === 0) return [];
+
+      // Reserved namespace → external, no edge — and no fallthrough to the
+      // basename/symbol-table fallbacks, which could otherwise match a
+      // same-named local symbol.
+      if (isReserved(spec)) return [];
 
       // Scala selector clause: a.b.{Map, Set => MSet, _}
       const braceIdx = spec.indexOf('{');

@@ -15,7 +15,7 @@ dep_edge: sourceFile → resolvedTargetFile (via import specifier)
 
 Edges are stored in the `dep_edges` SQLite table. An edge is created only when the import specifier can be resolved to a file inside the repo. Two cases resolve to nothing and produce **no edge**:
 
-- **External packages** (e.g., `from 'react'`, `java.util.*`) — correctly excluded.
+- **External packages** (e.g., `from 'react'`, `java.util.*`) — correctly excluded. Since v1.22.0 this includes **reserved namespaces** (`graph.reservedNamespaces`, default `android.*`/`java.*`/`kotlin.*`/…): even when a repo file DECLARES such a package (vendored AOSP shims, JVM unit-test stubs shadowing `android.util.Log` — standard Android practice), an import of that namespace means the platform SDK and produces no edge. Set `[]` on an AOSP fork that genuinely owns those namespaces.
 - **Package-style imports in languages without a resolver** (e.g., Ruby requires) — these are currently indistinguishable from external packages, so repos in those languages have few or zero edges. Graph tools built on `dep_edges` return empty results there; that is a missing graph, not an empty dependency set. Rust resolves since v1.20.0 (mod-tree resolver: `src/` layout per Cargo crate, `crate::`/`self::`/`super::`, workspace crates by name). See the support matrix in [LANGUAGE-SUPPORT.md](../LANGUAGE-SUPPORT.md#which-languages-get-dependency-edges).
 
 JVM imports (Kotlin, Java, Scala, Groovy) ARE resolved: each file's declared `package` is captured at index time and `com.example.Foo` maps to the file that declares it, including wildcard imports, Kotlin top-level member imports, and same-package-in-several-modules disambiguation (own Gradle/Maven module preferred, otherwise edges to all candidates). Repos indexed before v1.15.0 need one re-index to populate the package data.
@@ -28,9 +28,15 @@ Go imports ARE resolved (v1.17.0): every `go.mod` above an indexed `.go` file co
 
 PHP, Haskell, Elixir, Erlang, and Fortran imports ARE resolved (v1.19.0, "Declared-Module Wave 2"): PHP `use` clauses resolve against declared namespaces + the qualified symbol table, with composer.json PSR-4 maps as fallback (whole-namespace uses are capped by `graph.maxWildcardFanout`); Haskell `import A.B.C` matches the file declaring `module A.B.C where` (one module per file); Elixir `alias`/`import`/`use` matches `defmodule` symbols, with a longest-known-prefix fallback for nested module names; Erlang `-import(mod, …)` resolves by file basename (`mod.erl`) and `-include`/`-include_lib` by `.hrl` basename; Fortran `USE name` matches files declaring `MODULE name` (case-insensitive). External specifiers (`Symfony\…`, `Data.Map`, `Ecto.*`, OTP modules, compiler intrinsics) produce no edge. Repos indexed before v1.19.0 need one re-index.
 
+Edge hygiene (v1.22.0): a **production file never gets an edge into a test source set** (`src/test/`, `src/androidTest/`, `src/testFixtures/`, .NET `*.Tests/` projects) — a `src/main/` file cannot depend on a test stub; the dependency only runs the other way (test → main stays allowed). The same rule applies to Hilt/Dagger DI edges (a production consumer never depends on a `@TestInstallIn` fake).
+
+Freshness (v1.22.0): re-indexing a file clears only its OUTGOING edges (incoming edges from unchanged importers survive — previously the `index_file` loop eroded them); adding a new file re-resolves the graph from stored import records so unchanged importers gain their edges; and `index_folder` prunes files that vanished from disk (`filesPruned` in the response), so an in-place branch switch converges instead of accreting a union of branches.
+
 Two directions of traversal:
 - **Forward walk** — "what does X depend on?" (imports, transitively)
 - **Reverse walk** — "what depends on X?" (importers, transitively)
+
+Both walks are **file-granular** and depth-capped (default 3). `get_blast_radius` reports `granularity: "file"`, the effective `depth`, and `truncated: true` when the cap cut the walk short — treat a truncated result as a lower bound.
 
 ---
 

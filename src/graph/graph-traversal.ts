@@ -12,6 +12,12 @@ export interface TraversalResult {
   files: string[];
   /** Rough token estimate (sum of signature + summary lengths ÷ 4). */
   tokenEstimate: number;
+  /**
+   * True when the BFS hit its depth cap with unexplored neighbors remaining
+   * (Task 550): the result is a LOWER BOUND, not the complete set. Silent
+   * before v1.22.0 — agents treated a depth-3 cutoff as "everything".
+   */
+  truncated: boolean;
 }
 
 export interface ImporterInfo {
@@ -36,9 +42,9 @@ export function getBlastRadius(
   if (!startSymbol) return empty();
 
   const visitedFiles = new Set<string>();
-  bfsFiles(startSymbol.filePath, repoId, db, depth, visitedFiles, 'reverse');
+  const truncated = bfsFiles(startSymbol.filePath, repoId, db, depth, visitedFiles, 'reverse');
 
-  return collectResult(visitedFiles, repoId, db);
+  return { ...collectResult(visitedFiles, repoId, db), truncated };
 }
 
 /**
@@ -56,9 +62,9 @@ export function getContextBundle(
   if (!startSymbol) return empty();
 
   const visitedFiles = new Set<string>();
-  bfsFiles(startSymbol.filePath, repoId, db, depth, visitedFiles, 'forward');
+  const truncated = bfsFiles(startSymbol.filePath, repoId, db, depth, visitedFiles, 'forward');
 
-  return collectResult(visitedFiles, repoId, db);
+  return { ...collectResult(visitedFiles, repoId, db), truncated };
 }
 
 /**
@@ -92,6 +98,11 @@ export function findDeadCode(
 
 type Direction = 'forward' | 'reverse';
 
+/**
+ * Returns true when the walk was TRUNCATED: a file at the depth cap still had
+ * unvisited neighbors, so deeper dependents/dependencies exist beyond the
+ * result (Task 550 — previously the queue was abandoned silently).
+ */
 function bfsFiles(
   startFile: string,
   repoId: string,
@@ -99,16 +110,15 @@ function bfsFiles(
   maxDepth: number,
   visited: Set<string>,
   direction: Direction,
-): void {
+): boolean {
   // Queue entries: [filePath, currentDepth]
   const queue: Array<[string, number]> = [[startFile, 0]];
+  let truncated = false;
 
   while (queue.length > 0) {
     const [file, depth] = queue.shift()!;
     if (visited.has(file)) continue;
     visited.add(file);
-
-    if (depth >= maxDepth) continue;
 
     const edges =
       direction === 'forward'
@@ -117,18 +127,23 @@ function bfsFiles(
 
     for (const edge of edges) {
       const next = direction === 'forward' ? edge.targetFile : edge.sourceFile;
-      if (!visited.has(next)) {
+      if (visited.has(next)) continue;
+      if (depth >= maxDepth) {
+        truncated = true;
+      } else {
         queue.push([next, depth + 1]);
       }
     }
   }
+
+  return truncated;
 }
 
 function collectResult(
   files: Set<string>,
   repoId: string,
   db: Database.Database,
-): TraversalResult {
+): Omit<TraversalResult, 'truncated'> {
   const symbols: SymbolRecord[] = [];
   for (const file of files) {
     symbols.push(...getSymbolsByFile(db, repoId, file));
@@ -149,7 +164,7 @@ function estimateTokens(symbols: SymbolRecord[]): number {
 }
 
 function empty(): TraversalResult {
-  return { symbols: [], files: [], tokenEstimate: 0 };
+  return { symbols: [], files: [], tokenEstimate: 0, truncated: false };
 }
 
 // ─── Import cycle detection ───────────────────────────────────────────────────

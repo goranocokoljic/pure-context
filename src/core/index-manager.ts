@@ -18,10 +18,17 @@ import { upsertFile, deleteFile, getAllFileHashes } from './db/file-store.js';
 import {
   insertEdges,
   deleteEdgesByFile,
+  deleteEdgesBySource,
   deleteEdgesByType,
+  deleteEdgesExceptType,
   getForwardDeps,
   getReverseDeps,
 } from './db/dep-store.js';
+import {
+  replaceImportRecords,
+  deleteImportRecordsByFile,
+  getAllImportRecords,
+} from './db/import-store.js';
 import { discoverFiles, DEFAULT_FILE_LIMIT } from './file-discovery.js';
 import { createHashCache, computeHash } from './hash-cache.js';
 import { initParser, isInitialized } from './parse-dispatcher.js';
@@ -151,9 +158,39 @@ export async function indexFolder(
 
   // ── 4. Load hash cache from DB ────────────────────────────────────────────
   const cache = createHashCache();
+  const preRepo = getRepo(db, repoId);
   const existingHashes = getAllFileHashes(db, repoId);
-  for (const [path, hash] of existingHashes) {
-    cache.set(path, hash);
+  if (preRepo && preRepo.schemaVersion < 10) {
+    // Pre-v10 index: import_records (Task 561) were never captured for its
+    // files. Leave the cache empty so every file re-parses once and the
+    // records backfill — otherwise hash-skipped files would never get records
+    // and the new-file edge rebuild in reindexFiles could not be trusted.
+    logger.info('Index predates schema v10 — full re-parse to backfill import records');
+  } else {
+    for (const [path, hash] of existingHashes) {
+      cache.set(path, hash);
+    }
+  }
+
+  // ── 4b. Prune files that vanished from disk (Task 562) ────────────────────
+  // Without this, an in-place branch switch accretes the UNION of every
+  // branch ever indexed (report critical 2). Skipped when discovery was
+  // truncated by fileLimit — a file absent from a truncated listing is not
+  // proof it left the disk.
+  let filesPruned = 0;
+  if (limitSkipped === 0) {
+    const onDisk = new Set(supportedFiles.map((df) => df.path));
+    for (const path of existingHashes.keys()) {
+      if (onDisk.has(path)) continue;
+      deleteByFile(db, repoId, path);
+      deleteEdgesByFile(db, repoId, path); // truly gone → both directions
+      deleteImportRecordsByFile(db, repoId, path);
+      deleteFile(db, repoId, path);
+      filesPruned++;
+    }
+    if (filesPruned > 0) {
+      logger.info(`Pruned ${filesPruned} file(s) no longer on disk`);
+    }
   }
 
   // ── 5. Filter to changed / new files (carry content to avoid double-read) ──
@@ -223,7 +260,9 @@ export async function indexFolder(
           allImports.push(...pr.imports);
 
           deleteByFile(db, repoId, relPath);
-          deleteEdgesByFile(db, repoId, relPath);
+          // Reprocess: clear only OUTGOING edges — incoming edges belong to
+          // other files' parses and would not regenerate (report critical 1).
+          deleteEdgesBySource(db, repoId, relPath);
           if (pr.symbols.length > 0) {
             insertSymbols(db, repoId, pr.symbols);
           }
@@ -235,6 +274,7 @@ export async function indexFolder(
           // no-op index re-read and re-parsed them. Recording the hash lets the
           // next run recognise them as unchanged and skip them.
           upsertFile(db, repoId, relPath, hash, content, 'local', pr.declaredPackage ?? null);
+          replaceImportRecords(db, repoId, relPath, pr.imports);
           cache.set(relPath, hash);
 
           logger.debug(`Processed ${relPath}: ${pr.symbols.length} symbols, ${pr.imports.length} imports`);
@@ -253,9 +293,10 @@ export async function indexFolder(
 
         allImports.push(...imports);
 
-        // Persist: clear old data for this file, insert new
+        // Persist: clear old data for this file, insert new.
+        // Reprocess: outgoing edges only (incoming ones would not regenerate).
         deleteByFile(db, repoId, relPath);
-        deleteEdgesByFile(db, repoId, relPath);
+        deleteEdgesBySource(db, repoId, relPath);
         if (symbols.length > 0) {
           insertSymbols(db, repoId, symbols);
         }
@@ -266,6 +307,7 @@ export async function indexFolder(
         // re-index recognises the file next time instead of re-parsing it on
         // every run (the recurring-churn fix).
         upsertFile(db, repoId, relPath, hash, content, 'local', declaredPackage);
+        replaceImportRecords(db, repoId, relPath, imports);
         cache.set(relPath, hash);
 
         logger.debug(`Processed ${relPath}: ${symbols.length} symbols, ${imports.length} imports`);
@@ -465,6 +507,7 @@ export async function indexFolder(
     durationMs: Date.now() - start,
     errors,
     warnings,
+    filesPruned,
     limitReached: limitSkipped > 0,
     totalBeforeLimit,
   };
@@ -520,6 +563,7 @@ export async function reindexFiles(
   for (const relPath of deletedPaths) {
     deleteByFile(db, repoId, relPath);
     deleteEdgesByFile(db, repoId, relPath);
+    deleteImportRecordsByFile(db, repoId, relPath);
     deleteFile(db, repoId, relPath);
     logger.debug(`Removed ${relPath} from index`);
   }
@@ -532,6 +576,12 @@ export async function reindexFiles(
   let symbolsFound = 0;
   let filesSkipped = 0;
 
+  // Files that did not exist in the index before this call — their arrival can
+  // satisfy imports that UNCHANGED files wrote earlier, so the edge build below
+  // switches to a full re-resolve from stored import records (Task 561).
+  const newFiles: string[] = [];
+  const fileExistsStmt = db.prepare('SELECT 1 FROM files WHERE repo_id = ? AND path = ?');
+
   for (const relPath of changedPaths) {
     const absPath = join(absRoot, relPath);
     let content: Buffer;
@@ -543,6 +593,10 @@ export async function reindexFiles(
       continue;
     }
 
+    if (fileExistsStmt.get(repoId, relPath) === undefined) {
+      newFiles.push(relPath);
+    }
+
     try {
       const { symbols, imports, declaredPackage } = await processFile(relPath, content, adapters);
 
@@ -551,10 +605,15 @@ export async function reindexFiles(
       // rows here would let a targeted re-index diverge from a full index_folder
       // (parity), so the empty case clears rows and updates the hash too.
       deleteByFile(db, repoId, relPath);
-      deleteEdgesByFile(db, repoId, relPath);
+      // Reprocess: outgoing edges only — deleting incoming edges here was the
+      // index_file graph-rot bug (they only came back when each importer was
+      // itself re-indexed). The deletedPaths loop above keeps the
+      // both-directions delete: a vanished file's incoming edges ARE dangling.
+      deleteEdgesBySource(db, repoId, relPath);
 
       const hash = computeHash(content);
       upsertFile(db, repoId, relPath, hash, content, 'local', declaredPackage);
+      replaceImportRecords(db, repoId, relPath, imports);
 
       if (symbols.length === 0 && imports.length === 0) {
         filesSkipped++;
@@ -577,13 +636,40 @@ export async function reindexFiles(
     }
   }
 
-  // Build edges only for the re-processed files. The family resolvers read
-  // the full files/symbols tables (already updated above), so targeted
-  // re-index edges match what a full index_folder would produce.
-  const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, allImports);
-  const edges = buildGraph(allImports, resolver, repoId, familyResolvers);
-  if (edges.length > 0) {
-    insertEdges(db, edges);
+  let edgesBuilt = 0;
+  if (newFiles.length > 0 && repo.schemaVersion >= 10) {
+    // A new file can be the TARGET of imports that unchanged files wrote
+    // before it existed — batch-only edges would miss those forever
+    // (runbook §7). Re-resolve the whole graph from stored import records:
+    // no re-parsing, just resolution over in-memory maps. 'di' edges keep
+    // their own repo-wide rebuild below.
+    deleteEdgesExceptType(db, repoId, 'di');
+    const storedImports = getAllImportRecords(db, repoId);
+    const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, storedImports);
+    const rebuilt = buildGraph(storedImports, resolver, repoId, familyResolvers);
+    if (rebuilt.length > 0) {
+      insertEdges(db, rebuilt);
+    }
+    edgesBuilt = rebuilt.length;
+    logger.debug(
+      `Full edge re-resolve (${newFiles.length} new file(s)): ${rebuilt.length} edges`,
+    );
+  } else {
+    if (newFiles.length > 0) {
+      logger.warn(
+        'New file(s) added but index predates schema v10 — edges from unchanged ' +
+          'importers may be missing until the next full index_folder run',
+      );
+    }
+    // Build edges only for the re-processed files. The family resolvers read
+    // the full files/symbols tables (already updated above), so targeted
+    // re-index edges match what a full index_folder would produce.
+    const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, allImports);
+    const edges = buildGraph(allImports, resolver, repoId, familyResolvers);
+    if (edges.length > 0) {
+      insertEdges(db, edges);
+    }
+    edgesBuilt = edges.length;
   }
 
   // ── Android DI edges (Phase 85) — same repo-wide rebuild as indexFolder ───
@@ -668,7 +754,7 @@ export async function reindexFiles(
     symbolsFound,
     totalSymbolsInDb: totalSymbols,
     totalFilesInDb: totalFiles,
-    edgesFound: edges.length,
+    edgesFound: edgesBuilt,
     durationMs: Date.now() - start,
     errors,
     warnings: [],

@@ -33,6 +33,7 @@ import { getAllFilesWithContent } from '../../core/db/file-store.js';
 import { buildMeta } from './_meta.js';
 import type Database from 'better-sqlite3';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { isTestFilePath as isTestFile } from '../../core/test-paths.js';
 
 export const name = 'check_delete_safe';
 
@@ -111,19 +112,8 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/**
- * Return true when a file path looks like a test file.
- * Matches: *.test.ts, *.spec.ts, /__tests__/, /test/, /tests/
- */
-function isTestFile(filePath: string): boolean {
-  const p = filePath.replace(/\\/g, '/');
-  return (
-    /\.test\.[jt]sx?$/.test(p) ||
-    /\.spec\.[jt]sx?$/.test(p) ||
-    /\/__tests__\//.test(p) ||
-    /\/tests?\//.test(p)
-  );
-}
+// Test-file classification: shared predicate (Task 549 — was one of five
+// private copies). Imported below.
 
 /** Return true when the signature contains the `export` keyword. */
 function isExportedSignature(signature: string): boolean {

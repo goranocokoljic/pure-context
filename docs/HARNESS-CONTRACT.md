@@ -61,6 +61,22 @@ The index must reflect current state for retrieval to be trustworthy mid-run.
 - `check_index_staleness({ repoId, filePaths })` → per-file `fresh`/`stale`
   without a discovery pass; omit `filePaths` for a repo-level summary.
 
+### Branches
+
+The index is keyed on the **absolute path** (`repoId = sha256(path)`) — not on
+branch or commit. Every branch checked out at that path shares one index.
+
+- **After an in-place branch switch: run `index_folder` before trusting any
+  result.** It re-parses what changed and prunes files the new branch does not
+  have (`filesPruned` in the response), so the index converges to the checked-
+  out state. Before v1.22.0 it did NOT prune — a branch switch produced a
+  hybrid union of both branches; if you see symbols from an abandoned branch,
+  you are on an old version.
+- **One git worktree per branch is the cleanest pattern** — each worktree has
+  its own path, therefore its own fully independent index. This is by design.
+- After a **rebase**, git metadata (churn, co-change) is stale wholesale:
+  `invalidate_cache` then `index_folder`.
+
 ---
 
 ## 3. Greenfield loop (project built from scratch, issue by issue)

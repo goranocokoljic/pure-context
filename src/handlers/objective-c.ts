@@ -224,7 +224,13 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
 
     // ── @interface → 'class' ─────────────────────────────────────────────────
     if (lineText.startsWith('@interface')) {
-      const ifaceMatch = INTERFACE_RE.exec(lineText);
+      // GNUstep declares generic Foundation classes through a macro:
+      //   @interface GS_GENERIC_CLASS(NSArray, __covariant ElementT) : NSObject
+      // Without normalization the macro name is captured as the class name and
+      // NSArray/NSString/NSDictionary/… vanish from the index entirely
+      // (libs-base, Phase 88). Rewrite the macro call to its first argument.
+      const normalized = lineText.replace(/GS_GENERIC_CLASS\s*\(\s*(\w+)[^)]*\)/g, '$1');
+      const ifaceMatch = INTERFACE_RE.exec(normalized);
       if (ifaceMatch) {
         const className = ifaceMatch[1]!;
         const superclass = ifaceMatch[2] ?? null;

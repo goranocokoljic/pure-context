@@ -19,84 +19,12 @@ import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { logger } from './core/logger.js';
 import { initParser } from './core/parse-dispatcher.js';
-import { registerHandler } from './handlers/handler-registry.js';
-import { typescriptHandler, tsxHandler } from './handlers/typescript.js';
-import { javascriptHandler } from './handlers/javascript.js';
-import { pythonHandler } from './handlers/python.js';
-import { goHandler } from './handlers/go.js';
-import { rustHandler } from './handlers/rust.js';
-import { javaHandler } from './handlers/java.js';
-import { csharpHandler } from './handlers/csharp.js';
-import { phpHandler } from './handlers/php.js';
-import { rubyHandler } from './handlers/ruby.js';
-import { kotlinHandler } from './handlers/kotlin.js';
-import { cHandler } from './handlers/c.js';
-import { cppHandler } from './handlers/cpp.js';
-import { luaHandler } from './handlers/lua.js';
-import { dartHandler } from './handlers/dart.js';
-import { swiftHandler } from './handlers/swift.js';
-import { elixirHandler } from './handlers/elixir.js';
-import { haskellHandler } from './handlers/haskell.js';
-import { scalaHandler } from './handlers/scala.js';
-import { rHandler } from './handlers/r.js';
-import { openApiHandler } from './handlers/openapi.js';
-import { sqlHandler } from './handlers/sql.js';
-import { bashHandler } from './handlers/bash.js';
-import { perlHandler } from './handlers/perl.js';
-import { terraformHandler } from './handlers/terraform.js';
-import { nixHandler } from './handlers/nix.js';
-import { protobufHandler } from './handlers/protobuf.js';
-import { graphqlHandler } from './handlers/graphql.js';
-import { groovyHandler } from './handlers/groovy.js';
-import { erlangHandler } from './handlers/erlang.js';
-import { gleamHandler } from './handlers/gleam.js';
-import { gdscriptHandler } from './handlers/gdscript.js';
-import { xmlHandler } from './handlers/xml.js';
-import { objectiveCHandler } from './handlers/objective-c.js';
-import { fortranHandler } from './handlers/fortran.js';
-import { scssHandler } from './handlers/scss.js';
-import { lessHandler } from './handlers/less.js';
-import { cssHandler } from './handlers/css.js';
-import { hclHandler } from './handlers/hcl.js';
-import { angularHtmlHandler } from './handlers/angular-html.js';
 import { getConfig } from './config/config-loader.js';
-// Framework adapters — imported for side-effect self-registration
-import './adapters/vue.js';
-import './adapters/nuxt.js';
-import './adapters/svelte.js';
-import './adapters/astro.js';
-import './adapters/react.js';
-import './adapters/nextjs.js';
-import './adapters/angular.js';
-import './adapters/nestjs.js';
-import './adapters/express.js';
-import './adapters/fastify.js';
-import './adapters/flask.js';
-import './adapters/fastapi.js';
-import './adapters/django.js';
-import './adapters/gin.js';
-import './adapters/echo.js';
-import './adapters/fiber.js';
-import './adapters/laravel.js';
-import './adapters/symfony.js';
-import './adapters/rails.js';
-import './adapters/sinatra.js';
-// android registers BEFORE the other JVM adapters: processFile routes a file to
-// the FIRST matching adapter, and android must win .kt/.java on Android repos.
-import './adapters/android.js';
-import './adapters/ktor.js';
-import './adapters/spring-kotlin.js';
-import './adapters/flutter.js';
-import './adapters/vapor.js';
-import './adapters/axum.js';
-import './adapters/actix-web.js';
-import './adapters/rocket.js';
-import './adapters/spring-boot.js';
-import './adapters/micronaut.js';
-import './adapters/quarkus.js';
-import './adapters/hibernate.js';
-import './adapters/sqlalchemy.js';
-import './adapters/django-orm.js';
+// Handlers + framework adapters: THE single registration list (Task 553).
+// Importing bootstrap-registry self-registers all adapters (order matters —
+// android before the other JVM adapters); registerStandardHandlers() is
+// called in bootstrap() below.
+import { registerStandardHandlers } from './core/bootstrap-registry.js';
 import { startServer } from './server/mcp-server.js';
 import { cmdInit, cmdCheck, cmdShow, cmdHealth, cmdExport, cmdImport, cmdFetch, cmdListPublic, cmdIndexFolder, cmdIndexFile, cmdAnalyzeDiff, cmdDetectAntipatterns } from './config/cli.js';
 import { runKeysCommand } from './config/keys-cli.js';
@@ -184,58 +112,11 @@ async function bootstrap(): Promise<void> {
   // before anything opens a database.
   await initSqliteBackend();
 
-  // Register all language handlers before any indexing can happen
-  registerHandler(typescriptHandler);
-  registerHandler(tsxHandler);
-  registerHandler(javascriptHandler);
-  registerHandler(pythonHandler);
-  registerHandler(goHandler);
-  registerHandler(rustHandler);
-  registerHandler(javaHandler);
-  registerHandler(csharpHandler);
-  registerHandler(phpHandler);
-  registerHandler(rubyHandler);
-  registerHandler(kotlinHandler);
-  registerHandler(cHandler);
-  registerHandler(cppHandler);
-  registerHandler(luaHandler);
-  registerHandler(dartHandler);
-  registerHandler(swiftHandler);
-  registerHandler(elixirHandler);
-  registerHandler(haskellHandler);
-  registerHandler(scalaHandler);
-  registerHandler(rHandler);
-  // OpenAPI/Swagger handler — content-detected, no tree-sitter grammar needed
-  registerHandler(openApiHandler);
-  // SQL handler — regex-based, no tree-sitter grammar needed; handles dbt Jinja
-  registerHandler(sqlHandler);
-  // Scripting language handlers
-  registerHandler(bashHandler);
-  registerHandler(perlHandler);
-  registerHandler(terraformHandler);
-  registerHandler(nixHandler);
-  // Schema language handlers
-  registerHandler(protobufHandler);
-  registerHandler(graphqlHandler);
-  registerHandler(groovyHandler);
-  registerHandler(erlangHandler);
-  registerHandler(gleamHandler);
-  registerHandler(gdscriptHandler);
-  registerHandler(xmlHandler);
-  // Legacy and scientific language handlers
-  registerHandler(objectiveCHandler);
-  registerHandler(fortranHandler);
-  // Stylesheet handlers — regex-based, no tree-sitter grammar needed
-  registerHandler(scssHandler);
-  registerHandler(lessHandler);
-  // CSS custom properties are opt-in via indexing.cssVariables config flag
+  // Register all language handlers before any indexing can happen — one
+  // shared list (Task 553). CSS custom properties stay opt-in via the
+  // indexing.cssVariables config flag.
   const cfg = getConfig();
-  if (cfg.indexing.cssVariables) {
-    registerHandler(cssHandler);
-  }
-  // HCL/Terraform and Angular HTML template handlers
-  registerHandler(hclHandler);
-  registerHandler(angularHtmlHandler);
+  registerStandardHandlers({ cssVariables: cfg.indexing.cssVariables });
 
   // Initialise tree-sitter (loads WASM runtime + grammars lazily on first use)
   await initParser();

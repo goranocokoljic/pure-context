@@ -327,3 +327,31 @@ describe('Objective-C handler — extractImports', () => {
     expect(imports[0]!.importedNames).toContain('UIKit');
   });
 });
+
+// ─── GNUstep GS_GENERIC_CLASS macro (Phase 88, Task 546) ─────────────────────
+
+describe('Objective-C handler — GS_GENERIC_CLASS normalization', () => {
+  it('extracts the real class name from a GS_GENERIC_CLASS declaration', () => {
+    const { tree, buf } = parse(`
+@interface GS_GENERIC_CLASS(NSArray, __covariant ElementT) : NSObject
+- (NSUInteger)count;
+@end
+`);
+    const syms = objectiveCHandler.extractSymbols(tree, buf, 'NSArray.h');
+    const sym = syms.find((s) => s.name === 'NSArray');
+    expect(sym).toBeDefined();
+    expect(sym!.kind).toBe('class');
+    expect(syms.find((s) => s.name === 'GS_GENERIC_CLASS')).toBeUndefined();
+  });
+
+  it('keeps the superclass from a normalized declaration', () => {
+    const { tree, buf } = parse(`
+@interface GS_GENERIC_CLASS(NSMutableArray, ElementT) : GS_GENERIC_CLASS(NSArray, ElementT)
+@end
+`);
+    const syms = objectiveCHandler.extractSymbols(tree, buf, 'NSArray.h');
+    const sym = syms.find((s) => s.name === 'NSMutableArray');
+    expect(sym).toBeDefined();
+    expect(sym!.frameworkMeta?.['superclass']).toBe('NSArray');
+  });
+});

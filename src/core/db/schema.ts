@@ -14,7 +14,7 @@ import { getSqliteFactory, type SqliteDatabase } from './sqlite-loader.js';
 // call sites — remain valid and unchanged.
 type DatabaseConstructor = new (filename: string) => SqliteDatabase;
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 const DDL = `
 PRAGMA journal_mode = WAL;
@@ -98,6 +98,21 @@ CREATE TABLE IF NOT EXISTS dep_edges (
   tenant_id        TEXT NOT NULL DEFAULT 'local',
   FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
+
+-- v10 (Task 561): raw import statements per file, persisted so edges can be
+-- re-resolved without re-parsing — e.g. when a newly added file becomes the
+-- target of imports that unchanged files wrote before it existed.
+CREATE TABLE IF NOT EXISTS import_records (
+  repo_id        TEXT NOT NULL,
+  source_file    TEXT NOT NULL,
+  specifier      TEXT NOT NULL,
+  resolved_path  TEXT,
+  imported_names TEXT NOT NULL DEFAULT '[]',
+  is_type_only   INTEGER NOT NULL DEFAULT 0,
+  tenant_id      TEXT NOT NULL DEFAULT 'local',
+  FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_import_records_source ON import_records(repo_id, source_file);
 
 CREATE TABLE IF NOT EXISTS provider_metadata (
   repo_id       TEXT    NOT NULL,

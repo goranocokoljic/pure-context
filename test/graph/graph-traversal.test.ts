@@ -271,3 +271,34 @@ describe('cycle handling', () => {
     expect(fwd.files.sort()).toEqual(['a.ts', 'b.ts']);
   });
 });
+
+// ─── Truncation honesty (Task 550) ───────────────────────────────────────────
+
+describe('depth-cap truncation flag', () => {
+  let db: Database.Database;
+  beforeEach(() => { db = setupDb(); });
+
+  it('flags a reverse walk cut off by the depth cap', () => {
+    // helpers.ts ← utils.ts ← entry.ts is a 2-hop reverse chain.
+    const capped = getBlastRadius('sym-helpers', REPO, db, 1);
+    expect(capped.truncated).toBe(true);
+    expect(capped.files).not.toContain('entry.ts');
+  });
+
+  it('reports false when the walk was exhaustive', () => {
+    const full = getBlastRadius('sym-helpers', REPO, db, 3);
+    expect(full.truncated).toBe(false);
+    expect(full.files.sort()).toEqual(['entry.ts', 'helpers.ts', 'utils.ts']);
+  });
+
+  it('flags a forward walk cut off by the depth cap', () => {
+    const capped = getContextBundle('sym-entry', REPO, db, 1);
+    expect(capped.truncated).toBe(true);
+    const full = getContextBundle('sym-entry', REPO, db, 3);
+    expect(full.truncated).toBe(false);
+  });
+
+  it('an isolated file is never marked truncated', () => {
+    expect(getBlastRadius('sym-isolated', REPO, db, 1).truncated).toBe(false);
+  });
+});

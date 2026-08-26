@@ -99,6 +99,29 @@ export function insertEdges(
   insert(edges);
 }
 
+/**
+ * Delete only the edges ORIGINATING in a file — the reprocess path.
+ *
+ * When a file is re-parsed, the new parse regenerates exactly its outgoing
+ * edges, so those are the only ones safe to clear. Its INCOMING edges were
+ * produced by other files' parses and must survive: deleting them here is
+ * unrecoverable until each importer is itself reprocessed, which made the
+ * prescribed index_file-after-write loop rot the graph monotonically
+ * (1.18.0 verification report, critical issue 1).
+ */
+export function deleteEdgesBySource(
+  db: Database.Database,
+  repoId: string,
+  filePath: string,
+): void {
+  db.prepare('DELETE FROM dep_edges WHERE repo_id = ? AND source_file = ?').run(repoId, filePath);
+}
+
+/**
+ * Delete every edge touching a file, both directions — the DELETION path.
+ * Only correct when the file is actually gone from disk (edges pointing at
+ * it are dangling). For re-parses use deleteEdgesBySource instead.
+ */
 export function deleteEdgesByFile(
   db: Database.Database,
   repoId: string,
@@ -107,6 +130,19 @@ export function deleteEdgesByFile(
   db.prepare(
     'DELETE FROM dep_edges WHERE repo_id = ? AND (source_file = ? OR target_file = ?)',
   ).run(repoId, filePath, filePath);
+}
+
+/**
+ * Delete every edge EXCEPT one type — the full-graph-rebuild path
+ * (Task 561: re-resolve all stored import records when a new file appears,
+ * while leaving 'di' edges to their own repo-wide rebuild).
+ */
+export function deleteEdgesExceptType(
+  db: Database.Database,
+  repoId: string,
+  keepType: string,
+): void {
+  db.prepare('DELETE FROM dep_edges WHERE repo_id = ? AND edge_type != ?').run(repoId, keepType);
 }
 
 /** Delete every edge of one type for a repo (e.g. rebuild of 'di' edges). */

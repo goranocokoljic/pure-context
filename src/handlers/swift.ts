@@ -549,8 +549,17 @@ function emitClassDecl(
     extractDocstring(node) ??
     `Swift ${declKind}: ${displayName}`;
 
+  // Extensions share name+kind with the type they extend. When both live in
+  // the same file, makeId(filePath, name, kind) collides and INSERT OR REPLACE
+  // lets the LAST extension overwrite the primary declaration — losing its doc
+  // comment entirely (swift-nio: every `class ChannelPipeline` row was replaced
+  // by a bare "Swift extension:" stub; conceptual queries then had nothing to
+  // match). Key extension IDs by their byte position so they never clobber the
+  // real declaration.
+  const idName =
+    declKind === 'extension' ? `${displayName}#ext@${node.startIndex}` : displayName;
   const record: SymbolRecord = {
-    id: makeId(filePath, displayName, symbolKind),
+    id: makeId(filePath, idName, symbolKind),
     name: displayName,
     kind: symbolKind,
     filePath,

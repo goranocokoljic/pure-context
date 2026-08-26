@@ -54,8 +54,10 @@ function extractDdlMatches(preprocessed: string): SqlMatch[] {
   const matches: SqlMatch[] = [];
 
   // CREATE [OR REPLACE] [TEMP[ORARY]] (MATERIALIZED VIEW | TABLE | VIEW) [IF NOT EXISTS] name
+  // Name may carry a psql-extension schema placeholder prefix (`@extschema@.name`,
+  // used by TimescaleDB and other PGXS extension scripts) — localName strips it.
   const createDdlRe =
-    /CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(MATERIALIZED\s+VIEW|TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?([`"[]?\w[\w.$]*[`"\]]?)/gi;
+    /CREATE\s+(?:OR\s+REPLACE\s+)?(?:TEMP(?:ORARY)?\s+)?(MATERIALIZED\s+VIEW|TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:@\w+@\.)?[`"[]?\w[\w.$]*[`"\]]?)/gi;
   let m: RegExpExecArray | null;
   while ((m = createDdlRe.exec(preprocessed)) !== null) {
     const ddlType = m[1].replace(/\s+/g, ' ').toUpperCase(); // e.g. 'MATERIALIZED VIEW' | 'TABLE' | 'VIEW'
@@ -71,7 +73,7 @@ function extractDdlMatches(preprocessed: string): SqlMatch[] {
 
   // CREATE [OR REPLACE] FUNCTION / PROCEDURE name
   const createFnRe =
-    /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+([`"[]?\w[\w.$]*[`"\]]?)/gi;
+    /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+((?:@\w+@\.)?[`"[]?\w[\w.$]*[`"\]]?)/gi;
   while ((m = createFnRe.exec(preprocessed)) !== null) {
     const name = localName(m[1]);
     const kind: SymbolKind = 'function';

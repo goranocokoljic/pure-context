@@ -60,9 +60,17 @@ describe('loadConfig — merging', () => {
   });
 
   it('overrides indexDir', () => {
-    const path = makeTempConfig(JSON.stringify({ indexDir: '/custom/dir' }));
-    const cfg = loadConfig(path);
-    expect(cfg.indexDir).toBe('/custom/dir');
+    // PCTX_DATA_DIR (set globally by test/setup.ts since Task 551) outranks
+    // the config file — clear it so this test exercises the file override.
+    const prev = process.env['PCTX_DATA_DIR'];
+    delete process.env['PCTX_DATA_DIR'];
+    try {
+      const path = makeTempConfig(JSON.stringify({ indexDir: '/custom/dir' }));
+      const cfg = loadConfig(path);
+      expect(cfg.indexDir).toBe('/custom/dir');
+    } finally {
+      if (prev !== undefined) process.env['PCTX_DATA_DIR'] = prev;
+    }
   });
 
   it('overrides excludePatterns', () => {

@@ -53,6 +53,7 @@ export interface DebugScore {
   nameFuzzy: number;
   identityExact: number;
   compoundUnderscoreBoost: number;
+  camelCompoundBoost: number;
   singleTokenExactBoost: number;
   wordOverlap: number;
   methodVerbBonus: number;
@@ -494,8 +495,15 @@ export function rankSymbols(
     });
   }
 
+  // Java-dominant pools get the Java/Groovy ranking rules (generic-verb identity
+  // scaling + camelCompound boost) even when no .groovy file made this pool —
+  // per-query pool composition varies on mixed repos like jenkins (Phase 88).
+  const javaCount = symbols.reduce((n, s) => n + (s.filePath.endsWith('.java') ? 1 : 0), 0);
+  const effOpts: RankOptions | undefined =
+    javaCount > symbols.length / 2 ? { ...opts, isJavaGroovyMixed: true } : opts;
+
   // First pass: compute base scores (without BM25) for all symbols.
-  const baseResults = symbols.map((symbol) => score(symbol, queryLower, queryWords, rawQueryFreq, domain, opts));
+  const baseResults = symbols.map((symbol) => score(symbol, queryLower, queryWords, rawQueryFreq, domain, effOpts));
 
   // Cap BM25 bonus to 30% of its computed value when any symbol already has a
   // dominant name-match score (≥80). This prevents BM25 from overriding a clear
@@ -658,6 +666,19 @@ function score(
       const rawFreq = rawQueryFreq.get(identityMatchWord) ?? 1;
       identityExact = 60 * Math.min(rawFreq, 2);
     }
+    // Generic-verb identity scaling (Phase 88, jenkins diagnosis) — Java/Groovy
+    // gated. Single-token generic verb names (run, execute, get, call, …) hit
+    // identityExact via one query word or its verb synonym ("build run" →
+    // run/execute) and outrank the actual compound-named target (setResult) on
+    // nearly every natural-language query. Scale to ⅓; a query genuinely
+    // targeting `run` still ranks it top since competitors carry no identity.
+    if (
+      opts?.isJavaGroovyMixed &&
+      queryWords.length >= 3 &&
+      GENERIC_METHOD_NAMES.has(nameLower)
+    ) {
+      identityExact = Math.round(identityExact / 3);
+    }
     total += identityExact;
   }
 
@@ -673,6 +694,25 @@ function score(
     if (uParts.length >= 2 && uParts.every((p) => queryWordsSet.has(p))) {
       compoundUnderscoreBoost = 30;
       total += compoundUnderscoreBoost;
+    }
+  }
+
+  // ── Compound camelCase identity boost (Phase 88, jenkins diagnosis) ────────
+  // camelCase analog of compoundUnderscoreBoost: `setResult` for the query
+  // "set the result status of a build run" has every name part in the query
+  // but no identity signal at all, while single-verb names (run/execute) take
+  // the full identityExact. Gated to mixed Java/Groovy repos (per-language
+  // gates only — Phase 88 boundary).
+  let camelCompoundBoost = 0;
+  if (
+    opts?.isJavaGroovyMixed &&
+    identityExact === 0 &&
+    compoundUnderscoreBoost === 0
+  ) {
+    const cParts = splitNameParts(symbol.name).filter((p) => p.length >= 2);
+    if (cParts.length >= 2 && cParts.every((p) => queryWordsSet.has(p))) {
+      camelCompoundBoost = 30;
+      total += camelCompoundBoost;
     }
   }
 
@@ -885,6 +925,33 @@ function score(
   } else if (queryWords.includes('enum')) {
     if (symbol.kind === 'enum') kindHintBoost = 35;
   }
+
+  // ── Haskell kind hints (Phase 88, Task 545 — gated to .hs/.lhs files) ──────
+  // Haskell ground-truth queries announce the kind explicitly ("function that
+  // converts…", "record holding…", "sum type enumerating…"), and the P@1=0
+  // failure mode was always a kind mismatch at rank 1: the type outranking the
+  // asked-for function via identityExact, or a data constructor / typeclass
+  // instance (spaced name, e.g. "ToHeaderValue PreferCount") outranking the
+  // asked-for type via sheer word overlap. Honour the hint both ways: +35 for
+  // the matching kind, −20 for a contradicting kind. Spaced instance /
+  // constructor names are never the search target — −15 on multi-word queries.
+  if (/\.l?hs$/.test(symbol.filePath) && queryWords.length > 1) {
+    const HS_TYPE_KINDS = new Set<string>(['class', 'type', 'interface', 'enum']);
+    const wantsFunction = queryWords.includes('function');
+    const wantsType =
+      queryWords.includes('record') || queryWords.includes('type') ||
+      queryWords.includes('enumeration') || queryWords.includes('alias');
+    if (kindHintBoost === 0) {
+      if (wantsFunction) {
+        if (symbol.kind === 'function' || symbol.kind === 'method') kindHintBoost = 35;
+        else if (HS_TYPE_KINDS.has(symbol.kind) || symbol.kind === 'const') kindHintBoost = -20;
+      } else if (wantsType) {
+        if (HS_TYPE_KINDS.has(symbol.kind)) kindHintBoost = 35;
+        else if (symbol.kind === 'function' || symbol.kind === 'method') kindHintBoost = -20;
+      }
+    }
+    if (symbol.name.includes(' ')) kindHintBoost -= 15;
+  }
   total += kindHintBoost;
 
   // ── Library path penalty ─────────────────────────────────────────────────────
@@ -1016,6 +1083,7 @@ function score(
     nameFuzzy,
     identityExact,
     compoundUnderscoreBoost,
+    camelCompoundBoost,
     singleTokenExactBoost,
     wordOverlap,
     methodVerbBonus,
@@ -1044,6 +1112,19 @@ function score(
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Single-token method names so generic that an identityExact hit on them is
+ * almost never the query's real target in a natural-language multi-word query
+ * (jenkins: "set the result status of a build run" → `run`/`execute` beat
+ * `setResult`). Used only under the isJavaGroovyMixed gate.
+ */
+const GENERIC_METHOD_NAMES: ReadonlySet<string> = new Set([
+  'run', 'execute', 'call', 'invoke', 'apply', 'main', 'start', 'stop',
+  'init', 'close', 'open', 'get', 'set', 'add', 'remove', 'create', 'delete',
+  'update', 'read', 'write', 'load', 'save', 'check', 'handle', 'process',
+  'build', 'make', 'next', 'reset', 'clear', 'accept', 'submit', 'perform',
+]);
 
 /**
  * Split a symbol name into word-boundary parts for precise matching.
