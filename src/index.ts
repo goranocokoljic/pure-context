@@ -81,6 +81,9 @@ import './adapters/laravel.js';
 import './adapters/symfony.js';
 import './adapters/rails.js';
 import './adapters/sinatra.js';
+// android registers BEFORE the other JVM adapters: processFile routes a file to
+// the FIRST matching adapter, and android must win .kt/.java on Android repos.
+import './adapters/android.js';
 import './adapters/ktor.js';
 import './adapters/spring-kotlin.js';
 import './adapters/flutter.js';

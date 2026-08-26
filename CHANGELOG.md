@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.18.0] - 2026-08-26
+
+### Added
+
+**Android framework adapter** (`android`) — Compose, Hilt/Dagger, manifest entry points, and Gradle module structure become first-class on Android repos. Detected by an `AndroidManifest.xml` anywhere in the tree or `com.android.application`/`com.android.library` in a `build.gradle(.kts)` (bounded recursive scan — multi-module is the Android default). Handles `.kt`, `.java`, and `AndroidManifest.xml`; registered ahead of the other JVM adapters so it wins Android sources (a Ktor/Spring server repo is unaffected — detection keys on Android markers).
+
+- **Compose:** `@Composable` functions upgrade to kind `composable` (handler spans/signatures preserved); `@Preview` composables carry `frameworkMeta.preview: true` so they can be filtered from API surfaces.
+- **Hilt/Dagger DI metadata:** `@Module`, `@Provides`/`@Binds` (+ `providedType`), `@Inject` constructors/fields (+ `consumedTypes`), `@HiltViewModel`, `@AndroidEntryPoint`, and scope annotations are recorded in `frameworkMeta.di` — Kotlin and Java.
+- **DI dependency edges** (`src/graph/di-edges.ts`): at graph-build time, DI metadata becomes `di` edges (consumer file → provider file, specifier `di:<TypeName>`) — the coupling import analysis misses, because Hilt consumers never import their providers. Classes with `@Inject` constructors count as providers of their own type. Name-based matching; ambiguous names edge to **all** providers (over-approximation, safe for blast radius). Graph tools pick the edges up automatically; `find_cycles` excludes `di` edges (the `@Binds` module ↔ impl pair is by design, not a cycle).
+- **Manifest entry points:** `<activity>`, `<service>`, `<receiver>`, `<provider>` → `route` symbols with `component`, `exported`, `intentFilters`, and a `launcher` flag; leading-dot names resolve against the manifest `package`. `get_entry_points` gains the `android_component` kind — the LAUNCHER activity ranks first.
+- **Gradle modules:** every `.kt`/`.java`/manifest symbol carries `frameworkMeta.gradleModule` (`:app`, `:feature:login`, `:` = root) derived from the path before the first `src/` segment, plus a documented recipe for turning the module list into a `get_layer_violations` layer config.
+
+### Fixed
+
+**Adapter-routed files with regex-only handlers were dropped.** `processWithAdapter` always ran the tree-sitter parse; a file routed to an adapter but owned by a grammar-less handler (e.g. `AndroidManifest.xml` → XML handler) threw and lost all its symbols. The adapter path now mirrors the normal handler path: regex handlers extract without a parse, and handler `detect()` gates are honoured.
+
+---
+
 ## [1.17.0] - 2026-08-26
 
 ### Fixed

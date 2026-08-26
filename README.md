@@ -225,7 +225,7 @@ Symbol indexing and search cover all 34. Dependency **edges** (blast radius, imp
 | Java | Spring Boot, Micronaut, Quarkus |
 | Kotlin | Ktor, Spring (Kotlin) |
 | Rust | Axum, Actix-web, Rocket |
-| Mobile | Flutter |
+| Mobile | Flutter, Android (Compose + Hilt + Manifest) |
 | ORMs | Hibernate, SQLAlchemy, Django ORM, Prisma, TypeORM |
 
 → [Framework Adapters guide](FRAMEWORK-ADAPTERS.md) · [Full reference](docs/08-framework-adapters.md)

@@ -127,6 +127,8 @@ import '../adapters/laravel.js';
 import '../adapters/symfony.js';
 import '../adapters/rails.js';
 import '../adapters/sinatra.js';
+// android BEFORE the other JVM adapters — first matching adapter wins .kt/.java.
+import '../adapters/android.js';
 import '../adapters/spring-boot.js';
 import '../adapters/spring-kotlin.js';
 import '../adapters/micronaut.js';

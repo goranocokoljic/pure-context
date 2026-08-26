@@ -255,6 +255,36 @@ authenticate { ... }       // → frameworkMeta.authenticated: true
 
 Detected by `org.springframework.boot`. Same extraction as Spring Boot below — adapter handles both Java and Kotlin sources.
 
+### Android (Compose + Hilt + Manifest + Gradle modules)
+
+Detected by an `AndroidManifest.xml` anywhere in the tree, or a `build.gradle(.kts)` applying `com.android.application` / `com.android.library` (bounded recursive scan — multi-module is the Android default). Handles `.kt`, `.java`, and `AndroidManifest.xml`.
+
+**Compose:** `@Composable` functions → kind `composable` (`frameworkMeta.android: 'compose'`). `@Preview` composables carry `preview: true` so they can be filtered from API surfaces.
+
+**Hilt/Dagger DI:** annotations become `frameworkMeta.di` on the symbol — `@Module` (role `module`), `@Provides`/`@Binds` (role `provider` + `providedType`), `@Inject` constructors/fields (role `consumer` + `consumedTypes`), `@HiltViewModel`, `@AndroidEntryPoint`, and scope annotations (`@Singleton`, `@ViewModelScoped`, …) as `scope`. At graph-build time these become **`di` dependency edges** (consumer file → provider file, specifier `di:<TypeName>`) — the coupling import analysis cannot see, because Hilt consumers never import their providers. Graph tools (`get_blast_radius`, `find_importers`, …) pick them up automatically; `find_cycles` excludes `di` edges (the `@Binds` pattern makes module ↔ impl pairs by design). v1 bound: name-based matching only — an ambiguous type name edges to *all* providers (over-approximation, the safe direction for blast radius); no `@Named` qualifier disambiguation.
+
+**Manifest entry points:** `<activity>`, `<service>`, `<receiver>`, `<provider>` → `route` symbols (`frameworkMeta.android: 'manifest'`) with `component`, `exported`, `intentFilters`, and a `launcher` flag. `get_entry_points` ranks them as `android_component` entries — the LAUNCHER activity first. Leading-dot names resolve against the manifest `package` attribute; manifests that keep the namespace only in Gradle fall back to the bare class name (v1 limitation).
+
+**Gradle modules:** every `.kt`/`.java`/manifest symbol carries `frameworkMeta.gradleModule` (`:app`, `:feature:login`, `:` for the root module), derived from the path segments before the first `src/` directory.
+
+**Recipe — Gradle modules as architecture layers:** `get_layer_violations` needs a layer config; generate one from your module list. Read the `include(...)` lines in `settings.gradle(.kts)`, map each module to its directory, and declare the allowed direction (apps depend on features, features on core — never the reverse):
+
+```json
+{
+  "layers": [
+    { "name": "app",     "paths": ["app/**"] },
+    { "name": "feature", "paths": ["feature/**"] },
+    { "name": "core",    "paths": ["core/**"] }
+  ],
+  "rules": [
+    { "from": "app",     "allow": ["feature", "core"] },
+    { "from": "feature", "allow": ["core"] }
+  ]
+}
+```
+
+Out of scope (deliberate): `res/**` XML resources, Gradle version catalogs, KSP output, runtime navigation graphs.
+
 ---
 
 ## Rust

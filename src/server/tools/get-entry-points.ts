@@ -31,7 +31,7 @@ export const description =
   'HTTP server startups, Lambda/serverless handlers, test suites, and standalone scripts. ' +
   'Detection combines symbol name heuristics, file name patterns, and signature analysis. ' +
   'Each result includes a kind (main_function, cli_handler, server_startup, lambda_handler, ' +
-  'test_suite, script), a confidence level (high/medium/low), and the reason for classification. ' +
+  'test_suite, script, android_component), a confidence level (high/medium/low), and the reason for classification. ' +
   'Use this to answer "where does this application start?", enumerate all runnable targets, ' +
   'or trace execution paths from the root.' +
   '\n\nRelated tools:' +
@@ -42,7 +42,7 @@ export const description =
 export const inputSchema = {
   repoId: z.string().describe('Repository ID returned by index_folder or list_repos'),
   kind: z
-    .enum(['main_function', 'cli_handler', 'server_startup', 'lambda_handler', 'test_suite', 'script'])
+    .enum(['main_function', 'cli_handler', 'server_startup', 'lambda_handler', 'test_suite', 'script', 'android_component'])
     .optional()
     .describe('Filter results to a specific entry-point kind'),
   filePath: z
@@ -74,6 +74,8 @@ interface SymbolRow {
   start_byte: number;
   signature: string;
   summary: string;
+  /** JSON frameworkMeta — optional so older callers/tests keep compiling. */
+  framework_meta?: string | null;
 }
 
 export type EntryKind =
@@ -82,7 +84,8 @@ export type EntryKind =
   | 'server_startup'
   | 'lambda_handler'
   | 'test_suite'
-  | 'script';
+  | 'script'
+  | 'android_component';
 
 export type Confidence = 'high' | 'medium' | 'low';
 
@@ -132,6 +135,36 @@ function isBinDir(filePath: string): boolean {
 }
 
 const RULES: Rule[] = [
+  // ── Android manifest component (Phase 85) ────────────────────────────────────
+  // The android adapter emits 'route' symbols with frameworkMeta.android='manifest'
+  // for <activity>/<service>/<receiver>/<provider>. The OS launches these — they
+  // ARE the app's entry points. LAUNCHER activity ranks first (high confidence).
+  {
+    match(sym) {
+      if (!sym.framework_meta) return null;
+      let meta: Record<string, unknown>;
+      try {
+        meta = JSON.parse(sym.framework_meta) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+      if (meta['android'] !== 'manifest') return null;
+      const component = typeof meta['component'] === 'string' ? meta['component'] : 'component';
+      if (meta['launcher'] === true) {
+        return {
+          kind: 'android_component',
+          confidence: 'high',
+          reason: 'LAUNCHER activity declared in AndroidManifest.xml',
+        };
+      }
+      return {
+        kind: 'android_component',
+        confidence: 'medium',
+        reason: `${component} declared in AndroidManifest.xml`,
+      };
+    },
+  },
+
   // ── Lambda / serverless handler ──────────────────────────────────────────────
   {
     match(sym) {
@@ -337,13 +370,13 @@ export async function handler(args: {
     // We only need callable/instantiable kinds — no need to scan consts or types
     // that could never be runnable. But we do include 'const' because many
     // Lambda handlers are `export const handler = ...`.
-    const candidateKinds = ['function', 'class', 'method', 'const', 'component', 'hook'];
+    const candidateKinds = ['function', 'class', 'method', 'const', 'component', 'hook', 'route'];
     const kindPlaceholders = candidateKinds.map((_, i) => `@k${i}`).join(', ');
     const kindParams: Record<string, unknown> = { repoId };
     candidateKinds.forEach((k, i) => { kindParams[`k${i}`] = k; });
 
     let sql = `
-      SELECT id, name, kind, file_path, start_byte, signature, summary
+      SELECT id, name, kind, file_path, start_byte, signature, summary, framework_meta
       FROM symbols
       WHERE repo_id = @repoId
         AND kind IN (${kindPlaceholders})

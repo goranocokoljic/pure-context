@@ -169,19 +169,34 @@ async function processWithAdapter(
   } else {
     // No preProcess — let the normal handler parse, then adapter enriches
     const handler = getHandler(relPath);
-    if (handler) {
-      const tree = await parseFile(content, handler);
-      primaryTree = tree;
-      blockSymbols = handler.extractSymbols(tree, content, relPath);
-      imports.push(
-        ...handler.extractImports(tree, content).map((imp) => ({
-          ...imp,
-          sourceFile: relPath,
-        })),
-      );
-      // JVM framework adapters (Spring, Ktor, …) route .java/.kt files through
-      // this branch — the package must still be captured for import resolution.
-      declaredPackage = handler.extractPackage?.(tree, content) ?? null;
+    // Content-based detection gate — mirror of the normal handler path.
+    if (handler && (!handler.detect || handler.detect(content))) {
+      if (handler.grammarPath() === null) {
+        // Regex-only handler (XML, SCSS, …) — no tree-sitter parse. The android
+        // adapter routes AndroidManifest.xml here; parseFile would throw on a
+        // null grammar and drop the whole file.
+        blockSymbols = handler.extractSymbols(null as unknown as Tree, content, relPath);
+        imports.push(
+          ...handler.extractImports(null as unknown as Tree, content).map((imp) => ({
+            ...imp,
+            sourceFile: relPath,
+          })),
+        );
+        declaredPackage = handler.extractPackage?.(null, content) ?? null;
+      } else {
+        const tree = await parseFile(content, handler);
+        primaryTree = tree;
+        blockSymbols = handler.extractSymbols(tree, content, relPath);
+        imports.push(
+          ...handler.extractImports(tree, content).map((imp) => ({
+            ...imp,
+            sourceFile: relPath,
+          })),
+        );
+        // JVM framework adapters (Spring, Ktor, …) route .java/.kt files through
+        // this branch — the package must still be captured for import resolution.
+        declaredPackage = handler.extractPackage?.(tree, content) ?? null;
+      }
     }
   }
 

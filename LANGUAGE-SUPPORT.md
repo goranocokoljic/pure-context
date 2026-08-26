@@ -101,6 +101,7 @@ Symbol extraction and search work for all 34 languages. **Import / dependency ed
 |------------|-----------|
 | Module resolver (relative paths + `tsconfig` path aliases) | TypeScript, JavaScript |
 | Declared-module resolver (JVM + C#: declared `package`/`namespace` → file, incl. wildcards, member/static imports, and Gradle/Maven/`.csproj` multi-project disambiguation) | Kotlin, Java, Scala, Groovy, C# |
+| Hilt/Dagger DI edges (v1.18.0, Android repos: `@Provides`/`@Binds`/`@Inject` metadata → `di` edges, consumer file → provider file — coupling the import graph cannot see; name-based, ambiguous names edge to all providers; excluded from `find_cycles`) | Kotlin, Java (android adapter active) |
 | Layout-convention resolver (dotted module path → file path; absolute, from-, and relative imports; `src/` layouts; `pyproject` package-dir remapping not yet supported) | Python |
 | `go.mod` resolver (module path → package directory → every `.go` file in it; nested modules / workspaces supported) | Go |
 | Imports are literal file paths | C, C++, Dart, SCSS/LESS/CSS, Terraform/HCL, Protobuf, Nix, Perl, XML, Bash |

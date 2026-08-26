@@ -109,6 +109,15 @@ export function deleteEdgesByFile(
   ).run(repoId, filePath, filePath);
 }
 
+/** Delete every edge of one type for a repo (e.g. rebuild of 'di' edges). */
+export function deleteEdgesByType(
+  db: Database.Database,
+  repoId: string,
+  edgeType: string,
+): void {
+  db.prepare('DELETE FROM dep_edges WHERE repo_id = ? AND edge_type = ?').run(repoId, edgeType);
+}
+
 /** All dependency edges for a repo. */
 export function getAllDepEdges(
   db: Database.Database,

@@ -236,6 +236,18 @@ Extracts from routing DSL:
 
 Extracts: `@RestController` + `@GetMapping("/path")` → `route`; `@Service`, `@Component`, `@Repository` → class with metadata.
 
+### Android
+
+**Detected by:** an `AndroidManifest.xml` anywhere in the tree, or `com.android.application` / `com.android.library` in a `build.gradle(.kts)` (bounded recursive scan). Handles `.kt`, `.java`, and `AndroidManifest.xml`.
+
+Extracts:
+- `@Composable` functions → `composable` (`frameworkMeta.android: 'compose'`; `@Preview` funs carry `preview: true`)
+- Hilt/Dagger annotations → `frameworkMeta.di` (`@Module` role `module`; `@Provides`/`@Binds` role `provider` + `providedType`; `@Inject` constructor/field role `consumer` + `consumedTypes`; `@HiltViewModel` / `@AndroidEntryPoint` flags; scope annotations as `scope`)
+- Manifest `<activity>`/`<service>`/`<receiver>`/`<provider>` → `route` (`frameworkMeta.android: 'manifest'`, with `component`, `exported`, `intentFilters`, `launcher`) — surfaced by `get_entry_points` as `android_component`, LAUNCHER first
+- `frameworkMeta.gradleModule` on every symbol (`:app`, `:feature:login`, `:` = root) from the path before the first `src/` segment
+
+At graph-build time, `frameworkMeta.di` produces `di` dependency edges (consumer file → provider file, specifier `di:<TypeName>`) — name-based matching, ambiguous names edge to all providers. `find_cycles` excludes `di` edges (the `@Binds` module ↔ impl pair is by design, not a cycle).
+
 ---
 
 ## Rust frameworks

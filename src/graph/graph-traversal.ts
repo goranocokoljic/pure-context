@@ -194,6 +194,11 @@ export function findImportCycles(
   const adj = new Map<string, string[]>();
   for (const edge of allEdges) {
     if (edge.sourceFile === edge.targetFile) continue; // skip self-loops
+    // DI edges (Phase 85) are excluded from cycle detection: Hilt's @Binds
+    // pattern makes module ↔ implementation edge pairs BY DESIGN (the module
+    // provides the interface and consumes the impl), so every binding would
+    // report a false 2-cycle. Import cycles remain the tool's contract.
+    if (edge.edgeType === 'di') continue;
 
     let targets = adj.get(edge.sourceFile);
     if (!targets) {

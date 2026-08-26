@@ -18,6 +18,7 @@ import { upsertFile, deleteFile, getAllFileHashes } from './db/file-store.js';
 import {
   insertEdges,
   deleteEdgesByFile,
+  deleteEdgesByType,
   getForwardDeps,
   getReverseDeps,
 } from './db/dep-store.js';
@@ -33,6 +34,7 @@ import type { ParseJob } from './worker-pool.js';
 import { createResolver } from '../graph/path-resolver.js';
 import { buildGraph } from '../graph/graph-builder.js';
 import { buildFamilyResolvers } from '../graph/family-resolvers.js';
+import { buildDiEdges } from '../graph/di-edges.js';
 import { join } from 'path';
 import { track } from './telemetry.js';
 import { discoverProviders } from '../providers/provider-registry.js';
@@ -285,6 +287,18 @@ export async function indexFolder(
   const edges = buildGraph(allImports, resolver, repoId, familyResolvers);
   if (edges.length > 0) {
     insertEdges(db, edges);
+  }
+
+  // ── 10a. Android DI edges (Phase 85) ─────────────────────────────────────
+  // Adapters emit symbols only; DI coupling becomes edges here, read from the
+  // just-persisted symbols table. Repo-wide rebuild (delete-then-insert) keeps
+  // targeted re-index and full index identical. Zero cost on non-Android repos.
+  if (adapters.some((a) => a.name === 'android')) {
+    deleteEdgesByType(db, repoId, 'di');
+    const diEdges = buildDiEdges(db, repoId);
+    if (diEdges.length > 0) {
+      insertEdges(db, diEdges);
+    }
   }
 
   // ── 10b. Stage 3: AI summarization (optional) ────────────────────────────
@@ -570,6 +584,15 @@ export async function reindexFiles(
   const edges = buildGraph(allImports, resolver, repoId, familyResolvers);
   if (edges.length > 0) {
     insertEdges(db, edges);
+  }
+
+  // ── Android DI edges (Phase 85) — same repo-wide rebuild as indexFolder ───
+  if (adapters.some((a) => a.name === 'android')) {
+    deleteEdgesByType(db, repoId, 'di');
+    const diEdges = buildDiEdges(db, repoId);
+    if (diEdges.length > 0) {
+      insertEdges(db, diEdges);
+    }
   }
 
   // ── Re-summarize changed symbols with AI (if available) ───────────────────
