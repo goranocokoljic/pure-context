@@ -40,6 +40,7 @@ import { z } from 'zod';
 import { readFileSync } from 'fs';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { buildMeta } from './_meta.js';
+import { byteOffsetToLine } from './symbol-lines.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SymbolKind } from '../../core/types.js';
 
@@ -238,17 +239,8 @@ function toRelativePath(absPath: string, repoRoot: string): string | null {
   return null;
 }
 
-/**
- * Compute the 1-based line number of a byte offset in a buffer.
- */
-function lineOf(buf: Buffer, byteOffset: number): number {
-  const limit = Math.min(byteOffset, buf.length);
-  let line = 1;
-  for (let i = 0; i < limit; i++) {
-    if (buf[i] === 0x0a) line++;
-  }
-  return line;
-}
+/** 1-based line number from a byte offset (consolidated impl, Phase 90). */
+const lineOf = byteOffsetToLine;
 
 /**
  * Compute covered and uncovered line sets from an Istanbul statementMap + s.

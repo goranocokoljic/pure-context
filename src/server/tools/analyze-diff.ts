@@ -22,6 +22,7 @@ import {
   parseDeletedSymbolNames,
 } from '../../core/diff-parser.js';
 import { buildMeta } from './_meta.js';
+import { byteOffsetToLine } from './symbol-lines.js';
 import { synthesizeChange, type ChangeSynthesis } from './change-synthesis.js';
 import type { SymbolRecord, SymbolKind } from '../../core/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -112,18 +113,7 @@ interface AnalyzeDiffOutput {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Convert a byte offset to a 1-based line number by counting `\n` bytes in
- * the content buffer up to (but not including) that offset.
- */
-function byteOffsetToLine(content: Buffer, byteOffset: number): number {
-  let line = 1;
-  const cap = Math.min(byteOffset, content.length);
-  for (let i = 0; i < cap; i++) {
-    if (content[i] === 0x0a) line++;
-  }
-  return line;
-}
+// byteOffsetToLine consolidated onto symbol-lines.ts (Phase 90).
 
 /**
  * True when the line range [symStart, symEnd] overlaps with at least one of

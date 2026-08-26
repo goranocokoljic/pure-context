@@ -592,3 +592,70 @@ describe('handler — analyze_diff impact synthesis (fixture diff)', () => {
     expect(out.reviewPriority).not.toBe('low');
   });
 });
+
+// ─── Phase 90: non-ASCII hunk attribution (Task 557 worst-symptom fixture) ────
+//
+// A long em-dash header makes char and byte offsets diverge by ~120 bytes.
+// Pre-Phase-90, symbols stored CHAR indices in start_byte and the buffer-based
+// line derivation collapsed every symbol onto the header line — a hunk in the
+// second function attributed to the wrong (or no) symbol. Spans are now TRUE
+// bytes, so attribution is exact.
+
+describe('analyze_diff — non-ASCII header attribution (Phase 90)', () => {
+  const uniContent =
+    '// ' + '—'.repeat(60) + '\n' + // line 1: 60 em-dashes = 120 bytes drift
+    'export function firstFn() {\n' +    // lines 2-4
+    '  return 1;\n' +
+    '}\n' +
+    'export function secondFn() {\n' +   // lines 5-7
+    '  return 2;\n' +
+    '}\n';
+
+  const UNI_DIFF = [
+    'diff --git a/src/uni.ts b/src/uni.ts',
+    'index abc..def 100644',
+    '--- a/src/uni.ts',
+    '+++ b/src/uni.ts',
+    '@@ -5,3 +5,3 @@',
+    ' export function secondFn() {',
+    '-  return 2;',
+    '+  return 22;',
+    ' }',
+    '',
+  ].join('\n');
+
+  beforeAll(() => {
+    const db = openDatabase(REPO_ID);
+    const buf = Buffer.from(uniContent, 'utf8');
+    insertFileRecord(db, REPO_ID, 'src/uni.ts', buf);
+    const str = uniContent;
+    const byteOf = (marker: string) => Buffer.byteLength(str.slice(0, str.indexOf(marker)), 'utf8');
+    const first = 'export function firstFn() {\n  return 1;\n}';
+    const second = 'export function secondFn() {\n  return 2;\n}';
+    insertSymbols(db, REPO_ID, [
+      makeSymbol({
+        id: 'sym-uni-first',
+        name: 'firstFn',
+        filePath: 'src/uni.ts',
+        startByte: byteOf(first),
+        endByte: byteOf(first) + Buffer.byteLength(first, 'utf8'),
+      }),
+      makeSymbol({
+        id: 'sym-uni-second',
+        name: 'secondFn',
+        filePath: 'src/uni.ts',
+        startByte: byteOf(second),
+        endByte: byteOf(second) + Buffer.byteLength(second, 'utf8'),
+      }),
+    ]);
+    db.close();
+  });
+
+  it('attributes the hunk to secondFn, not firstFn', async () => {
+    const result = await handler({ repoId: REPO_ID, diff: UNI_DIFF, includeBlastRadius: false });
+    const out = JSON.parse((result.content[0] as { text: string }).text);
+    const names = out.changedSymbols.map((s: { name: string }) => s.name);
+    expect(names).toContain('secondFn');
+    expect(names).not.toContain('firstFn');
+  });
+});

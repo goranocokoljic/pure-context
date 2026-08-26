@@ -34,6 +34,7 @@ import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SymbolKind } from '../../core/types.js';
 import { isTestFilePath as isTestFile } from '../../core/test-paths.js';
+import { byteOffsetToLine } from './symbol-lines.js';
 
 export const name = 'find_untested_symbols';
 
@@ -156,17 +157,8 @@ function computePriority(cc: number, lineCount: number): 'high' | 'medium' | 'lo
   return 'low';
 }
 
-/**
- * Compute the 1-based line number for a given byte offset in a buffer.
- */
-function lineOf(buf: Buffer, startByte: number): number {
-  const slice = buf.slice(0, Math.min(startByte, buf.length));
-  let line = 1;
-  for (let i = 0; i < slice.length; i++) {
-    if (slice[i] === 0x0a) line++;
-  }
-  return line;
-}
+/** 1-based line number from a byte offset (consolidated impl, Phase 90). */
+const lineOf = byteOffsetToLine;
 
 // ─── Handler ───────────────────────────────────────────────────────────────────
 

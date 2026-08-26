@@ -66,7 +66,12 @@ export async function initParser(): Promise<void> {
 
 /**
  * Parse source bytes using the grammar provided by the given handler.
- * The returned Tree's node startIndex/endIndex are byte offsets into `source`.
+ *
+ * IMPORTANT: the returned Tree's node startIndex/endIndex are UTF-16
+ * code-unit indices into `source.toString('utf8')` — NOT byte offsets.
+ * See the comment on the parse callback below. The processing pipeline
+ * (file-processor.ts) converts spans to true byte offsets at the storage
+ * boundary via src/core/offsets.ts.
  */
 export async function parseFile(source: Buffer, handler: LanguageHandler): Promise<Tree> {
   if (!initialized || !sharedParser || !Parser) {

@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { decodeCached } from '../core/offsets.js';
 import type {
   LanguageHandler,
   SymbolRecord,
@@ -33,9 +34,10 @@ function buildSignature(node: SyntaxNode, source: Buffer): string {
   const body =
     node.childForFieldName?.('body') ??
     node.children.find((c) => c.type === 'body_statement' || c.type === 'then');
-  const endByte = body ? body.startIndex : node.endIndex;
-  return source
-    .toString('utf8', node.startIndex, endByte)
+  const endIdx = body ? body.startIndex : node.endIndex;
+  // node indices are CHAR indices — slice the decoded string, never the buffer
+  return decodeCached(source)
+    .slice(node.startIndex, endIdx)
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120);
@@ -214,8 +216,8 @@ function walkNode(
       if (lhs?.type !== 'constant') break;
       const constName = lhs.text;
       const qualified = `${className}::${constName}`;
-      const sig = source
-        .toString('utf8', node.startIndex, node.endIndex)
+      const sig = decodeCached(source)
+        .slice(node.startIndex, node.endIndex)
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, 80);

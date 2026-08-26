@@ -25,6 +25,7 @@
 import { z } from 'zod';
 import { openDatabase } from '../../core/db/schema.js';
 import { buildMeta } from './_meta.js';
+import { byteOffsetToLine } from './symbol-lines.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SymbolKind } from '../../core/types.js';
 
@@ -277,12 +278,7 @@ export async function handler(args: {
       if (fileRow?.raw_content) {
         const content = fileRow.raw_content;
         for (const sym of syms) {
-          const slice = content.slice(0, Math.min(sym.start_byte, content.length));
-          let line = 1;
-          for (let i = 0; i < slice.length; i++) {
-            if (slice[i] === 0x0a) line++;
-          }
-          lineMap.set(sym.id, line);
+          lineMap.set(sym.id, byteOffsetToLine(content, sym.start_byte));
         }
       } else {
         for (const sym of syms) {

@@ -7,17 +7,15 @@
  */
 
 import type Database from 'better-sqlite3';
+import { lineOfByte } from '../../core/offsets.js';
 
 /**
  * Convert a byte offset to a 1-based line number within `content`.
+ * Canonical implementation lives in src/core/offsets.ts (Phase 90
+ * consolidation — this re-export keeps existing import sites stable).
  */
 export function byteOffsetToLine(content: Buffer, byteOffset: number): number {
-  let line = 1;
-  const cap = Math.min(byteOffset, content.length);
-  for (let i = 0; i < cap; i++) {
-    if (content[i] === 0x0a) line++;
-  }
-  return line;
+  return lineOfByte(content, byteOffset);
 }
 
 export interface SymbolLineRange {

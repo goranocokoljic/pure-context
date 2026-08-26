@@ -11,6 +11,18 @@ import { parseFile } from './parse-dispatcher.js';
 import { getHandler, getHandlerByLanguage } from '../handlers/handler-registry.js';
 import { enrichSymbols } from '../summarizer/summarizer.js';
 import { calculateComplexity, shouldCalculateMetrics } from './metrics/complexity-calculator.js';
+import { buildOffsetConverter, convertSymbolSpans } from './offsets.js';
+
+/**
+ * Offset conventions at the storage boundary (see src/core/offsets.ts):
+ *   - Tree-sitter handlers emit node.startIndex — UTF-16 CHAR indices.
+ *     Converted to true byte offsets here, once per file.
+ *   - Framework adapters emit char indices over the full decoded file
+ *     (regex match.index / node indices). Converted here too.
+ *   - Regex-only handlers (grammarPath() === null) compute TRUE BYTE offsets
+ *     themselves (Buffer.byteLength line accumulation) — NOT converted.
+ * Stored start_byte/end_byte are therefore always true byte offsets.
+ */
 
 export interface ProcessedResult {
   symbols: SymbolRecord[];
@@ -74,7 +86,10 @@ export async function processFile(
       declaredPackage = handler.extractPackage?.(null, content) ?? null;
     } else {
       const tree = await parseFile(content, handler);
-      symbols = handler.extractSymbols(tree, content, relPath);
+      symbols = convertSymbolSpans(
+        handler.extractSymbols(tree, content, relPath),
+        buildOffsetConverter(content),
+      );
       imports = handler.extractImports(tree, content).map((imp) => ({
         ...imp,
         sourceFile: relPath,
@@ -90,7 +105,10 @@ export async function processFile(
       const cFallback = getHandlerByLanguage('c');
       if (cFallback && cFallback !== handler) {
         const cTree = await parseFile(content, cFallback);
-        const cSymbols = cFallback.extractSymbols(cTree, content, relPath);
+        const cSymbols = convertSymbolSpans(
+          cFallback.extractSymbols(cTree, content, relPath),
+          buildOffsetConverter(content),
+        );
         if (cSymbols.length > 0) {
           symbols = cSymbols;
           imports = cFallback.extractImports(cTree, content).map((imp) => ({
@@ -147,9 +165,15 @@ async function processWithAdapter(
       const tree = await parseFile(block.content, handler);
       primaryTree = tree;
 
-      // Extract symbols from this block and shift byte offsets back into the
-      // original file so get-symbol-source returns the correct slice.
-      const rawSymbols = handler.extractSymbols(tree, block.content, relPath);
+      // Extract symbols from this block. Node indices are CHAR indices into
+      // the block — convert to block-local byte offsets first, THEN shift by
+      // offsetInOriginal (which preprocessors compute as a true byte offset).
+      // Mixing char indices with the byte shift corrupted spans in SFC files
+      // with non-ASCII text before the script block.
+      const rawSymbols = convertSymbolSpans(
+        handler.extractSymbols(tree, block.content, relPath),
+        buildOffsetConverter(block.content),
+      );
       for (const sym of rawSymbols) {
         blockSymbols.push({
           ...sym,
@@ -186,7 +210,10 @@ async function processWithAdapter(
       } else {
         const tree = await parseFile(content, handler);
         primaryTree = tree;
-        blockSymbols = handler.extractSymbols(tree, content, relPath);
+        blockSymbols = convertSymbolSpans(
+          handler.extractSymbols(tree, content, relPath),
+          buildOffsetConverter(content),
+        );
         imports.push(
           ...handler.extractImports(tree, content).map((imp) => ({
             ...imp,
@@ -200,8 +227,13 @@ async function processWithAdapter(
     }
   }
 
-  // Extract framework-specific symbols (may use tree or derive from file path alone)
-  const frameworkSymbols = adapter.extractFrameworkSymbols(primaryTree, content, relPath);
+  // Extract framework-specific symbols (may use tree or derive from file path
+  // alone). Adapters emit CHAR indices over the full decoded file — convert to
+  // true byte offsets before merging with the already-byte block symbols.
+  const frameworkSymbols = convertSymbolSpans(
+    adapter.extractFrameworkSymbols(primaryTree, content, relPath),
+    buildOffsetConverter(content),
+  );
 
   // Merge: framework symbols override block symbols with the same id
   const merged = new Map<string, SymbolRecord>();

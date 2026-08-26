@@ -22,6 +22,7 @@
 import { z } from 'zod';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { buildMeta } from './_meta.js';
+import { byteOffsetToLine } from './symbol-lines.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'get_entry_points';
@@ -458,12 +459,7 @@ export async function handler(args: {
         rawBytes += fileRow.raw_content.length;
         const content = fileRow.raw_content;
         for (const { ep, row } of items) {
-          const slice = content.slice(0, Math.min(row.start_byte, content.length));
-          let line = 1;
-          for (let i = 0; i < slice.length; i++) {
-            if (slice[i] === 0x0a) line++;
-          }
-          ep.startLine = line;
+          ep.startLine = byteOffsetToLine(content, row.start_byte);
         }
       } else {
         for (const { ep, row } of items) {

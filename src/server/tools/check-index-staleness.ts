@@ -69,6 +69,14 @@ export function handler(args: { repoId: string; filePaths?: string[] }): CallToo
     const repo = getRepo(db, args.repoId);
     const absRoot = repo?.rootPath ?? '';
 
+    // Pre-v11 indexes stored char indices in start_byte/end_byte (Phase 90
+    // char-vs-byte fix) — symbol source/line output from them is unreliable.
+    const schemaWarning =
+      repo && repo.schemaVersion < 11
+        ? `Index schema v${repo.schemaVersion} predates the offset-integrity fix (v11) — ` +
+          'symbol spans may be corrupted on non-ASCII files. Run index_folder to heal.'
+        : undefined;
+
     // ── Repo-level summary (no paths) ──────────────────────────────────────
     if (!args.filePaths || args.filePaths.length === 0) {
       return {
@@ -83,6 +91,7 @@ export function handler(args: { repoId: string; filePaths?: string[] }): CallToo
                 lastIndexedAt: repo?.indexedAt ?? null,
                 fileCount: repo?.fileCount ?? 0,
                 symbolCount: repo?.symbolCount ?? 0,
+                ...(schemaWarning ? { schemaWarning } : {}),
                 note:
                   'Pass filePaths for per-file fresh/stale checks. A repo-level "are there ' +
                   'new files?" check requires a discovery pass (index_folder).',
@@ -146,6 +155,7 @@ export function handler(args: { repoId: string; filePaths?: string[] }): CallToo
               indexed: true,
               allFresh: stale.length === 0,
               staleCount: stale.length,
+              ...(schemaWarning ? { schemaWarning } : {}),
               stalePaths: stale.map((v) => v.path),
               files: verdicts,
               _meta: buildMeta({ timingMs: Date.now() - start }),

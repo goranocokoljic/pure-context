@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { decodeCached } from '../core/offsets.js';
 import type {
   LanguageHandler,
   SymbolRecord,
@@ -47,9 +48,10 @@ function visibilityMeta(name: string): Record<string, unknown> | undefined {
  */
 function buildSignature(node: SyntaxNode, source: Buffer): string {
   const blockNode = node.children.find((c) => c.type === 'block');
-  const endByte = blockNode ? blockNode.startIndex : node.endIndex;
-  return source
-    .toString('utf8', node.startIndex, endByte)
+  const endIdx = blockNode ? blockNode.startIndex : node.endIndex;
+  // node indices are CHAR indices — slice the decoded string, never the buffer
+  return decodeCached(source)
+    .slice(node.startIndex, endIdx)
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120);
@@ -61,8 +63,8 @@ function buildSignature(node: SyntaxNode, source: Buffer): string {
  */
 function buildTypeSignature(typeDecl: SyntaxNode, source: Buffer): string {
   // Full text is "type Name struct { ... }" — collapse to one line and truncate
-  return source
-    .toString('utf8', typeDecl.startIndex, typeDecl.endIndex)
+  return decodeCached(source)
+    .slice(typeDecl.startIndex, typeDecl.endIndex)
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120);
@@ -73,8 +75,8 @@ function buildTypeSignature(typeDecl: SyntaxNode, source: Buffer): string {
  * "const NAME = value" or "const NAME Type = value"
  */
 function buildConstSignature(spec: SyntaxNode, source: Buffer): string {
-  return 'const ' + source
-    .toString('utf8', spec.startIndex, spec.endIndex)
+  return 'const ' + decodeCached(source)
+    .slice(spec.startIndex, spec.endIndex)
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 116); // 116 + "const " = 122, then sliced to 120
@@ -152,8 +154,8 @@ function extractInterfaceMethods(
     const methodName = nameNode.text;
 
     // Bare signature from source, then prepend interface name for disambiguation
-    const rawSig = source
-      .toString('utf8', child.startIndex, child.endIndex)
+    const rawSig = decodeCached(source)
+      .slice(child.startIndex, child.endIndex)
       .replace(/\s+/g, ' ')
       .trim();
     const sig = `${interfaceName}.${rawSig}`.slice(0, 120);
@@ -311,8 +313,8 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         if (!nameNode) continue;
         const name = nameNode.text;
 
-        const sig = 'var ' + source
-          .toString('utf8', spec.startIndex, spec.endIndex)
+        const sig = 'var ' + decodeCached(source)
+          .slice(spec.startIndex, spec.endIndex)
           .replace(/\s+/g, ' ')
           .trim()
           .slice(0, 116);

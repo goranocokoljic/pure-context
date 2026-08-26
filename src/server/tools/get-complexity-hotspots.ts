@@ -23,6 +23,7 @@
 import { z } from 'zod';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { buildMeta } from './_meta.js';
+import { byteOffsetToLine } from './symbol-lines.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SymbolKind } from '../../core/types.js';
 
@@ -320,12 +321,7 @@ export async function handler(args: {
 
         const lineOf = (startByte: number): number => {
           if (fileRow?.raw_content) {
-            const slice = fileRow.raw_content.slice(0, Math.min(startByte, fileRow.raw_content.length));
-            let line = 1;
-            for (let i = 0; i < slice.length; i++) {
-              if (slice[i] === 0x0a) line++;
-            }
-            return line;
+            return byteOffsetToLine(fileRow.raw_content, startByte);
           }
           return Math.max(1, Math.floor(startByte / 80) + 1);
         };

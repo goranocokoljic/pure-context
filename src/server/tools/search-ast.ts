@@ -36,6 +36,7 @@ import { openDatabase } from '../../core/db/schema.js';
 import { buildMeta } from './_meta.js';
 import { getHandler } from '../../handlers/handler-registry.js';
 import { initParser, parseFile, isInitialized } from '../../core/parse-dispatcher.js';
+import { buildOffsetConverter, lineOfChar } from '../../core/offsets.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SyntaxNode } from '../../core/types.js';
 
@@ -112,15 +113,9 @@ function collectNodes(node: SyntaxNode, targetType: string, results: SyntaxNode[
   }
 }
 
-/** Count newlines in `buf` up to (not including) byte offset `byteOffset`. */
-function byteOffsetToLine(buf: Buffer, byteOffset: number): number {
-  let line = 1;
-  const end = Math.min(byteOffset, buf.length);
-  for (let i = 0; i < end; i++) {
-    if (buf[i] === 0x0a) line++;
-  }
-  return line;
-}
+// Query-time re-parse works purely in CHAR space (node.startIndex over the
+// decoded string) — lines are counted in the string, text is sliced from the
+// string. Never mix node indices with the raw byte Buffer (Phase 90).
 
 // ─── DB row type ──────────────────────────────────────────────────────────────
 
@@ -290,14 +285,16 @@ export async function handler(args: {
       collectNodes(tree.rootNode, nodeType, found);
       totalMatchesBeforeLimit += found.length;
 
+      const sourceStr = content.toString('utf8');
+      const converter = buildOffsetConverter(content, sourceStr);
       for (const node of found) {
         if (matches.length >= limit) {
           truncated = true;
           break;
         }
-        const startLine = byteOffsetToLine(content, node.startIndex);
-        const endLine = byteOffsetToLine(content, node.endIndex);
-        const rawText = content.toString('utf8', node.startIndex, node.endIndex);
+        const startLine = lineOfChar(sourceStr, node.startIndex);
+        const endLine = lineOfChar(sourceStr, node.endIndex);
+        const rawText = sourceStr.slice(node.startIndex, node.endIndex);
         const text = includeText
           ? rawText.length > maxTextLength
             ? rawText.slice(0, maxTextLength) + '…'
@@ -308,8 +305,9 @@ export async function handler(args: {
           filePath,
           startLine,
           endLine,
-          startByte: node.startIndex,
-          endByte: node.endIndex,
+          // Response fields are TRUE byte offsets — node indices are char-space
+          startByte: converter.charToByte(node.startIndex),
+          endByte: converter.charToByte(node.endIndex),
           nodeType,
           text,
         });

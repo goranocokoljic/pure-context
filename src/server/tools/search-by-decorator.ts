@@ -25,6 +25,7 @@ import { openDatabase } from '../../core/db/schema.js';
 import { buildMeta } from './_meta.js';
 import { getHandler } from '../../handlers/handler-registry.js';
 import { initParser, parseFile, isInitialized } from '../../core/parse-dispatcher.js';
+import { lineOfChar } from '../../core/offsets.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SyntaxNode } from '../../core/types.js';
 
@@ -386,15 +387,8 @@ function getDecoratedInfo(
   }
 }
 
-/** Count newlines in buf up to (not including) byteOffset. */
-function byteOffsetToLine(buf: Buffer, byteOffset: number): number {
-  let line = 1;
-  const end = Math.min(byteOffset, buf.length);
-  for (let i = 0; i < end; i++) {
-    if (buf[i] === 0x0a) line++;
-  }
-  return line;
-}
+// Line derivation happens in CHAR space (lineOfChar over the decoded string) —
+// node.startIndex is a UTF-16 code-unit index, not a byte offset (Phase 90).
 
 /** Check whether a decorator name matches the query under the given mode. */
 function nameMatches(
@@ -574,7 +568,7 @@ export async function handler(args: {
         // Cross-reference with the symbols table
         const dbSymbol = symbolByName.get(decorated.name);
 
-        const startLine = byteOffsetToLine(content, decoratorNode.startIndex);
+        const startLine = lineOfChar(sourceStr, decoratorNode.startIndex);
 
         const dText = includeDecoratorText
           ? sourceStr.slice(decoratorNode.startIndex, decoratorNode.endIndex).replace(/\s+/g, ' ').trim()

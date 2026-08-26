@@ -11,6 +11,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.23.0] - 2026-08-26 — Phase 90: Offset Integrity (char-vs-byte fix)
+
+The `start_byte`/`end_byte` columns now hold TRUE byte offsets on every
+encoding. Previously, tree-sitter node indices (UTF-16 code-unit indices into
+the decoded string) were stored as byte offsets, so every consumer that sliced
+raw bytes returned shifted source on any file containing non-ASCII text
+(em-dashes, box-drawing dividers, CJK, emoji, or a UTF-8 BOM). On
+PureContext's own repo, 95% of files were affected; `get_symbol_source` could
+start ~8 lines early and end mid-statement.
+
+### Fixed (critical)
+
+- **Stored symbol spans are true byte offsets.** New `src/core/offsets.ts`
+  converter (ASCII identity fast path — zero cost on ASCII files); conversion
+  happens once per file in `file-processor.ts` at the storage boundary, for
+  tree-sitter handlers AND framework adapters. Regex-only handlers already
+  computed true bytes and are unchanged.
+- **SFC block spans no longer mix char and byte math.** Adapter preProcess
+  blocks convert block-local char indices to bytes BEFORE adding the byte
+  offset of the block within the file.
+- **`analyze_diff` hunk attribution** is exact on non-ASCII files (was: hunks
+  could be attributed to the wrong symbol entirely).
+- **Query-time re-parse tools** (`search_ast`, `search_by_decorator`,
+  `get_lexical_scope_matches`) now operate purely in char space on the decoded
+  string — exact snippets and line numbers; `search_ast` response
+  `startByte`/`endByte` are converted to true bytes.
+- **Handler-internal signature slicing** in the Go/JavaScript/Python/Ruby
+  handlers no longer garbles text after multi-byte characters
+  (`Buffer.toString('utf8', charIdx, charIdx)` misuse).
+
+### Changed
+
+- **Schema version 10 → 11** (values-correctness bump, no DDL change). Pre-v11
+  indexes hold corrupted spans; `index_folder` force-re-parses them once to
+  heal, and `check_index_staleness` reports a `schemaWarning` until then.
+- Five duplicate byte→line implementations consolidated onto
+  `symbol-lines.ts` / `core/offsets.ts` (one implementation, one test suite).
+
+---
+
 ## [1.22.0] - 2026-08-26 — Phase 89: Graph Integrity + Edge Hygiene
 
 Driven by the 1.18.0 verification report on a production Android automotive

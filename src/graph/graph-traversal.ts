@@ -3,6 +3,7 @@ import type { SymbolRecord } from '../core/types.js';
 import { getSymbolsByFile, getSymbolById, getSymbolsByRepo } from '../core/db/symbol-store.js';
 import { getForwardDeps, getReverseDeps, getImportersOf, findDeadExports, getAllDepEdges, findClassesExtending, findClassOrInterfaceByName } from '../core/db/dep-store.js';
 import { getFileContent } from '../core/db/file-store.js';
+import { lineOfByte } from '../core/offsets.js';
 
 // ─── Return types ─────────────────────────────────────────────────────────────
 
@@ -332,14 +333,8 @@ function escapeRegex(s: string): string {
   return s.replace(/[$()*+.?[\\\]^{|}]/g, '\\$&');
 }
 
-function bytesToLine(content: Buffer, offset: number): number {
-  const slice = content.slice(0, Math.min(offset, content.length));
-  let line = 1;
-  for (let i = 0; i < slice.length; i++) {
-    if (slice[i] === 0x0a) line++;
-  }
-  return line;
-}
+/** 1-based line number from a byte offset (consolidated impl, Phase 90). */
+const bytesToLine = lineOfByte;
 
 type SymbolLike = {
   id: string;

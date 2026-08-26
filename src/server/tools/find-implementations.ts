@@ -27,6 +27,7 @@ import {
   extractInterfaceMethodNames,
 } from '../../core/db/dep-store.js';
 import { buildMeta } from './_meta.js';
+import { byteOffsetToLine } from './symbol-lines.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { getFileContent } from '../../core/db/file-store.js';
 
@@ -84,15 +85,8 @@ interface FindImplementationsOutput {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Compute 1-based line number from a byte/char offset within file content. */
-function byteToLine(content: Buffer, offset: number): number {
-  const slice = content.slice(0, Math.min(offset, content.length));
-  let line = 1;
-  for (let i = 0; i < slice.length; i++) {
-    if (slice[i] === 0x0a) line++;
-  }
-  return line;
-}
+/** 1-based line number from a byte offset (consolidated impl, Phase 90). */
+const byteToLine = byteOffsetToLine;
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 

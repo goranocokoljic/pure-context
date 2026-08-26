@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { decodeCached } from '../core/offsets.js';
 import type {
   LanguageHandler,
   SymbolRecord,
@@ -44,9 +45,10 @@ function findFirstBlock(node: SyntaxNode): SyntaxNode | null {
  */
 function buildSignature(outerNode: SyntaxNode, source: Buffer): string {
   const block = findFirstBlock(outerNode);
-  const endByte = block ? block.startIndex : outerNode.endIndex;
-  return source
-    .toString('utf8', outerNode.startIndex, endByte)
+  const endIdx = block ? block.startIndex : outerNode.endIndex;
+  // node indices are CHAR indices — slice the decoded string, never the buffer
+  return decodeCached(source)
+    .slice(outerNode.startIndex, endIdx)
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120);
@@ -215,8 +217,8 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         filePath,
         startByte: node.startIndex,
         endByte: node.endIndex,
-        signature: source
-          .toString('utf8', node.startIndex, node.endIndex)
+        signature: decodeCached(source)
+          .slice(node.startIndex, node.endIndex)
           .replace(/\s+/g, ' ')
           .trim()
           .slice(0, 120),
@@ -241,8 +243,8 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         filePath,
         startByte: node.startIndex,
         endByte: node.endIndex,
-        signature: source
-          .toString('utf8', node.startIndex, node.endIndex)
+        signature: decodeCached(source)
+          .slice(node.startIndex, node.endIndex)
           .replace(/\s+/g, ' ')
           .trim()
           .slice(0, 120),

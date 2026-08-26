@@ -17,6 +17,7 @@ import { openDatabase } from '../../core/db/schema.js';
 import { buildMeta } from './_meta.js';
 import { getHandler } from '../../handlers/handler-registry.js';
 import { initParser, parseFile, isInitialized } from '../../core/parse-dispatcher.js';
+import { lineOfChar } from '../../core/offsets.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SyntaxNode } from '../../core/types.js';
 
@@ -81,17 +82,25 @@ export const inputSchema = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function nodeText(node: SyntaxNode, buf: Buffer): string {
-  return buf.toString('utf8', node.startIndex, node.endIndex);
+// Query-time re-parse works purely in CHAR space: node.startIndex is a
+// UTF-16 code-unit index into the DECODED string, never a byte offset.
+// Decode each buffer once (memoized) and slice/count lines in the string.
+const decodedCache = new WeakMap<Buffer, string>();
+function decoded(buf: Buffer): string {
+  let s = decodedCache.get(buf);
+  if (s === undefined) {
+    s = buf.toString('utf8');
+    decodedCache.set(buf, s);
+  }
+  return s;
 }
 
-function byteOffsetToLine(buf: Buffer, byteOffset: number): number {
-  let line = 1;
-  const end = Math.min(byteOffset, buf.length);
-  for (let i = 0; i < end; i++) {
-    if (buf[i] === 0x0a) line++;
-  }
-  return line;
+function nodeText(node: SyntaxNode, buf: Buffer): string {
+  return decoded(buf).slice(node.startIndex, node.endIndex);
+}
+
+function charIndexToLine(buf: Buffer, charIndex: number): number {
+  return lineOfChar(decoded(buf), charIndex);
 }
 
 /**
@@ -566,13 +575,9 @@ export async function handler(args: {
             }
           }
 
-          const startLine = byteOffsetToLine(content, callNode.startIndex);
-          const endLine = byteOffsetToLine(content, callNode.endIndex);
-          const rawText = content.toString(
-            'utf8',
-            callNode.startIndex,
-            callNode.endIndex,
-          );
+          const startLine = charIndexToLine(content, callNode.startIndex);
+          const endLine = charIndexToLine(content, callNode.endIndex);
+          const rawText = decoded(content).slice(callNode.startIndex, callNode.endIndex);
           const snippet =
             rawText.length > 150 ? rawText.slice(0, 150) + '…' : rawText;
 

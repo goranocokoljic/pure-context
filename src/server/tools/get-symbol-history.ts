@@ -15,6 +15,7 @@ import { getFileContent } from '../../core/db/file-store.js';
 import { getFileCommits } from '../../core/db/git-metadata-store.js';
 import { readSymbolHistory, isGitRepo } from '../../core/git-log-reader.js';
 import { buildMeta } from './_meta.js';
+import { byteOffsetToLine } from './symbol-lines.js';
 import type { SymbolKind } from '../../core/types.js';
 import type { CommitRecord } from '../../core/git-log-reader.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -68,18 +69,7 @@ interface GetSymbolHistoryOutput {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Convert a byte offset to a 1-based line number by counting newlines in
- * the content buffer up to that offset.
- */
-function byteOffsetToLine(content: Buffer, byteOffset: number): number {
-  let line = 1;
-  const cap = Math.min(byteOffset, content.length);
-  for (let i = 0; i < cap; i++) {
-    if (content[i] === 0x0a) line++;
-  }
-  return line;
-}
+// byteOffsetToLine consolidated onto symbol-lines.ts (Phase 90).
 
 function toSymbolCommit(commit: CommitRecord): SymbolCommit {
   const nowMs = Date.now();

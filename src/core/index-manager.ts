@@ -160,12 +160,15 @@ export async function indexFolder(
   const cache = createHashCache();
   const preRepo = getRepo(db, repoId);
   const existingHashes = getAllFileHashes(db, repoId);
-  if (preRepo && preRepo.schemaVersion < 10) {
+  if (preRepo && preRepo.schemaVersion < 11) {
     // Pre-v10 index: import_records (Task 561) were never captured for its
-    // files. Leave the cache empty so every file re-parses once and the
-    // records backfill — otherwise hash-skipped files would never get records
-    // and the new-file edge rebuild in reindexFiles could not be trusted.
-    logger.info('Index predates schema v10 — full re-parse to backfill import records');
+    // files. Pre-v11 index: start_byte/end_byte hold UTF-16 char indices, not
+    // true byte offsets (Phase 90 char-vs-byte fix). Either way, leave the
+    // cache empty so every file re-parses once and the stored values heal —
+    // hash-skipped files would otherwise keep corrupted spans forever.
+    logger.info(
+      `Index predates schema v${preRepo.schemaVersion < 10 ? '10' : '11'} — full re-parse to heal stored data`,
+    );
   } else {
     for (const [path, hash] of existingHashes) {
       cache.set(path, hash);

@@ -57,11 +57,6 @@ function bareName(name: string): string {
   return i >= 0 ? name.slice(i + 1) : name;
 }
 
-/** Char index → byte offset (handlers/adapters must store byte offsets). */
-function byteOffset(text: string, charIdx: number): number {
-  return Buffer.byteLength(text.slice(0, charIdx), 'utf8');
-}
-
 // ─── Detection ────────────────────────────────────────────────────────────────
 
 /**
@@ -640,8 +635,10 @@ export function extractManifestSymbols(source: Buffer, filePath: string): Symbol
         name: clsName,
         kind: 'route',
         filePath,
-        startByte: byteOffset(text, start),
-        endByte: byteOffset(text, end),
+        // Char indices — the pipeline (file-processor) converts adapter
+        // framework-symbol spans to true byte offsets at the storage boundary.
+        startByte: start,
+        endByte: end,
         signature: `<${tag} android:name="${rawName}">`,
         summary: `Android manifest ${tag}: ${clsName}${launcher ? ' (LAUNCHER)' : ''}`,
         frameworkMeta: {

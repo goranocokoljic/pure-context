@@ -14,7 +14,10 @@ import { getSqliteFactory, type SqliteDatabase } from './sqlite-loader.js';
 // call sites — remain valid and unchanged.
 type DatabaseConstructor = new (filename: string) => SqliteDatabase;
 
-export const SCHEMA_VERSION = 10;
+// v11 (Phase 90): values-correctness bump, no DDL change. Pre-v11 indexes
+// stored UTF-16 char indices in start_byte/end_byte (char-vs-byte corruption);
+// index-manager force-re-parses pre-v11 repos once so spans become true bytes.
+export const SCHEMA_VERSION = 11;
 
 const DDL = `
 PRAGMA journal_mode = WAL;

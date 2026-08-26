@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { decodeCached } from '../core/offsets.js';
 import type { LanguageHandler, SymbolRecord, SymbolKind, ImportRecord, SyntaxNode, Tree } from '../core/types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -31,8 +32,9 @@ function buildSignature(node: SyntaxNode, source: Buffer): string {
       : node;
   const bodyNode = findBodyNode(declNode);
   if (bodyNode) endByte = bodyNode.startIndex;
-  return source
-    .toString('utf8', node.startIndex, endByte)
+  // node indices are CHAR indices — slice the decoded string, never the buffer
+  return decodeCached(source)
+    .slice(node.startIndex, endByte)
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120);
