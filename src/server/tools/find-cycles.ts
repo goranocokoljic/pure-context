@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { findImportCycles } from '../../graph/graph-traversal.js';
 import { buildMeta } from './_meta.js';
+import { graphCoverageWarning } from './graph-coverage.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'find_cycles';
@@ -109,6 +110,7 @@ export async function handler(args: {
       totalFound: result.totalFound,
       truncated: result.truncated,
       _tokenEstimate: Math.ceil(responseText.length / 4),
+      ...(graphCoverageWarning(db, repoId) ?? {}),
       _meta: buildMeta({ timingMs: Date.now() - t0 }),
     };
 

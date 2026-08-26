@@ -1,5 +1,6 @@
 import type { ImportRecord, DepEdge } from '../core/types.js';
 import type { PathResolver } from './path-resolver.js';
+import { isJvmSourceFile, type JvmResolver } from './jvm-resolver.js';
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -7,9 +8,12 @@ import type { PathResolver } from './path-resolver.js';
  * Convert a batch of ImportRecords into DepEdges.
  *
  * Each ImportRecord may or may not have `resolvedPath` pre-filled; if it is
- * null the resolver is called to fill it. Records that resolve to external
- * packages (null resolvedPath) are silently dropped — they don't belong in
- * the in-project dependency graph.
+ * null a resolver is called to fill it. Imports from JVM source files
+ * (.kt/.java/.scala/.groovy/…) go through the JVM package resolver when one is
+ * supplied — it can yield SEVERAL targets (wildcard imports, cross-module
+ * ambiguity), each becoming an edge. All other files use the path resolver,
+ * whose behavior is unchanged. Records that resolve to nothing (external
+ * packages) are silently dropped — they don't belong in the in-project graph.
  *
  * Phase 1 emits one file-level edge per unique (sourceFile, targetFile) pair.
  * Symbol-level edge population is deferred to Phase 2 when we have a DB
@@ -19,6 +23,7 @@ export function buildGraph(
   imports: ImportRecord[],
   resolver: PathResolver,
   repoId: string,
+  jvmResolver?: JvmResolver,
 ): DepEdge[] {
   // Deduplicate by (sourceFile, targetFile) to avoid flooding the dep table
   // with one row per named import specifier from the same module.
@@ -28,26 +33,32 @@ export function buildGraph(
   for (const rec of imports) {
     if (!rec.sourceFile) continue; // guard against unfilled sourceFile
 
-    // Resolve the path if the handler left it null
-    const targetFile =
-      rec.resolvedPath ??
-      resolver.resolve(rec.specifier, rec.sourceFile);
+    // Resolve the path(s) if the handler left resolvedPath null
+    let targetFiles: string[];
+    if (rec.resolvedPath !== null) {
+      targetFiles = [rec.resolvedPath];
+    } else if (jvmResolver && isJvmSourceFile(rec.sourceFile)) {
+      targetFiles = jvmResolver.resolve(rec.specifier, rec.sourceFile);
+    } else {
+      const resolved = resolver.resolve(rec.specifier, rec.sourceFile);
+      targetFiles = resolved === null ? [] : [resolved];
+    }
 
-    if (targetFile === null) continue; // external package — skip
+    for (const targetFile of targetFiles) {
+      const key = `${rec.sourceFile}\0${targetFile}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
 
-    const key = `${rec.sourceFile}\0${targetFile}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    edges.push({
-      repoId,
-      sourceFile: rec.sourceFile,
-      sourceSymbolId: null,
-      targetFile,
-      targetSymbolId: null,
-      edgeType: detectEdgeType(rec),
-      specifier: rec.specifier,
-    });
+      edges.push({
+        repoId,
+        sourceFile: rec.sourceFile,
+        sourceSymbolId: null,
+        targetFile,
+        targetSymbolId: null,
+        edgeType: detectEdgeType(rec),
+        specifier: rec.specifier,
+      });
+    }
   }
 
   return edges;

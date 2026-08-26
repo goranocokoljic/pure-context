@@ -10,16 +10,21 @@ export function upsertFile(
   contentHash: string,
   rawContent?: Buffer,
   tenantId = 'local',
+  declaredPackage?: string | null,
 ): void {
   try {
+    // declaredPackage semantics: undefined = keep the stored value (hash-only
+    // upserts must not wipe it); null = the file declares no package.
     db.prepare(`
-      INSERT INTO files (repo_id, path, content_hash, raw_content, indexed_at, tenant_id)
-      VALUES (@repoId, @path, @contentHash, @rawContent, @indexedAt, @tenantId)
+      INSERT INTO files (repo_id, path, content_hash, raw_content, indexed_at, tenant_id, declared_package)
+      VALUES (@repoId, @path, @contentHash, @rawContent, @indexedAt, @tenantId, @declaredPackage)
       ON CONFLICT(repo_id, path) DO UPDATE SET
         content_hash = excluded.content_hash,
         raw_content  = excluded.raw_content,
         indexed_at   = excluded.indexed_at,
-        tenant_id    = excluded.tenant_id
+        tenant_id    = excluded.tenant_id,
+        declared_package = CASE WHEN @setDeclaredPackage = 1
+          THEN excluded.declared_package ELSE files.declared_package END
     `).run({
       repoId,
       path: filePath,
@@ -27,10 +32,29 @@ export function upsertFile(
       rawContent: rawContent ?? null,
       indexedAt: Date.now(),
       tenantId,
+      declaredPackage: declaredPackage ?? null,
+      setDeclaredPackage: declaredPackage === undefined ? 0 : 1,
     });
   } catch (err) {
     throw new StorageError(`Failed to upsert file "${filePath}"`, 'upsertFile', err);
   }
+}
+
+/**
+ * All files with a declared package (JVM languages) for a repo.
+ * Returns a map of relative file path → package (e.g. "com.example.foo").
+ * Used by the JVM import resolver to map package-qualified imports to files.
+ */
+export function getDeclaredPackages(
+  db: Database.Database,
+  repoId: string,
+): Map<string, string> {
+  const rows = db
+    .prepare<[string], { path: string; declared_package: string }>(
+      'SELECT path, declared_package FROM files WHERE repo_id = ? AND declared_package IS NOT NULL',
+    )
+    .all(repoId);
+  return new Map(rows.map((r) => [r.path, r.declared_package]));
 }
 
 export function getFileContent(

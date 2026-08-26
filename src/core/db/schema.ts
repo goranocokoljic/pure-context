@@ -14,7 +14,7 @@ import { getSqliteFactory, type SqliteDatabase } from './sqlite-loader.js';
 // call sites — remain valid and unchanged.
 type DatabaseConstructor = new (filename: string) => SqliteDatabase;
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 const DDL = `
 PRAGMA journal_mode = WAL;
@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS files (
   last_commit_date    INTEGER,
   last_commit_message TEXT,
   commit_count        INTEGER,
+  declared_package    TEXT,
   PRIMARY KEY (repo_id, path),
   FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
@@ -352,6 +353,20 @@ function runMigrations(db: InstanceType<DatabaseConstructor>): void {
   // initializeDatabase; old indexes load without re-indexing.
   if (dbVersion < 8) {
     db.exec(CO_CHANGE_DDL);
+  }
+
+  // Migration v8 → v9: add declared_package to files (JVM import resolution).
+  // Additive — old rows stay NULL until their file is re-indexed; the JVM
+  // resolver treats NULL as "derive the package from the path" (best effort).
+  if (dbVersion < 9) {
+    const fileCols = db.prepare("PRAGMA table_info(files)").all() as Array<{ name: string }>;
+    if (!fileCols.some((c) => c.name === 'declared_package')) {
+      db.exec('ALTER TABLE files ADD COLUMN declared_package TEXT');
+    }
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_files_declared_package ON files(repo_id, declared_package)
+        WHERE declared_package IS NOT NULL
+    `);
   }
 }
 

@@ -47,18 +47,34 @@ function typeName(node: SyntaxNode, src: string): string {
 
 // ─── Visibility ───────────────────────────────────────────────────────────────
 
+type KotlinVisibility = 'public' | 'internal' | 'protected' | 'private';
+
 /**
- * Returns true if the node has `private` or `internal` as a visibility modifier.
- * Default visibility in Kotlin is public, so absent modifier = visible.
+ * Visibility modifier of a declaration. Default visibility in Kotlin is public.
+ *
+ * Only `private` declarations are excluded from the index. `internal` means
+ * visible within the compilation module — in a multi-module Gradle build that
+ * is exactly the unit being indexed, so `internal` symbols (impl classes, Hilt
+ * modules, repository implementations) must stay findable. Their visibility is
+ * recorded in frameworkMeta so API-surface tools can still filter them.
  */
-function isPrivateOrInternal(node: SyntaxNode, src: string): boolean {
+function visibilityOf(node: SyntaxNode, src: string): KotlinVisibility {
   const modifiers = node.children.find((c) => c.type === 'modifiers');
-  if (!modifiers) return false;
-  return modifiers.children.some((c) => {
-    if (c.type !== 'visibility_modifier') return false;
+  if (!modifiers) return 'public';
+  for (const c of modifiers.children) {
+    if (c.type !== 'visibility_modifier') continue;
     const t = nodeText(c, src);
-    return t === 'private' || t === 'internal';
-  });
+    if (t === 'private' || t === 'internal' || t === 'protected') return t;
+  }
+  return 'public';
+}
+
+/** Merge non-public visibility into a symbol's frameworkMeta. */
+function withVisibility(
+  meta: Record<string, unknown> | undefined,
+  visibility: KotlinVisibility,
+): Record<string, unknown> | undefined {
+  return visibility === 'public' ? meta : { ...(meta ?? {}), visibility };
 }
 
 // ─── Class kind detection ─────────────────────────────────────────────────────
@@ -129,7 +145,8 @@ function walkNode(
 ): void {
   switch (node.type) {
     case 'function_declaration': {
-      if (isPrivateOrInternal(node, src)) break;
+      const fnVisibility = visibilityOf(node, src);
+      if (fnVisibility === 'private') break;
       const name = simpleName(node, src);
       if (!name) break;
 
@@ -167,13 +184,15 @@ function walkNode(
         summary: (ctx.className || receiverText)
           ? `Kotlin method: ${qualName}`
           : `Kotlin function: ${qualName}`,
+        frameworkMeta: withVisibility(undefined, fnVisibility),
       });
       // Do not recurse into function bodies
       break;
     }
 
     case 'class_declaration': {
-      if (isPrivateOrInternal(node, src)) break;
+      const classVisibility = visibilityOf(node, src);
+      if (classVisibility === 'private') break;
       const name = typeName(node, src);
       if (!name) break;
 
@@ -189,6 +208,7 @@ function walkNode(
         endByte: node.endIndex,
         signature: sig,
         summary: `Kotlin ${kind}: ${name}`,
+        frameworkMeta: withVisibility(undefined, classVisibility),
       });
 
       // Extract primary constructor properties (val/var class_parameter nodes)
@@ -198,7 +218,8 @@ function walkNode(
           if (param.type !== 'class_parameter') continue;
           const bindingKind = childText(param, src, 'binding_pattern_kind');
           if (bindingKind !== 'val' && bindingKind !== 'var') continue;
-          if (isPrivateOrInternal(param, src)) continue;
+          const paramVisibility = visibilityOf(param, src);
+          if (paramVisibility === 'private') continue;
           const propName = simpleName(param, src);
           if (!propName) continue;
           const qualPropName = `${name}.${propName}`;
@@ -212,6 +233,7 @@ function walkNode(
             endByte: param.endIndex,
             signature: sig,
             summary: `Kotlin property: ${qualPropName}`,
+            frameworkMeta: withVisibility(undefined, paramVisibility),
           });
         }
       }
@@ -229,7 +251,8 @@ function walkNode(
     }
 
     case 'object_declaration': {
-      if (isPrivateOrInternal(node, src)) break;
+      const objVisibility = visibilityOf(node, src);
+      if (objVisibility === 'private') break;
       const name = typeName(node, src);
       if (!name) break;
 
@@ -243,7 +266,7 @@ function walkNode(
         endByte: node.endIndex,
         signature: sig,
         summary: `Kotlin object: ${name}`,
-        frameworkMeta: { kotlin_object: true },
+        frameworkMeta: withVisibility({ kotlin_object: true }, objVisibility),
       });
 
       const body = node.children.find((c) => c.type === 'class_body');
@@ -270,7 +293,8 @@ function walkNode(
     }
 
     case 'type_alias': {
-      if (isPrivateOrInternal(node, src)) break;
+      const aliasVisibility = visibilityOf(node, src);
+      if (aliasVisibility === 'private') break;
       const name = typeName(node, src);
       if (!name) break;
       const raw = nodeText(node, src).replace(/\s+/g, ' ');
@@ -284,6 +308,7 @@ function walkNode(
         endByte: node.endIndex,
         signature: sig,
         summary: `Kotlin typealias: ${name}`,
+        frameworkMeta: withVisibility(undefined, aliasVisibility),
       });
       break;
     }
@@ -297,7 +322,8 @@ function walkNode(
       if (!varDecl) break;
       const name = simpleName(varDecl, src);
       if (!name || !/^[A-Z_][A-Z0-9_]*$/.test(name)) break;
-      if (isPrivateOrInternal(node, src)) break;
+      const constVisibility = visibilityOf(node, src);
+      if (constVisibility === 'private') break;
       const sig = buildPropertySignature(node, src);
       symbols.push({
         id: makeId(filePath, name, 'const'),
@@ -308,6 +334,7 @@ function walkNode(
         endByte: node.endIndex,
         signature: sig,
         summary: `Kotlin constant: ${name}`,
+        frameworkMeta: withVisibility(undefined, constVisibility),
       });
       break;
     }
@@ -403,6 +430,26 @@ function extractDocstring(node: SyntaxNode): string | null {
   return null;
 }
 
+// ─── extractPackage ───────────────────────────────────────────────────────────
+
+/**
+ * Declared package of the file: `package com.example.foo` → "com.example.foo".
+ * Kotlin does not require the package to match the directory layout, so this
+ * is the authoritative source for JVM import resolution.
+ */
+function extractPackage(tree: Tree | null, source: Buffer): string | null {
+  if (!tree) return null;
+  const src = source.toString('utf8');
+  for (const child of tree.rootNode.children) {
+    if (child.type === 'package_header') {
+      const identifierNode = child.children.find((c) => c.type === 'identifier');
+      const pkg = identifierNode ? nodeText(identifierNode, src).trim() : '';
+      return pkg.length > 0 ? pkg : null;
+    }
+  }
+  return null;
+}
+
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export const kotlinHandler: LanguageHandler = {
@@ -411,4 +458,5 @@ export const kotlinHandler: LanguageHandler = {
   extractSymbols,
   extractImports,
   extractDocstring,
+  extractPackage,
 };

@@ -13,7 +13,12 @@ During indexing, each `import` / `require` / `use` statement is resolved to a de
 dep_edge: sourceFile → resolvedTargetFile (via import specifier)
 ```
 
-Edges are stored in the `dep_edges` SQLite table. External packages (e.g., `from 'react'`) produce edges with `resolvedPath: null` and are excluded from graph traversal.
+Edges are stored in the `dep_edges` SQLite table. An edge is created only when the import specifier can be resolved to a file inside the repo. Two cases resolve to nothing and produce **no edge**:
+
+- **External packages** (e.g., `from 'react'`, `java.util.*`) — correctly excluded.
+- **Package-style imports in languages without a resolver** (e.g., Python modules, Go packages, PHP namespaces, Rust crate paths) — these are currently indistinguishable from external packages, so repos in those languages have few or zero edges. Graph tools built on `dep_edges` return empty results there; that is a missing graph, not an empty dependency set. See the support matrix in [LANGUAGE-SUPPORT.md](../LANGUAGE-SUPPORT.md#which-languages-get-dependency-edges).
+
+JVM imports (Kotlin, Java, Scala, Groovy) ARE resolved: each file's declared `package` is captured at index time and `com.example.Foo` maps to the file that declares it, including wildcard imports, Kotlin top-level member imports, and same-package-in-several-modules disambiguation (own Gradle/Maven module preferred, otherwise edges to all candidates). Repos indexed before v1.15.0 need one re-index to populate the package data.
 
 Two directions of traversal:
 - **Forward walk** — "what does X depend on?" (imports, transitively)

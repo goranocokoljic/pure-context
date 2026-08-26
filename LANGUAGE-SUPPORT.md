@@ -88,9 +88,25 @@ Regardless of language, every symbol you find through `search_symbols` carries:
 - **Byte offsets** — `startByte` / `endByte` for precise source retrieval; no need to re-read the whole file to grab a function body
 - **Signature** — a one-line declaration with the full type information available in that language
 - **Summary** — sourced from the docstring/JSDoc/Javadoc/Roxygen comment if present, otherwise inferred from framework context (route path, ORM table, etc.), otherwise a one-line AI summary, otherwise the signature itself
-- **Import / dependency edges** — used by the dependency graph, blast radius, and cycle detection tools
 
 The summary chain (docstring → framework inference → AI → signature fallback) is what makes search across an undocumented codebase still work. See [AI Summaries](AI-SUMMARIES.md) for how to enable LLM summaries on legacy projects.
+
+---
+
+## Which languages get dependency edges
+
+Symbol extraction and search work for all 34 languages. **Import / dependency edges** — the data behind `get_blast_radius`, `find_importers`, `find_cycles`, `get_call_hierarchy`, `get_dependency_graph`, the architecture tools, and the centrality axis of `get_symbol_risk` — currently exist only where the import specifier can be resolved to a file in the repo:
+
+| Resolution | Languages |
+|------------|-----------|
+| Module resolver (relative paths + `tsconfig` path aliases) | TypeScript, JavaScript |
+| JVM package resolver (declared `package` → file, incl. wildcards, member imports, and Gradle/Maven multi-module disambiguation) | Kotlin, Java, Scala, Groovy |
+| Imports are literal file paths | C, C++, Dart, SCSS/LESS/CSS, Terraform/HCL, Protobuf, Nix, Perl, XML, Bash |
+| **Not yet resolved — symbols only, no dependency edges** | Python, Go, PHP, Rust, Haskell, Fortran, and other languages with package-style imports (`import numpy`, Go module paths, PHP namespaces, …) |
+
+For languages in the last row, the graph-based tools return empty or partial results: an empty blast radius there means "no graph", **not** "nothing depends on this symbol". `find_references` (a content scan) and `get_co_change` (git history) work for every language and are the graph-independent alternatives.
+
+JVM notes: resolution keys on each file's declared `package` (captured at index time), so it works even when packages don't match directory layout. When the same package + class name exists in several Gradle/Maven modules, edges prefer the importing file's own module and otherwise go to **all** candidates — over-approximating is the safe direction for blast radius. Re-index a repo indexed before v1.15.0 to populate the package data.
 
 ---
 
@@ -117,6 +133,7 @@ Public API tools (`get_public_api`) rely on these rules being applied consistent
 
 ## Known limitations
 
+- **Import resolution is not universal** — languages with package-style imports other than the JVM family (Python, Go, PHP, Rust, …) index symbols but produce **no dependency edges** today, so graph tools return empty results there. See [Which languages get dependency edges](#which-languages-get-dependency-edges) above.
 - **TypeScript `.tsx`** uses a separate `tree-sitter-tsx` grammar from `.ts`. Both are bundled.
 - **Python stubs** (`.pyi`) are not indexed — only `.py` files.
 - **Terraform** `dynamic` blocks with complex expressions may not be fully extracted.

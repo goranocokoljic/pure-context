@@ -500,6 +500,29 @@ function extractImports(tree: Tree, _source: Buffer): ImportRecord[] {
   return imports;
 }
 
+// ─── Package extraction ───────────────────────────────────────────────────────
+
+/**
+ * Declared package of the file. Scala 2 chained clauses
+ * (`package a.b` + `package c` on separate lines) concatenate to "a.b.c".
+ * The braces form (`package a { ... }`) contributes only its own segment.
+ */
+function extractPackage(tree: Tree | null, _source: Buffer): string | null {
+  if (!tree) return null;
+  const parts: string[] = [];
+  for (const node of tree.rootNode.children) {
+    if (node.type !== 'package_clause') continue;
+    const ident = node.children.find(
+      (c) => c.type === 'package_identifier' || c.type === 'stable_identifier' || c.type === 'identifier',
+    );
+    if (ident) {
+      const text = ident.text.trim();
+      if (text.length > 0) parts.push(text);
+    }
+  }
+  return parts.length > 0 ? parts.join('.') : null;
+}
+
 // ─── Handler export ───────────────────────────────────────────────────────────
 
 export const scalaHandler: LanguageHandler = {
@@ -508,4 +531,5 @@ export const scalaHandler: LanguageHandler = {
   extractSymbols,
   extractImports,
   extractDocstring,
+  extractPackage,
 };

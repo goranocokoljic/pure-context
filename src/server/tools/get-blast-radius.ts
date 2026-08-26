@@ -4,6 +4,7 @@ import { getBlastRadius } from '../../graph/graph-traversal.js';
 import { getFileSizesBatch } from '../../core/db/file-store.js';
 import { BYTES_PER_TOKEN } from '../../core/token-tracker.js';
 import { buildMeta } from './_meta.js';
+import { graphCoverageWarning } from './graph-coverage.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'get_blast_radius';
@@ -29,6 +30,7 @@ export function handler(args: { repoId: string; symbolId: string; depth?: number
   const result = getBlastRadius(args.symbolId, args.repoId, db, args.depth);
 
   const fileSizes = getFileSizesBatch(db, args.repoId, result.files);
+  const coverage = graphCoverageWarning(db, args.repoId);
   db.close();
 
   const rawBytes = result.files.reduce((sum, fp) => sum + (fileSizes.get(fp) ?? 0), 0);
@@ -52,6 +54,7 @@ export function handler(args: { repoId: string; symbolId: string; depth?: number
               filePath: s.filePath,
               signature: s.signature,
             })),
+            ...(coverage ?? {}),
             _meta: buildMeta({ timingMs: Date.now() - t0, rawBytes, responseBytes }),
           },
           null,

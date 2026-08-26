@@ -11,7 +11,7 @@ const BUILT_IN_EXCLUDES = [
   'node_modules',
   '.git',
   'dist',
-  'build',
+  'build', // bare name = any dir named build, incl. **/build/generated (gitignore semantics)
   '.claude',
   '.env',
   '.env.*',
@@ -19,6 +19,9 @@ const BUILT_IN_EXCLUDES = [
   'package-lock.json',
   'yarn.lock',
   'pnpm-lock.yaml',
+  // JVM / Android standards
+  '.gradle',
+  '.idea',
 ];
 
 /** Higher number = higher priority (indexed first). */

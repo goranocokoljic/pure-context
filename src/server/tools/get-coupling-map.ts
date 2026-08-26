@@ -19,6 +19,7 @@ import { z } from 'zod';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { getCouplingMap } from '../../core/db/dep-store.js';
 import { buildMeta } from './_meta.js';
+import { graphCoverageWarning } from './graph-coverage.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'get_coupling_map';
@@ -143,6 +144,7 @@ export async function handler(args: {
       files,
       totalFiles: files.length,
       _tokenEstimate: Math.ceil(responseText.length / 4),
+      ...(graphCoverageWarning(db, repoId) ?? {}),
       _meta: buildMeta({ timingMs: Date.now() - t0 }),
     };
 

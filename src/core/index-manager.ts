@@ -32,6 +32,7 @@ import { createWorkerPool } from './worker-pool.js';
 import type { ParseJob } from './worker-pool.js';
 import { createResolver } from '../graph/path-resolver.js';
 import { buildGraph } from '../graph/graph-builder.js';
+import { createJvmResolver, isJvmSourceFile } from '../graph/jvm-resolver.js';
 import { join } from 'path';
 import { track } from './telemetry.js';
 import { discoverProviders } from '../providers/provider-registry.js';
@@ -231,7 +232,7 @@ export async function indexFolder(
           // re-parse churn: such files were never recorded, so every subsequent
           // no-op index re-read and re-parsed them. Recording the hash lets the
           // next run recognise them as unchanged and skip them.
-          upsertFile(db, repoId, relPath, hash, content);
+          upsertFile(db, repoId, relPath, hash, content, 'local', pr.declaredPackage ?? null);
           cache.set(relPath, hash);
 
           logger.debug(`Processed ${relPath}: ${pr.symbols.length} symbols, ${pr.imports.length} imports`);
@@ -246,7 +247,7 @@ export async function indexFolder(
       const { relPath, content, hash } = entry;
 
       try {
-        const { symbols, imports } = await processFile(relPath, content, adapters);
+        const { symbols, imports, declaredPackage } = await processFile(relPath, content, adapters);
 
         allImports.push(...imports);
 
@@ -262,7 +263,7 @@ export async function indexFolder(
         // when symbols.length === 0 && imports.length === 0 so a true no-op
         // re-index recognises the file next time instead of re-parsing it on
         // every run (the recurring-churn fix).
-        upsertFile(db, repoId, relPath, hash, content);
+        upsertFile(db, repoId, relPath, hash, content, 'local', declaredPackage);
         cache.set(relPath, hash);
 
         logger.debug(`Processed ${relPath}: ${symbols.length} symbols, ${imports.length} imports`);
@@ -277,7 +278,13 @@ export async function indexFolder(
   }
 
   // ── 10. Build and store dependency graph ─────────────────────────────────
-  const edges = buildGraph(allImports, resolver, repoId);
+  // JVM imports need the package resolver, built here — after file/symbol
+  // persistence — so it sees the full declared_package + symbol tables. The
+  // map build is skipped when the batch has no JVM source files.
+  const jvmResolver = allImports.some((imp) => isJvmSourceFile(imp.sourceFile))
+    ? createJvmResolver(db, repoId, absRoot)
+    : undefined;
+  const edges = buildGraph(allImports, resolver, repoId, jvmResolver);
   if (edges.length > 0) {
     insertEdges(db, edges);
   }
@@ -446,6 +453,8 @@ export async function indexFolder(
     durationMs: Date.now() - start,
     errors,
     warnings,
+    limitReached: limitSkipped > 0,
+    totalBeforeLimit,
   };
 
   logger.info(
@@ -523,7 +532,7 @@ export async function reindexFiles(
     }
 
     try {
-      const { symbols, imports } = await processFile(relPath, content, adapters);
+      const { symbols, imports, declaredPackage } = await processFile(relPath, content, adapters);
 
       // Always clear this file's prior rows so a re-index FULLY replaces them —
       // even when the edit removed the file's last symbol/import. Leaving stale
@@ -533,7 +542,7 @@ export async function reindexFiles(
       deleteEdgesByFile(db, repoId, relPath);
 
       const hash = computeHash(content);
-      upsertFile(db, repoId, relPath, hash, content);
+      upsertFile(db, repoId, relPath, hash, content, 'local', declaredPackage);
 
       if (symbols.length === 0 && imports.length === 0) {
         filesSkipped++;
@@ -556,8 +565,13 @@ export async function reindexFiles(
     }
   }
 
-  // Build edges only for the re-processed files
-  const edges = buildGraph(allImports, resolver, repoId);
+  // Build edges only for the re-processed files. The JVM resolver reads the
+  // full files/symbols tables (already updated above), so targeted re-index
+  // edges match what a full index_folder would produce.
+  const jvmResolver = allImports.some((imp) => isJvmSourceFile(imp.sourceFile))
+    ? createJvmResolver(db, repoId, absRoot)
+    : undefined;
+  const edges = buildGraph(allImports, resolver, repoId, jvmResolver);
   if (edges.length > 0) {
     insertEdges(db, edges);
   }
@@ -639,6 +653,9 @@ export async function reindexFiles(
     durationMs: Date.now() - start,
     errors,
     warnings: [],
+    // Targeted re-index takes an explicit file list — no discovery, no limit.
+    limitReached: false,
+    totalBeforeLimit: changedPaths.length,
   };
 }
 

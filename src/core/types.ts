@@ -193,6 +193,14 @@ export interface IndexResult {
   errors: Array<{ file: string; message: string }>;
   /** Non-fatal issues that affect completeness (limit reached, parse errors, etc.). */
   warnings: string[];
+  /**
+   * True when discovery found more files than fileLimit allowed — the index is
+   * a PARTIAL view of the project. Agents should surface this instead of
+   * reasoning over a truncated index silently.
+   */
+  limitReached: boolean;
+  /** Files discovery found before fileLimit was applied. */
+  totalBeforeLimit: number;
 }
 
 export interface DiscoveredFile {
@@ -214,6 +222,13 @@ export interface LanguageHandler {
   extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRecord[];
   extractImports(tree: Tree, source: Buffer): ImportRecord[];
   extractDocstring(node: SyntaxNode): string | null;
+  /**
+   * Optional: the package/namespace the file declares (e.g. Kotlin/Java
+   * `package com.example.foo` → "com.example.foo"). Stored per file and used by
+   * the JVM import resolver to map package-qualified imports to repo files.
+   * `tree` is null for regex-only handlers. Return null when none is declared.
+   */
+  extractPackage?(tree: Tree | null, source: Buffer): string | null;
   /**
    * Optional content-based detection gate for handlers that claim ambiguous
    * extensions (e.g. .yaml/.yml/.json). When present, the file-processor calls

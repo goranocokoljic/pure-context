@@ -47,6 +47,8 @@ export async function handler(
             durationMs: result.durationMs,
             errors: result.errors,
             warnings: result.warnings,
+            limitReached: result.limitReached,
+            totalBeforeLimit: result.totalBeforeLimit,
             _meta: buildMeta({ timingMs: result.durationMs }),
           },
           null,

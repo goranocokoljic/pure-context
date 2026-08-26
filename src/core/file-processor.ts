@@ -15,6 +15,11 @@ import { calculateComplexity, shouldCalculateMetrics } from './metrics/complexit
 export interface ProcessedResult {
   symbols: SymbolRecord[];
   imports: ImportRecord[];
+  /**
+   * Package/namespace the file declares (JVM languages), null when the file
+   * declares none or the handler does not implement extractPackage.
+   */
+  declaredPackage: string | null;
 }
 
 /**
@@ -34,11 +39,13 @@ export async function processFile(
 
   let symbols: SymbolRecord[];
   let imports: ImportRecord[];
+  let declaredPackage: string | null = null;
 
   if (adapter) {
     const result = await processWithAdapter(relPath, content, adapter);
     symbols = result.symbols;
     imports = result.imports;
+    declaredPackage = result.declaredPackage;
   } else {
     // Normal handler path
     let handler = getHandler(relPath);
@@ -49,12 +56,12 @@ export async function processFile(
         handler = getHandlerByLanguage('bash');
       }
     }
-    if (!handler) return { symbols: [], imports: [] };
+    if (!handler) return { symbols: [], imports: [], declaredPackage: null };
 
     // Content-based detection gate: handlers with detect() may claim ambiguous
     // extensions (.yaml, .json) but only want to process matching files.
     if (handler.detect && !handler.detect(content)) {
-      return { symbols: [], imports: [] };
+      return { symbols: [], imports: [], declaredPackage: null };
     }
 
     if (handler.grammarPath() === null) {
@@ -64,6 +71,7 @@ export async function processFile(
         ...imp,
         sourceFile: relPath,
       }));
+      declaredPackage = handler.extractPackage?.(null, content) ?? null;
     } else {
       const tree = await parseFile(content, handler);
       symbols = handler.extractSymbols(tree, content, relPath);
@@ -71,6 +79,7 @@ export async function processFile(
         ...imp,
         sourceFile: relPath,
       }));
+      declaredPackage = handler.extractPackage?.(tree, content) ?? null;
     }
 
     // C/ObjC header fallback: the ObjC handler returns 0 symbols for pure-C headers
@@ -112,7 +121,7 @@ export async function processFile(
 
   // enrichSymbols runs AFTER enrichMetadata so Stage 2 (framework-derived
   // summaries) has access to the frameworkMeta set by adapters.
-  return { symbols: enrichSymbols(symbols), imports };
+  return { symbols: enrichSymbols(symbols), imports, declaredPackage };
 }
 
 async function processWithAdapter(
@@ -123,6 +132,7 @@ async function processWithAdapter(
   let blockSymbols: SymbolRecord[] = [];
   const imports: ImportRecord[] = [];
   let primaryTree = null;
+  let declaredPackage: string | null = null;
 
   if (adapter.preProcess) {
     // Split the file into typed blocks (e.g. .vue → <script> + <template>)
@@ -169,6 +179,9 @@ async function processWithAdapter(
           sourceFile: relPath,
         })),
       );
+      // JVM framework adapters (Spring, Ktor, …) route .java/.kt files through
+      // this branch — the package must still be captured for import resolution.
+      declaredPackage = handler.extractPackage?.(tree, content) ?? null;
     }
   }
 
@@ -183,5 +196,5 @@ async function processWithAdapter(
   // Return raw merged symbols — processFile runs enrichSymbols after all
   // adapters' enrichMetadata so Stage 2 has access to the final frameworkMeta.
   const symbols = Array.from(merged.values());
-  return { symbols, imports };
+  return { symbols, imports, declaredPackage };
 }

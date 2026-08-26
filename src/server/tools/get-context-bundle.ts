@@ -9,6 +9,7 @@ import { getCoChange } from './co-change.js';
 import { getConfig } from '../../config/config-loader.js';
 import { BYTES_PER_TOKEN } from '../../core/token-tracker.js';
 import { buildMeta } from './_meta.js';
+import { graphCoverageWarning } from './graph-coverage.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'get_context_bundle';
@@ -106,6 +107,7 @@ export function handler(args: { repoId: string; symbolId: string; depth?: number
     args.symbolId,
     new Set(result.files),
   );
+  const coverage = graphCoverageWarning(db, args.repoId);
   db.close();
 
   const rawBytes = result.files.reduce((sum, fp) => sum + (fileSizes.get(fp) ?? 0), 0);
@@ -144,6 +146,7 @@ export function handler(args: { repoId: string; symbolId: string; depth?: number
               summary: s.summary,
             })),
             ...(historicalNeighbors.length > 0 ? { historicalNeighbors } : {}),
+            ...(coverage ?? {}),
             _meta: buildMeta({ timingMs: Date.now() - t0, rawBytes, responseBytes }),
           },
           null,

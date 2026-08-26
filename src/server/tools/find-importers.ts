@@ -3,6 +3,7 @@ import { openDatabase } from '../../core/db/schema.js';
 import { findImporters } from '../../graph/graph-traversal.js';
 import { getFileSizesBatch } from '../../core/db/file-store.js';
 import { buildMeta } from './_meta.js';
+import { graphCoverageWarning } from './graph-coverage.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'find_importers';
@@ -25,6 +26,7 @@ export function handler(args: { repoId: string; filePath: string }): CallToolRes
   // rawBytes: target file + all importer files (what agent would need to read)
   const allFiles = [args.filePath, ...importers.map((i) => i.file)];
   const fileSizes = getFileSizesBatch(db, args.repoId, allFiles);
+  const coverage = graphCoverageWarning(db, args.repoId);
   db.close();
 
   const rawBytes = allFiles.reduce((sum, fp) => sum + (fileSizes.get(fp) ?? 0), 0);
@@ -51,6 +53,7 @@ export function handler(args: { repoId: string; filePath: string }): CallToolRes
                 signature: s.signature,
               })),
             })),
+            ...(coverage ?? {}),
             _meta: buildMeta({ timingMs: Date.now() - t0, rawBytes, responseBytes }),
           },
           null,

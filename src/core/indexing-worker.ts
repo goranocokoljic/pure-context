@@ -156,6 +156,8 @@ export interface ParseResult {
   relPath: string;
   symbols: SymbolRecord[];
   imports: ImportRecord[];
+  /** Package the file declares (JVM languages) — see ProcessedResult.declaredPackage. */
+  declaredPackage?: string | null;
   /** Set if an unrecoverable parse error occurred — worker stays alive. */
   error?: string;
 }
@@ -188,9 +190,9 @@ if (!isMainThread) {
     try {
       // Reconstruct a Buffer from the Uint8Array received via structured clone.
       const content = Buffer.from(job.content.buffer, job.content.byteOffset, job.content.byteLength);
-      const { symbols, imports } = await processFile(job.relPath, content, adapters);
+      const { symbols, imports, declaredPackage } = await processFile(job.relPath, content, adapters);
 
-      const result: ParseResult = { relPath: job.relPath, symbols, imports };
+      const result: ParseResult = { relPath: job.relPath, symbols, imports, declaredPackage };
       parentPort!.postMessage(result);
     } catch (err) {
       // Catch all errors so the worker stays alive for subsequent jobs.

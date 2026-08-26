@@ -396,10 +396,33 @@ function extractDocstring(_node: SyntaxNode): string | null {
 
 // ─── Handler export ───────────────────────────────────────────────────────────
 
+// ─── Package extraction ───────────────────────────────────────────────────────
+
+const PACKAGE_RE = /^package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;?\s*$/;
+
+/**
+ * Declared package: `package com.example.foo` → "com.example.foo".
+ * The package statement must precede all code, so the scan stops at the first
+ * non-comment code line — a `package` inside a string or Gradle block never matches.
+ */
+function extractPackage(_tree: Tree | null, source: Buffer): string | null {
+  for (const { text } of buildLineIndex(source)) {
+    const trimmed = text.trim();
+    const m = PACKAGE_RE.exec(trimmed);
+    if (m) return m[1];
+    if (trimmed.length === 0) continue;
+    if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*')) continue;
+    if (trimmed.startsWith('#!')) continue; // shebang
+    break; // first real code line without a package declaration
+  }
+  return null;
+}
+
 export const groovyHandler: LanguageHandler = {
   extensions: () => ['.groovy', '.gradle'],
   grammarPath: () => null, // no pre-built WASM; uses regex extraction
   extractSymbols,
   extractImports,
   extractDocstring,
+  extractPackage,
 };

@@ -396,6 +396,23 @@ function extractImports(tree: Tree, source: Buffer): ImportRecord[] {
   return imports;
 }
 
+// ─── Package extraction ───────────────────────────────────────────────────────
+
+/** Declared package: `package com.example.foo;` → "com.example.foo". */
+function extractPackage(tree: Tree | null, source: Buffer): string | null {
+  if (!tree) return null;
+  const sourceStr = source.toString('utf8');
+  for (const node of tree.rootNode.children) {
+    if (node.type !== 'package_declaration') continue;
+    const pathNode = node.children.find(
+      (c) => c.type === 'scoped_identifier' || c.type === 'identifier',
+    );
+    const pkg = pathNode ? nodeText(pathNode, sourceStr).trim() : '';
+    return pkg.length > 0 ? pkg : null;
+  }
+  return null;
+}
+
 // ─── Handler export ───────────────────────────────────────────────────────────
 
 export const javaHandler: LanguageHandler = {
@@ -408,4 +425,6 @@ export const javaHandler: LanguageHandler = {
   extractImports,
 
   extractDocstring,
+
+  extractPackage,
 };

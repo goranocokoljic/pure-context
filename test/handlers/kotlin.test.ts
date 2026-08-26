@@ -76,11 +76,15 @@ describe('Kotlin handler — extractSymbols', () => {
     expect(names).not.toContain('Service.secret');
   });
 
-  it('does not extract internal functions', async () => {
+  it('extracts internal functions with visibility recorded (changed in Phase 82)', async () => {
+    // `internal` is module-visible — the module is the unit being indexed, so
+    // these symbols must stay findable (false `no_match` fix, Task 503).
     const src = `internal fun internalHelper(): String = ""\n`;
     const { tree, buf } = await parse(src);
     const syms = kotlinHandler.extractSymbols(tree, buf, 'Helper.kt');
-    expect(syms.filter((s) => s.name === 'internalHelper')).toHaveLength(0);
+    const fn = syms.find((s) => s.name === 'internalHelper');
+    expect(fn).toBeDefined();
+    expect(fn!.frameworkMeta?.['visibility']).toBe('internal');
   });
 
   it('extracts companion object functions as ClassName.methodName', async () => {
