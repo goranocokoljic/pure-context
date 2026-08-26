@@ -24,6 +24,13 @@ afterEach(() => {
   deleteIndex(repoId);
 });
 
+// Each full indexFolder run may spin up a worker pool; on slow CI runners
+// (Windows + AV scanning) worker startup alone can approach vitest's default
+// 5s test timeout, and a timed-out run leaves the DB open — the afterEach
+// unlink then fails with EBUSY. Generous timeouts keep the tests about
+// correctness, not runner speed.
+const INDEX_TIMEOUT = 30_000;
+
 describe('index-manager — no double file reads (Task 115)', () => {
   it('indexes files and reports correct counts on a fresh run', async () => {
     const result = await indexFolder(FIXTURE);
@@ -31,7 +38,7 @@ describe('index-manager — no double file reads (Task 115)', () => {
     expect(result.errors).toHaveLength(0);
     expect(result.filesIndexed).toBeGreaterThan(0);
     expect(result.totalSymbolsInDb).toBeGreaterThan(0);
-  });
+  }, INDEX_TIMEOUT);
 
   it('skips all unchanged files on re-index (hash carried correctly from step 5)', async () => {
     // First run — full index
@@ -45,7 +52,7 @@ describe('index-manager — no double file reads (Task 115)', () => {
     expect(r2.filesSkipped).toBeGreaterThan(0);
     // DB state unchanged
     expect(r2.totalSymbolsInDb).toBe(r1.totalSymbolsInDb);
-  });
+  }, INDEX_TIMEOUT);
 
   it('produces identical symbol counts across two independent full indexes', async () => {
     const r1 = await indexFolder(FIXTURE);
@@ -56,10 +63,10 @@ describe('index-manager — no double file reads (Task 115)', () => {
     expect(r2.symbolsFound).toBe(r1.symbolsFound);
     expect(r2.filesIndexed).toBe(r1.filesIndexed);
     expect(r2.totalSymbolsInDb).toBe(r1.totalSymbolsInDb);
-  });
+  }, INDEX_TIMEOUT);
 
   it('reports no errors during indexing', async () => {
     const result = await indexFolder(FIXTURE);
     expect(result.errors).toHaveLength(0);
-  });
+  }, INDEX_TIMEOUT);
 });
