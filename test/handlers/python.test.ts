@@ -341,4 +341,64 @@ describe('Python handler — extractImports', () => {
     expect(imports).toHaveLength(3);
     expect(imports.map((i) => i.specifier)).toEqual(['os', 'sys', 'typing']);
   });
+
+  // ── Task 516 (Phase 84): exact shapes the Python resolver depends on ────────
+
+  it('emits `from . import x` with the bare dot preserved as the specifier', async () => {
+    const src = `from . import utils\n`;
+    const { tree, buf } = await parse(src);
+    const imports = pythonHandler.extractImports(tree, buf);
+    expect(imports).toHaveLength(1);
+    expect(imports[0].specifier).toBe('.');
+    expect(imports[0].importedNames).toEqual(['utils']);
+  });
+
+  it('emits `from .sibling import x` as specifier `.sibling`', async () => {
+    const src = `from .models import User\n`;
+    const { tree, buf } = await parse(src);
+    const imports = pythonHandler.extractImports(tree, buf);
+    expect(imports[0].specifier).toBe('.models');
+    expect(imports[0].importedNames).toEqual(['User']);
+  });
+
+  it('emits `from ..pkg import y` as specifier `..pkg`', async () => {
+    const src = `from ..utils import format_number\n`;
+    const { tree, buf } = await parse(src);
+    const imports = pythonHandler.extractImports(tree, buf);
+    expect(imports[0].specifier).toBe('..utils');
+    expect(imports[0].importedNames).toEqual(['format_number']);
+  });
+
+  it('emits `from .. import z` as specifier `..`', async () => {
+    const src = `from .. import config\n`;
+    const { tree, buf } = await parse(src);
+    const imports = pythonHandler.extractImports(tree, buf);
+    expect(imports[0].specifier).toBe('..');
+    expect(imports[0].importedNames).toEqual(['config']);
+  });
+
+  it('keeps multi-name from-imports on one record (from a.b import c, d)', async () => {
+    const src = `from a.b import c, d\n`;
+    const { tree, buf } = await parse(src);
+    const imports = pythonHandler.extractImports(tree, buf);
+    expect(imports).toHaveLength(1);
+    expect(imports[0].specifier).toBe('a.b');
+    expect(imports[0].importedNames).toEqual(['c', 'd']);
+  });
+
+  it('keeps submodule chains qualified (import a.b.c)', async () => {
+    const src = `import a.b.c\n`;
+    const { tree, buf } = await parse(src);
+    const imports = pythonHandler.extractImports(tree, buf);
+    expect(imports[0].specifier).toBe('a.b.c');
+    expect(imports[0].importedNames).toEqual([]);
+  });
+
+  it('records the original name for aliased from-imports (from a import b as c)', async () => {
+    const src = `from pkg import helper as h\n`;
+    const { tree, buf } = await parse(src);
+    const imports = pythonHandler.extractImports(tree, buf);
+    expect(imports[0].specifier).toBe('pkg');
+    expect(imports[0].importedNames).toEqual(['helper']);
+  });
 });

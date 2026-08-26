@@ -29,6 +29,16 @@ function isExported(name: string): boolean {
   return name.length > 0 && name[0] === name[0].toUpperCase() && name[0] !== name[0].toLowerCase();
 }
 
+/**
+ * frameworkMeta for a symbol's visibility (Phase 84). Unexported names are
+ * package-visible and the package sits inside the indexed unit, so they must
+ * stay findable — skipping them produced the same false-`no_match` chain as
+ * Kotlin `internal`. Exported names carry no metadata (the Kotlin pattern).
+ */
+function visibilityMeta(name: string): Record<string, unknown> | undefined {
+  return isExported(name) ? undefined : { visibility: 'unexported' };
+}
+
 // ─── Signature building ───────────────────────────────────────────────────────
 
 /**
@@ -140,7 +150,6 @@ function extractInterfaceMethods(
     const nameNode = child.children.find((c) => c.type === 'field_identifier');
     if (!nameNode) continue;
     const methodName = nameNode.text;
-    if (!isExported(methodName)) continue;
 
     // Bare signature from source, then prepend interface name for disambiguation
     const rawSig = source
@@ -161,6 +170,7 @@ function extractInterfaceMethods(
       endByte: child.endIndex,
       signature: sig,
       summary: extractDocstring(child) ?? '',
+      ...(visibilityMeta(methodName) ? { frameworkMeta: visibilityMeta(methodName) } : {}),
     });
   }
 }
@@ -176,7 +186,6 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
       const nameNode = node.children.find((c) => c.type === 'identifier');
       if (!nameNode) continue;
       const name = nameNode.text;
-      if (!isExported(name)) continue;
       symbols.push({
         id: makeId(filePath, name, 'function'),
         name,
@@ -186,6 +195,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         endByte: node.endIndex,
         signature: buildSignature(node, source),
         summary: extractDocstring(node) ?? '',
+        ...(visibilityMeta(name) ? { frameworkMeta: visibilityMeta(name) } : {}),
       });
       continue;
     }
@@ -195,7 +205,6 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
       const nameNode = node.children.find((c) => c.type === 'field_identifier');
       if (!nameNode) continue;
       const methodName = nameNode.text;
-      if (!isExported(methodName)) continue;
 
       const receiverType = extractReceiverType(node);
       // Use qualified name for ID hashing to guarantee uniqueness within the file
@@ -212,6 +221,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         endByte: node.endIndex,
         signature: buildSignature(node, source), // already includes "func (s *ReceiverType)"
         summary: extractDocstring(node) ?? '',
+        ...(visibilityMeta(methodName) ? { frameworkMeta: visibilityMeta(methodName) } : {}),
       });
       continue;
     }
@@ -228,7 +238,6 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
       const nameNode = typeSpec.children.find((c) => c.type === 'type_identifier');
       if (!nameNode) continue;
       const name = nameNode.text;
-      if (!isExported(name)) continue;
 
       // Determine kind from the type body (type_alias is always kind 'type')
       const typeBody = typeSpec.type === 'type_spec'
@@ -249,6 +258,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         endByte: node.endIndex,
         signature: buildTypeSignature(node, source),
         summary: extractDocstring(node) ?? '',
+        ...(visibilityMeta(name) ? { frameworkMeta: visibilityMeta(name) } : {}),
       });
 
       // Extract individual method specs from interface bodies
@@ -266,7 +276,6 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         const nameNode = child.children.find((c) => c.type === 'identifier');
         if (!nameNode) continue;
         const name = nameNode.text;
-        if (!isExported(name)) continue;
         symbols.push({
           id: makeId(filePath, name, 'const'),
           name,
@@ -276,6 +285,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
           endByte: child.endIndex,
           signature: buildConstSignature(child, source),
           summary: extractDocstring(node) ?? '',
+          ...(visibilityMeta(name) ? { frameworkMeta: visibilityMeta(name) } : {}),
         });
       }
       continue;
@@ -300,7 +310,6 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         const nameNode = spec.children.find((c) => c.type === 'identifier');
         if (!nameNode) continue;
         const name = nameNode.text;
-        if (!isExported(name)) continue;
 
         const sig = 'var ' + source
           .toString('utf8', spec.startIndex, spec.endIndex)
@@ -317,6 +326,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
           endByte: spec.endIndex,
           signature: sig,
           summary: extractDocstring(node) ?? '',
+          ...(visibilityMeta(name) ? { frameworkMeta: visibilityMeta(name) } : {}),
         });
       }
       continue;

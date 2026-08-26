@@ -61,6 +61,7 @@ export interface DebugScore {
   kindBoost: number;
   kindHintBoost: number;
   libraryPenalty: number;
+  unexportedPenalty: number;
   corePathBoost: number;
   frontendPathBoost: number;
   useHookBonus: number;
@@ -922,6 +923,23 @@ function score(
     }
   }
 
+  // ── Unexported-visibility penalty (Phase 84, Task 520) ──────────────────────
+  //
+  // Go unexported names (lowercase first letter) are indexed since Phase 84 so
+  // they stay findable, but for natural-language queries the exported API is
+  // almost always the intended answer — package-private helpers with similar
+  // names must not outrank it.  Mild penalty (-20): below the library penalty
+  // (-35) and well below identityExact (+40), so an explicit search for the
+  // exact unexported name still surfaces it at the top.
+  let unexportedPenalty = 0;
+  if (
+    (symbol.frameworkMeta as Record<string, unknown> | undefined)?.['visibility'] ===
+    'unexported'
+  ) {
+    unexportedPenalty = -20;
+    total += unexportedPenalty;
+  }
+
   // ── Core path boost (Task 414) ────────────────────────────────────────────
   // For Java/Groovy repos: boost canonical core source paths (+15) and penalise
   // plugin implementations (-35) so core methods surface above plugin overrides.
@@ -1004,6 +1022,7 @@ function score(
     kindBoost,
     kindHintBoost,
     libraryPenalty,
+    unexportedPenalty,
     corePathBoost,
     frontendPathBoost,
     useHookBonus,

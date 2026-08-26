@@ -14,10 +14,10 @@ This page is the user-facing tour: what's supported, what gets pulled out, and w
 |----------|-----------|-------------|
 | TypeScript | `.ts`, `.tsx`, `.mts`, `.cts` | functions, classes, methods, consts, types, interfaces, enums — full type annotations in signatures |
 | JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | functions, classes, methods, exported consts |
-| Python | `.py` | functions, classes, methods, module-level consts — docstrings used as summaries |
+| Python | `.py` | functions, classes, methods, module-level consts — docstrings used as summaries; dependency edges since v1.17.0 |
 | PHP | `.php` | functions, classes, interfaces, traits, enums, methods, properties, constants — PHP 8 attributes supported |
 | Ruby | `.rb` | functions, classes, methods, modules, constants |
-| Go | `.go` | functions, methods (bare names, no receiver prefix), structs, interfaces, consts, types — unexported names are skipped |
+| Go | `.go` | functions, methods (bare names, no receiver prefix), structs, interfaces, consts, types — unexported names indexed with visibility metadata since v1.17.0; dependency edges via `go.mod` since v1.17.0 |
 | Java | `.java` | classes, interfaces, enums, methods (including package-private), inner classes |
 | Kotlin | `.kt`, `.kts` | functions, extension functions, classes, interfaces, objects, enums, typealiases — KDoc summaries |
 | C# | `.cs` | classes, interfaces, enums, structs, records, methods, properties, consts — `internal` and modifier-less types included with visibility metadata |
@@ -101,14 +101,20 @@ Symbol extraction and search work for all 34 languages. **Import / dependency ed
 |------------|-----------|
 | Module resolver (relative paths + `tsconfig` path aliases) | TypeScript, JavaScript |
 | Declared-module resolver (JVM + C#: declared `package`/`namespace` → file, incl. wildcards, member/static imports, and Gradle/Maven/`.csproj` multi-project disambiguation) | Kotlin, Java, Scala, Groovy, C# |
+| Layout-convention resolver (dotted module path → file path; absolute, from-, and relative imports; `src/` layouts; `pyproject` package-dir remapping not yet supported) | Python |
+| `go.mod` resolver (module path → package directory → every `.go` file in it; nested modules / workspaces supported) | Go |
 | Imports are literal file paths | C, C++, Dart, SCSS/LESS/CSS, Terraform/HCL, Protobuf, Nix, Perl, XML, Bash |
-| **Not yet resolved — symbols only, no dependency edges** | Python, Go, PHP, Rust, Haskell, Fortran, and other languages with package-style imports (`import numpy`, Go module paths, PHP namespaces, …) |
+| **Not yet resolved — symbols only, no dependency edges** | PHP, Rust, Haskell, Elixir, Erlang, Fortran, and other languages with package-style imports (PHP namespaces, Rust `use` paths, …) |
 
 For languages in the last row, the graph-based tools return empty or partial results: an empty blast radius there means "no graph", **not** "nothing depends on this symbol". `find_references` (a content scan) and `get_co_change` (git history) work for every language and are the graph-independent alternatives.
 
 JVM notes: resolution keys on each file's declared `package` (captured at index time), so it works even when packages don't match directory layout. When the same package + class name exists in several Gradle/Maven modules, edges prefer the importing file's own module and otherwise go to **all** candidates — over-approximating is the safe direction for blast radius. Re-index a repo indexed before v1.15.0 to populate the package data.
 
 C# notes (v1.16.0): every `using X.Y` imports a whole namespace, so it resolves to **all** files declaring that namespace (capped by `graph.maxWildcardFanout`, default 100 — first N in deterministic order, 0 = uncapped). `using static` and alias usings resolve to the type's file. Project boundaries come from `*.csproj`/`*.sln` markers. A file with nested `namespace A { namespace B { … } }` blocks stores only the outermost namespace; inner names still resolve partially via the symbol-table fallback. Re-index a repo indexed before v1.16.0 to populate the namespace data.
+
+Python notes (v1.17.0): module identity is the file path, so no stored header is needed — `a/b.py` answers to `a.b`, `a/b/__init__.py` to `a.b`. `src/` layouts (and other non-package first-level source dirs) are stripped, so `mypkg.core` finds `src/mypkg/core.py`. Relative imports (`from . import x`, `from ..pkg import y`) resolve exactly by directory walk. `from a.b import c` prefers the submodule `a/b/c.py`, else the module file itself (symbol-table tiebreak when the name is ambiguous). Unknown modules (numpy, django) produce no edge. Not yet supported: `sys.path` manipulation, editable installs, `pyproject` package-dir remapping. Re-index a repo indexed before v1.17.0 to build the edges.
+
+Go notes (v1.17.0): resolution parses every `go.mod` above an indexed `.go` file (`module` directive → directory; nested modules / workspaces supported, longest prefix wins). An import path resolves to **every** indexed `.go` file of the target package directory — that's the true Go package semantic, not over-approximation. `_test.go` files are included; stdlib and third-party imports produce no edge; edges are never emitted into `vendor/`. Build tags and cgo are ignored. Re-index a repo indexed before v1.17.0 to build the edges.
 
 ---
 
@@ -124,7 +130,7 @@ Some things you don't want in the index — they bloat it and pollute search res
 
 It also respects language-level visibility:
 
-- **Go**: unexported names (lowercase first letter)
+- **Go**: nothing skipped since v1.17.0 — unexported names (lowercase first letter) ARE indexed with `frameworkMeta.visibility: 'unexported'` recorded, because they are package-visible and the package sits inside the indexed unit
 - **C**: `static` functions (translation-unit internal)
 - **Java / PHP**: `private` members
 - **C#**: `private` members and no-modifier members (implicitly private). `internal` and modifier-less top-level types (implicitly internal) ARE indexed, with `frameworkMeta.visibility` recorded — assembly-visible types are exactly the unit being indexed
@@ -136,7 +142,7 @@ Public API tools (`get_public_api`) rely on these rules being applied consistent
 
 ## Known limitations
 
-- **Import resolution is not universal** — languages with package-style imports other than the JVM family and C# (Python, Go, PHP, Rust, …) index symbols but produce **no dependency edges** today, so graph tools return empty results there. See [Which languages get dependency edges](#which-languages-get-dependency-edges) above.
+- **Import resolution is not universal** — languages with package-style imports other than the JVM family, C#, Python, and Go (PHP, Rust, Haskell, …) index symbols but produce **no dependency edges** today, so graph tools return empty results there. See [Which languages get dependency edges](#which-languages-get-dependency-edges) above.
 - **TypeScript `.tsx`** uses a separate `tree-sitter-tsx` grammar from `.ts`. Both are bundled.
 - **Python stubs** (`.pyi`) are not indexed — only `.py` files.
 - **Terraform** `dynamic` blocks with complex expressions may not be fully extracted.

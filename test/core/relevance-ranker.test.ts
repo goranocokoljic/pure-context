@@ -2030,3 +2030,36 @@ describe('rankSymbols — single token exact boost (Task 434)', () => {
   });
 });
 
+
+// ─── Unexported-visibility penalty (Phase 84, Task 520) ──────────────────────
+
+describe('rankSymbols — unexported visibility penalty', () => {
+  function unexportedSym(name: string, filePath = 'internal/core.go'): SymbolRecord {
+    return { ...sym(name, { filePath }), frameworkMeta: { visibility: 'unexported' } };
+  }
+
+  it('applies -20 to symbols with visibility "unexported"', () => {
+    const results = rankSymbols([unexportedSym('registerView')], 'register view', true);
+    expect(results[0]!.debugScore?.unexportedPenalty).toBe(-20);
+  });
+
+  it('does not penalize exported symbols (no frameworkMeta)', () => {
+    const results = rankSymbols([sym('RegisterView')], 'register view', true);
+    expect(results[0]!.debugScore?.unexportedPenalty).toBe(0);
+  });
+
+  it('exported symbol outranks an unexported one on equal word overlap', () => {
+    const exported = sym('RegisterCampaignView', { filePath: 'cmd/views.go' });
+    const unexported = unexportedSym('registerCampaignView');
+    const results = rankSymbols([unexported, exported], 'register campaign view');
+    expect(results[0]!.symbol.name).toBe('RegisterCampaignView');
+  });
+
+  it('exact-name search still surfaces the unexported symbol first', () => {
+    const results = rankSymbols(
+      [unexportedSym('helperLookup'), sym('HelperService')],
+      'helperLookup',
+    );
+    expect(results[0]!.symbol.name).toBe('helperLookup');
+  });
+});

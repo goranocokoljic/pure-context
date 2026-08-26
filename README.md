@@ -198,7 +198,7 @@ Parameter-level documentation for every tool, configuration option, language, fr
 
 **34 languages** via bundled tree-sitter WASM grammars — no separate install required.
 
-Symbol indexing and search cover all 34. Dependency **edges** (blast radius, importers, cycles) currently cover TypeScript/JavaScript, the JVM family (Kotlin, Java, Scala, Groovy — package-aware, multi-module safe), C# (namespace-aware, multi-project safe), and languages whose imports are file paths — see [which languages get dependency edges](LANGUAGE-SUPPORT.md#which-languages-get-dependency-edges) before relying on the graph tools for Python or Go codebases.
+Symbol indexing and search cover all 34. Dependency **edges** (blast radius, importers, cycles) currently cover TypeScript/JavaScript, the JVM family (Kotlin, Java, Scala, Groovy — package-aware, multi-module safe), C# (namespace-aware, multi-project safe), Python (layout-convention resolver, `src/` layouts and relative imports), Go (`go.mod` resolver, workspaces supported), and languages whose imports are file paths — see [which languages get dependency edges](LANGUAGE-SUPPORT.md#which-languages-get-dependency-edges) before relying on the graph tools for PHP or Rust codebases.
 
 | Category | Languages |
 |----------|-----------|

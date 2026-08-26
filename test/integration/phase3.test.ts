@@ -151,21 +151,24 @@ describe('Python — symbol extraction', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('Go — symbol extraction', () => {
-  it('4. extracts exported symbols and skips unexported ones', () => {
+  it('4. extracts exported symbols and marks unexported ones (Phase 84)', () => {
     const db = openDatabase(goRepoId);
     const all = getSymbolsByRepo(db, goRepoId);
     db.close();
 
-    // Exported symbols should be present
+    // Exported symbols should be present, with no visibility metadata
     expect(all.find((s) => s.name === 'NewAuthService')).toBeDefined();
     expect(all.find((s) => s.name === 'GetSecretFromEnv')).toBeDefined();
     expect(all.find((s) => s.name === 'Run')).toBeDefined();
+    expect(
+      (all.find((s) => s.name === 'NewAuthService')?.frameworkMeta as Record<string, unknown>
+        | undefined)?.visibility,
+    ).toBeUndefined();
 
-    // Unexported symbols should NOT be indexed
-    expect(all.find((s) => s.name === 'privateHelper')).toBeUndefined();
-    expect(all.find((s) => s.name === 'privateStruct')).toBeUndefined();
-    expect(all.find((s) => s.name === 'unexportedConst')).toBeUndefined();
-    expect(all.find((s) => s.name === 'joinLines')).toBeUndefined();
+    // Unexported symbols ARE indexed since Phase 84, with visibility recorded
+    const privateHelper = all.find((s) => s.name === 'privateHelper');
+    expect(privateHelper).toBeDefined();
+    expect(privateHelper?.frameworkMeta).toMatchObject({ visibility: 'unexported' });
   });
 
   it('5. method uses bare name (receiver type in signature)', () => {

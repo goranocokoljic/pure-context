@@ -37,12 +37,16 @@ describe('Go handler — extractSymbols', () => {
     expect(goHandler.extractSymbols(tree, buf, 'src/a.go')[0].id).toBe(sym.id);
   });
 
-  it('does NOT extract unexported functions', async () => {
+  it('extracts unexported functions with visibility metadata (Phase 84)', async () => {
     const src = `package main\nfunc Exported() {}\nfunc unexported() {}\n`;
     const { tree, buf } = await parse(src);
-    const names = goHandler.extractSymbols(tree, buf, 'a.go').map((s) => s.name);
-    expect(names).toContain('Exported');
-    expect(names).not.toContain('unexported');
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    const exported = syms.find((s) => s.name === 'Exported');
+    const unexported = syms.find((s) => s.name === 'unexported');
+    expect(exported).toBeDefined();
+    expect(exported?.frameworkMeta).toBeUndefined();
+    expect(unexported).toBeDefined();
+    expect(unexported?.frameworkMeta).toMatchObject({ visibility: 'unexported' });
   });
 
   it('extracts a method with pointer receiver using bare name', async () => {
@@ -70,12 +74,14 @@ describe('Go handler — extractSymbols', () => {
     expect(sym.signature).toContain('Login');
   });
 
-  it('does NOT extract unexported methods', async () => {
+  it('extracts unexported methods with visibility metadata (Phase 84)', async () => {
     const src = `package main\nfunc (s *Svc) Public() {}\nfunc (s *Svc) private() {}\n`;
     const { tree, buf } = await parse(src);
-    const names = goHandler.extractSymbols(tree, buf, 'a.go').map((s) => s.name);
-    expect(names).toContain('Public');
-    expect(names).not.toContain('private');
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    expect(syms.find((s) => s.name === 'Public')?.frameworkMeta).toBeUndefined();
+    expect(syms.find((s) => s.name === 'private')?.frameworkMeta).toMatchObject({
+      visibility: 'unexported',
+    });
   });
 
   it('two methods with same bare name on different receivers have distinct IDs', async () => {
@@ -112,12 +118,14 @@ describe('Go handler — extractSymbols', () => {
     expect(sym.kind).toBe('type');
   });
 
-  it('does NOT extract unexported types', async () => {
+  it('extracts unexported types with visibility metadata (Phase 84)', async () => {
     const src = `package main\ntype Exported struct {}\ntype unexported struct {}\n`;
     const { tree, buf } = await parse(src);
-    const names = goHandler.extractSymbols(tree, buf, 'a.go').map((s) => s.name);
-    expect(names).toContain('Exported');
-    expect(names).not.toContain('unexported');
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    expect(syms.find((s) => s.name === 'Exported')?.frameworkMeta).toBeUndefined();
+    expect(syms.find((s) => s.name === 'unexported')?.frameworkMeta).toMatchObject({
+      visibility: 'unexported',
+    });
   });
 
   it('extracts a single exported const', async () => {
@@ -136,13 +144,18 @@ describe('Go handler — extractSymbols', () => {
     const names = syms.map((s) => s.name);
     expect(names).toContain('Foo');
     expect(names).toContain('Bar');
-    expect(names).not.toContain('baz'); // unexported
+    expect(names).toContain('baz'); // unexported — indexed since Phase 84
+    expect(syms.find((s) => s.name === 'baz')?.frameworkMeta).toMatchObject({
+      visibility: 'unexported',
+    });
   });
 
-  it('does NOT extract unexported consts', async () => {
+  it('extracts unexported consts with visibility metadata (Phase 84)', async () => {
     const src = `package main\nconst unexported = 42\n`;
     const { tree, buf } = await parse(src);
-    expect(goHandler.extractSymbols(tree, buf, 'a.go')).toHaveLength(0);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    expect(syms).toHaveLength(1);
+    expect(syms[0].frameworkMeta).toMatchObject({ visibility: 'unexported' });
   });
 
   it('builds a correct function signature (stops before body)', async () => {
@@ -184,12 +197,14 @@ describe('Go handler — interface method extraction', () => {
     expect(method?.kind).toBe('method');
   });
 
-  it('does NOT extract unexported interface methods', async () => {
+  it('extracts unexported interface methods with visibility metadata (Phase 84)', async () => {
     const src = `package main\ntype Service interface {\n\tPublic() error\n\tprivate() string\n}\n`;
     const { tree, buf } = await parse(src);
-    const names = goHandler.extractSymbols(tree, buf, 'a.go').map((s) => s.name);
-    expect(names).toContain('Public');
-    expect(names).not.toContain('private');
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    expect(syms.find((s) => s.name === 'Public')?.frameworkMeta).toBeUndefined();
+    expect(syms.find((s) => s.name === 'private')?.frameworkMeta).toMatchObject({
+      visibility: 'unexported',
+    });
   });
 
   it('emits no method symbols for an empty interface', async () => {
@@ -250,7 +265,7 @@ describe('Go handler — interface method extraction', () => {
     const names = goHandler.extractSymbols(tree, buf, 'a.go').map((s) => s.name);
     expect(names).toContain('FindByID');   // bare names
     expect(names).toContain('Save');
-    expect(names).not.toContain('internalValidate');
+    expect(names).toContain('internalValidate'); // indexed since Phase 84
   });
 
   it('two interface methods with same bare name on different interfaces have distinct IDs', async () => {
@@ -275,20 +290,25 @@ describe('Go handler — var_declaration extraction', () => {
     expect(syms[0].kind).toBe('const');
   });
 
-  it('does NOT extract unexported vars', async () => {
+  it('extracts unexported vars with visibility metadata (Phase 84)', async () => {
     const src = `package main\nvar unexported = 42\n`;
     const { tree, buf } = await parse(src);
-    expect(goHandler.extractSymbols(tree, buf, 'a.go')).toHaveLength(0);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    expect(syms).toHaveLength(1);
+    expect(syms[0].frameworkMeta).toMatchObject({ visibility: 'unexported' });
   });
 
-  it('extracts only exported from a grouped var block with mixed visibility', async () => {
+  it('extracts every var from a grouped block, marking unexported ones (Phase 84)', async () => {
     const src = `package main\nvar (\n\tMaxConns = 100\n\tDefaultName = "app"\n\tinternal = "hidden"\n)\n`;
     const { tree, buf } = await parse(src);
     const syms = goHandler.extractSymbols(tree, buf, 'a.go');
     const names = syms.map((s) => s.name);
     expect(names).toContain('MaxConns');
     expect(names).toContain('DefaultName');
-    expect(names).not.toContain('internal');
+    expect(names).toContain('internal'); // indexed since Phase 84
+    expect(syms.find((s) => s.name === 'internal')?.frameworkMeta).toMatchObject({
+      visibility: 'unexported',
+    });
   });
 
   it('includes type annotation in the signature when present', async () => {

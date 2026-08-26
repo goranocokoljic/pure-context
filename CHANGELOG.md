@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.17.0] - 2026-08-26
+
+### Fixed
+
+**Go unexported symbols are now indexed.** Names with a lowercase first letter were skipped entirely, so `search_symbols` returned a false `no_match` for package-private helpers, structs, consts, and interface methods — the same bug class fixed for Kotlin `internal` (1.15.0) and C# `internal` (1.16.0). Unexported names are package-visible and the package sits inside the indexed unit, so they must stay findable. Visibility is recorded in `frameworkMeta.visibility: 'unexported'`; exported names carry no metadata. The relevance ranker applies a mild −20 penalty to unexported symbols so the exported API still wins natural-language queries, while an exact-name search surfaces the unexported symbol first. `get_public_api` is unaffected.
+
+### Added
+
+**Python dependency edges.** Python imports now resolve to in-repo files, so `get_blast_radius`, `find_importers`, `find_cycles`, and the other graph tools work on Python repos (previously: zero edges — every import looked external). Module identity is the file path (`a/b.py` ↔ `a.b`, `a/b/__init__.py` ↔ `a.b`); `src/` layouts and other non-package first-level source dirs are stripped, so `mypkg.core` finds `src/mypkg/core.py`. Relative imports (`from . import x`, `from ..pkg import y`) resolve by exact directory walk; `from a.b import c` prefers the submodule `a/b/c.py`, else the module file itself (symbol-table tiebreak on ambiguity). Unknown modules (numpy, django) produce no edge. Not yet supported: `sys.path` manipulation, editable installs, `pyproject` package-dir remapping. Repos indexed before 1.17.0 need one re-index to build the edges.
+
+**Go dependency edges.** Go imports now resolve via `go.mod`: every `go.mod` above an indexed `.go` file contributes its `module` directive (nested modules / workspaces supported, longest prefix wins, `/v2` suffixes handled). An import path resolves to **every** indexed `.go` file of the target package directory — the true Go package semantic. `_test.go` files are included; stdlib and third-party imports produce no edge; edges are never emitted into `vendor/`. Build tags and cgo are ignored. Repos indexed before 1.17.0 need one re-index to build the edges.
+
+**Per-family resolver dispatch.** `buildGraph` now accepts a family-resolver map (`{jvm?, python?, go?}`); each family's resolver is built only when the index batch contains that family's files, so TypeScript-only repos pay nothing (output byte-identical, regression-guarded).
+
+---
+
 ## [1.16.0] - 2026-08-26
 
 ### Fixed

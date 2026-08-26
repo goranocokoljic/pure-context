@@ -32,7 +32,7 @@ import { createWorkerPool } from './worker-pool.js';
 import type { ParseJob } from './worker-pool.js';
 import { createResolver } from '../graph/path-resolver.js';
 import { buildGraph } from '../graph/graph-builder.js';
-import { createJvmResolver, isDeclaredModuleSourceFile } from '../graph/jvm-resolver.js';
+import { buildFamilyResolvers } from '../graph/family-resolvers.js';
 import { join } from 'path';
 import { track } from './telemetry.js';
 import { discoverProviders } from '../providers/provider-registry.js';
@@ -278,13 +278,11 @@ export async function indexFolder(
   }
 
   // ── 10. Build and store dependency graph ─────────────────────────────────
-  // JVM imports need the package resolver, built here — after file/symbol
-  // persistence — so it sees the full declared_package + symbol tables. The
-  // map build is skipped when the batch has no JVM source files.
-  const jvmResolver = allImports.some((imp) => isDeclaredModuleSourceFile(imp.sourceFile))
-    ? createJvmResolver(db, repoId, absRoot)
-    : undefined;
-  const edges = buildGraph(allImports, resolver, repoId, jvmResolver);
+  // JVM/Python/Go imports need their family resolvers, built here — after
+  // file/symbol persistence — so they see the full files + symbol tables.
+  // Each family's map build is skipped when the batch has none of its files.
+  const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, allImports);
+  const edges = buildGraph(allImports, resolver, repoId, familyResolvers);
   if (edges.length > 0) {
     insertEdges(db, edges);
   }
@@ -565,13 +563,11 @@ export async function reindexFiles(
     }
   }
 
-  // Build edges only for the re-processed files. The JVM resolver reads the
-  // full files/symbols tables (already updated above), so targeted re-index
-  // edges match what a full index_folder would produce.
-  const jvmResolver = allImports.some((imp) => isDeclaredModuleSourceFile(imp.sourceFile))
-    ? createJvmResolver(db, repoId, absRoot)
-    : undefined;
-  const edges = buildGraph(allImports, resolver, repoId, jvmResolver);
+  // Build edges only for the re-processed files. The family resolvers read
+  // the full files/symbols tables (already updated above), so targeted
+  // re-index edges match what a full index_folder would produce.
+  const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, allImports);
+  const edges = buildGraph(allImports, resolver, repoId, familyResolvers);
   if (edges.length > 0) {
     insertEdges(db, edges);
   }
