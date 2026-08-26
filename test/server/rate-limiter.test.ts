@@ -71,11 +71,19 @@ describe('TokenBucketLimiter', () => {
 
   describe('tryConsume — retryAfterMs calculation', () => {
     it('provides a non-zero retryAfterMs when rejected', () => {
-      const limiter = new TokenBucketLimiter({ maxTokens: 3, refillRate: 1 });
-      limiter.tryConsume('k', 3);
-      const result = limiter.tryConsume('k', 1);
-      // At 1 token/sec, need 1000ms to get 1 token
-      expect(result.retryAfterMs).toBeGreaterThanOrEqual(1000);
+      // Freeze the clock: with real time, ≥1ms elapsing between the two calls
+      // refills a fraction of a token and the correct answer becomes 999ms —
+      // this test asserts the math, not wall-clock behavior (CI flake fix).
+      vi.useFakeTimers();
+      try {
+        const limiter = new TokenBucketLimiter({ maxTokens: 3, refillRate: 1 });
+        limiter.tryConsume('k', 3);
+        const result = limiter.tryConsume('k', 1);
+        // At 1 token/sec with no elapsed time, exactly 1000ms to get 1 token
+        expect(result.retryAfterMs).toBe(1000);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('retryAfterMs scales with refillRate', () => {
