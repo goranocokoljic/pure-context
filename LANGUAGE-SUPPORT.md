@@ -20,7 +20,7 @@ This page is the user-facing tour: what's supported, what gets pulled out, and w
 | Go | `.go` | functions, methods (bare names, no receiver prefix), structs, interfaces, consts, types — unexported names are skipped |
 | Java | `.java` | classes, interfaces, enums, methods (including package-private), inner classes |
 | Kotlin | `.kt`, `.kts` | functions, extension functions, classes, interfaces, objects, enums, typealiases — KDoc summaries |
-| C# | `.cs` | classes, interfaces, enums, structs, records, methods, properties, consts |
+| C# | `.cs` | classes, interfaces, enums, structs, records, methods, properties, consts — `internal` and modifier-less types included with visibility metadata |
 | Scala | `.scala`, `.sc` | classes, traits, objects, case classes, functions, methods, types, enums |
 | Dart | `.dart` | classes, mixins, extensions, enums, functions, methods — `_`-prefixed names are skipped |
 | Swift | `.swift` | classes, structs, protocols, actors, extensions, methods, enums |
@@ -100,13 +100,15 @@ Symbol extraction and search work for all 34 languages. **Import / dependency ed
 | Resolution | Languages |
 |------------|-----------|
 | Module resolver (relative paths + `tsconfig` path aliases) | TypeScript, JavaScript |
-| JVM package resolver (declared `package` → file, incl. wildcards, member imports, and Gradle/Maven multi-module disambiguation) | Kotlin, Java, Scala, Groovy |
+| Declared-module resolver (JVM + C#: declared `package`/`namespace` → file, incl. wildcards, member/static imports, and Gradle/Maven/`.csproj` multi-project disambiguation) | Kotlin, Java, Scala, Groovy, C# |
 | Imports are literal file paths | C, C++, Dart, SCSS/LESS/CSS, Terraform/HCL, Protobuf, Nix, Perl, XML, Bash |
 | **Not yet resolved — symbols only, no dependency edges** | Python, Go, PHP, Rust, Haskell, Fortran, and other languages with package-style imports (`import numpy`, Go module paths, PHP namespaces, …) |
 
 For languages in the last row, the graph-based tools return empty or partial results: an empty blast radius there means "no graph", **not** "nothing depends on this symbol". `find_references` (a content scan) and `get_co_change` (git history) work for every language and are the graph-independent alternatives.
 
 JVM notes: resolution keys on each file's declared `package` (captured at index time), so it works even when packages don't match directory layout. When the same package + class name exists in several Gradle/Maven modules, edges prefer the importing file's own module and otherwise go to **all** candidates — over-approximating is the safe direction for blast radius. Re-index a repo indexed before v1.15.0 to populate the package data.
+
+C# notes (v1.16.0): every `using X.Y` imports a whole namespace, so it resolves to **all** files declaring that namespace (capped by `graph.maxWildcardFanout`, default 100 — first N in deterministic order, 0 = uncapped). `using static` and alias usings resolve to the type's file. Project boundaries come from `*.csproj`/`*.sln` markers. A file with nested `namespace A { namespace B { … } }` blocks stores only the outermost namespace; inner names still resolve partially via the symbol-table fallback. Re-index a repo indexed before v1.16.0 to populate the namespace data.
 
 ---
 
@@ -124,7 +126,8 @@ It also respects language-level visibility:
 
 - **Go**: unexported names (lowercase first letter)
 - **C**: `static` functions (translation-unit internal)
-- **Java / C# / PHP**: `private` members
+- **Java / PHP**: `private` members
+- **C#**: `private` members and no-modifier members (implicitly private). `internal` and modifier-less top-level types (implicitly internal) ARE indexed, with `frameworkMeta.visibility` recorded — assembly-visible types are exactly the unit being indexed
 - **Dart**: `_`-prefixed names
 
 Public API tools (`get_public_api`) rely on these rules being applied consistently — they assume the index already reflects what is externally visible.
@@ -133,7 +136,7 @@ Public API tools (`get_public_api`) rely on these rules being applied consistent
 
 ## Known limitations
 
-- **Import resolution is not universal** — languages with package-style imports other than the JVM family (Python, Go, PHP, Rust, …) index symbols but produce **no dependency edges** today, so graph tools return empty results there. See [Which languages get dependency edges](#which-languages-get-dependency-edges) above.
+- **Import resolution is not universal** — languages with package-style imports other than the JVM family and C# (Python, Go, PHP, Rust, …) index symbols but produce **no dependency edges** today, so graph tools return empty results there. See [Which languages get dependency edges](#which-languages-get-dependency-edges) above.
 - **TypeScript `.tsx`** uses a separate `tree-sitter-tsx` grammar from `.ts`. Both are bundled.
 - **Python stubs** (`.pyi`) are not indexed — only `.py` files.
 - **Terraform** `dynamic` blocks with complex expressions may not be fully extracted.

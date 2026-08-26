@@ -51,20 +51,56 @@ function methodName(node: SyntaxNode, sourceStr: string): string {
 
 // ─── Visibility ───────────────────────────────────────────────────────────────
 
+type CsVisibility =
+  | 'public'
+  | 'internal'
+  | 'protected'
+  | 'protected internal'
+  | 'private protected'
+  | 'private';
+
+const VISIBILITY_KEYWORDS = new Set(['public', 'private', 'protected', 'internal']);
+
 /**
- * Returns true if the node has `public` or `protected` among its direct children.
- * C# modifiers appear as direct keyword children.
+ * Explicit visibility modifier combination of a declaration, or null when no
+ * visibility modifier is present. C# defaults are ASYMMETRIC: a top-level type
+ * with no modifier is `internal` (must be indexed — Phase 83), while a member
+ * with no modifier is `private` (stays skipped). Callers apply the default for
+ * their level; this function only reads what is written.
  */
-function isPublicOrProtected(node: SyntaxNode, sourceStr: string): boolean {
+function visibilityOf(node: SyntaxNode, sourceStr: string): CsVisibility | null {
+  const mods = new Set<string>();
   for (const child of node.children) {
     if (child.type === 'modifier') {
       const t = nodeText(child, sourceStr);
-      if (t === 'public' || t === 'protected') return true;
+      if (VISIBILITY_KEYWORDS.has(t)) mods.add(t);
     }
     // Some grammar versions emit keyword nodes directly
-    if (child.type === 'public' || child.type === 'protected') return true;
+    if (VISIBILITY_KEYWORDS.has(child.type)) mods.add(child.type);
   }
-  return false;
+  if (mods.has('public')) return 'public';
+  if (mods.has('private') && mods.has('protected')) return 'private protected';
+  if (mods.has('protected') && mods.has('internal')) return 'protected internal';
+  if (mods.has('private')) return 'private';
+  if (mods.has('protected')) return 'protected';
+  if (mods.has('internal')) return 'internal';
+  return null;
+}
+
+/**
+ * Effective visibility for a TYPE declaration (top-level or nested): no
+ * modifier ⇒ internal. Types visible within the assembly are exactly what the
+ * index covers, so only `private` / `private protected` are skipped.
+ */
+function typeVisibility(node: SyntaxNode, sourceStr: string): CsVisibility {
+  return visibilityOf(node, sourceStr) ?? 'internal';
+}
+
+/** frameworkMeta fragment recording non-public visibility (Kotlin pattern). */
+function visibilityMeta(
+  visibility: CsVisibility,
+): { frameworkMeta: Record<string, unknown> } | Record<string, never> {
+  return visibility === 'public' ? {} : { frameworkMeta: { visibility } };
 }
 
 /**
@@ -163,11 +199,23 @@ function extractMembers(
   if (!body) return;
 
   // Interface members are implicitly public in C# — they carry no explicit modifier.
-  // Skip the visibility check when the container is an interface.
   const isInterface = typeNode.type === 'interface_declaration';
 
   for (const member of body.children) {
-    if (!isInterface && !isPublicOrProtected(member, sourceStr)) continue;
+    const explicitVis = visibilityOf(member, sourceStr);
+    let memberVis: CsVisibility;
+    if (MEMBER_CONTAINER_TYPES.has(member.type)) {
+      // Nested TYPE — type rule: skip only explicitly private (Phase 83).
+      memberVis = explicitVis ?? 'internal';
+    } else if (isInterface) {
+      memberVis = explicitVis ?? 'public';
+    } else {
+      // Member default is private — no modifier means skip.
+      if (explicitVis === null) continue;
+      memberVis = explicitVis;
+    }
+    if (memberVis === 'private' || memberVis === 'private protected') continue;
+    const memberMeta = visibilityMeta(memberVis);
 
     // ── method_declaration ───────────────────────────────────────────────
     if (member.type === 'method_declaration') {
@@ -183,6 +231,7 @@ function extractMembers(
         endByte: member.endIndex,
         signature: buildSignature(member, sourceStr),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
+        ...memberMeta,
       });
       continue;
     }
@@ -201,6 +250,7 @@ function extractMembers(
         endByte: member.endIndex,
         signature: buildSignature(member, sourceStr),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
+        ...memberMeta,
       });
       continue;
     }
@@ -219,6 +269,7 @@ function extractMembers(
         endByte: member.endIndex,
         signature: buildSignature(member, sourceStr),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
+        ...memberMeta,
       });
       continue;
     }
@@ -240,6 +291,7 @@ function extractMembers(
         endByte: member.endIndex,
         signature: sourceStr.slice(member.startIndex, member.endIndex).replace(/\s+/g, ' ').trim().slice(0, 120),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
+        ...memberMeta,
       });
       continue;
     }
@@ -266,6 +318,7 @@ function extractMembers(
           .trim()
           .slice(0, 120),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
+        ...memberMeta,
       });
       continue;
     }
@@ -284,6 +337,7 @@ function extractMembers(
         endByte: member.endIndex,
         signature: buildSignature(member, sourceStr),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
+        ...memberMeta,
       });
       extractMembers(member, nestedName, sourceStr, filePath, symbols);
     }
@@ -309,7 +363,11 @@ function walkDeclarations(
       continue;
     }
 
-    if (!isPublicOrProtected(node, sourceStr)) continue;
+    // Top-level type with no modifier is implicitly internal — index it
+    // (Phase 83); only explicitly private(-protected) types are skipped.
+    const typeVis = typeVisibility(node, sourceStr);
+    if (typeVis === 'private' || typeVis === 'private protected') continue;
+    const typeMeta = visibilityMeta(typeVis);
 
     const name = childText(node, sourceStr, 'identifier');
     if (!name) continue;
@@ -325,6 +383,7 @@ function walkDeclarations(
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
+        ...typeMeta,
       });
       extractMembers(node, name, sourceStr, filePath, symbols);
       continue;
@@ -341,6 +400,7 @@ function walkDeclarations(
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
+        ...typeMeta,
       });
       extractMembers(node, name, sourceStr, filePath, symbols);
       continue;
@@ -357,6 +417,7 @@ function walkDeclarations(
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
+        ...typeMeta,
       });
       continue;
     }
@@ -372,6 +433,7 @@ function walkDeclarations(
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
+        ...typeMeta,
       });
       extractMembers(node, name, sourceStr, filePath, symbols);
       continue;
@@ -388,6 +450,7 @@ function walkDeclarations(
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
+        ...typeMeta,
       });
       extractMembers(node, name, sourceStr, filePath, symbols);
       continue;
@@ -458,6 +521,33 @@ function extractImports(tree: Tree, source: Buffer): ImportRecord[] {
   return imports;
 }
 
+// ─── extractPackage ───────────────────────────────────────────────────────────
+
+/**
+ * Declared namespace of the file: `namespace My.App;` (file-scoped) or the
+ * OUTERMOST `namespace My.App { … }` block → "My.App". Nested namespace blocks
+ * are NOT concatenated in v1 — a multi-namespace file stores its outermost name
+ * only and resolves partially via the resolver's symbol-table fallback
+ * (documented limitation, Phase 83 Task 510).
+ */
+function extractPackage(tree: Tree | null, source: Buffer): string | null {
+  if (!tree) return null;
+  const src = source.toString('utf8');
+  for (const child of tree.rootNode.children) {
+    if (
+      child.type === 'file_scoped_namespace_declaration' ||
+      child.type === 'namespace_declaration'
+    ) {
+      const nameNode = child.children.find(
+        (c) => c.type === 'qualified_name' || c.type === 'identifier',
+      );
+      const pkg = nameNode ? nodeText(nameNode, src).trim() : '';
+      return pkg.length > 0 ? pkg : null;
+    }
+  }
+  return null;
+}
+
 // ─── Handler export ───────────────────────────────────────────────────────────
 
 export const csharpHandler: LanguageHandler = {
@@ -470,4 +560,6 @@ export const csharpHandler: LanguageHandler = {
   extractImports,
 
   extractDocstring,
+
+  extractPackage,
 };

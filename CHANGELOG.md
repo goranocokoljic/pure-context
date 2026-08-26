@@ -11,6 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.0] - 2026-08-26
+
+### Fixed
+
+**C# visibility: `internal` and modifier-less types are now indexed.** Previously only explicit `public`/`protected` symbols were extracted, so `internal` types AND types with no modifier (implicitly internal — very common) were missing from the index entirely. C#'s asymmetric defaults are now respected: a type with no modifier is internal (indexed, with `frameworkMeta.visibility` recorded), while a member with no modifier is private (still skipped). Explicit `private` / `private protected` stay excluded. On the C# benchmark repos this grew the index 1.6–2.5× and lifted Recall@5 by 16–36 points.
+
+### Added
+
+**C# dependency edges.** `using` directives now resolve to in-repo files via each file's declared `namespace` (file-scoped or outermost block), on the same declared-module resolver that serves the JVM family since 1.15.0. A plain `using X.Y` imports the whole namespace and produces edges to every file declaring it; `using static` and alias usings resolve to the type's file; cross-project ambiguity prefers the importing file's own `*.csproj`/`*.sln` project. `get_blast_radius`, `find_importers`, `find_cycles`, and the other graph tools now work on C# repos. Repos indexed before 1.16.0 need one re-index to populate the namespace data.
+
+**New config `graph.maxWildcardFanout`** (default 100, `0` = uncapped): caps how many files a single wildcard/namespace import may expand to (deterministic order, one warning per index build). Applies to C# namespace usings and JVM wildcard imports alike.
+
+---
+
+## [1.15.0] - 2026-08-26
+
+### Fixed
+
+**JVM repos no longer index to zero dependency edges.** Bare JVM import specifiers (`import com.example.Bar`) were treated as external packages, so every Kotlin/Java/Scala/Groovy repo produced an empty dependency graph — silently disabling ~17 graph tools (`get_blast_radius`, `find_importers`, `find_cycles`, the architecture tools, the centrality axis of `get_symbol_risk`, …). Imports are now resolved via each file's declared `package` header, captured at index time into a new `files.declared_package` column (schema v8→v9, additive — old indexes load without re-index, but need one re-index to populate the package data).
+
+**Kotlin `internal` symbols are now indexed.** Only `private` declarations are skipped. `internal` is module-visible, and the module is exactly the unit being indexed — dropping it made `search_symbols` return false `no_match` for the most-searched symbols (impl classes, DI modules). Visibility is recorded in `frameworkMeta.visibility`.
+
+### Added
+
+**JVM import resolver** (`src/graph/jvm-resolver.ts`): longest-package-prefix resolution → basename match → symbol-table fallback (Kotlin top-level member imports); wildcard imports per handler shape (Kotlin/Java bare package names, Groovy `.*`, Scala `._` and `{A, B => C}` selectors). Cross-module ambiguity prefers the importing file's own Gradle/Maven module (`build.gradle` / `build.gradle.kts` / `pom.xml`), otherwise edges go to **all** candidates — over-approximating is the safe direction for blast radius. TypeScript/JavaScript resolution is byte-identical (regression-guarded).
+
+**Honesty signals.** `index_folder` now returns `limitReached` + `totalBeforeLimit` instead of silently truncating at the file limit. Graph tools (`get_blast_radius`, `find_importers`, `get_context_bundle`, `find_cycles`, coupling) attach `graphCoverage: 'empty'` + a note when a ≥20-file repo has zero edges — an empty result means "no graph", not "safe to change".
+
+**Excludes:** `.gradle/` and `.idea/` added to the built-in exclude list.
+
+### Documentation
+
+- LANGUAGE-SUPPORT.md gained a per-language dependency-edge matrix (replacing the incorrect "every language" claim); AGENT_REFERENCE.md limitation row, README, and docs/09 updated with the external-vs-unresolvable distinction.
+
+---
+
 ## [1.14.0] - 2026-06-29
 
 ### Changed

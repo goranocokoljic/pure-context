@@ -10,7 +10,12 @@
  * (handler `extractPackage`); files indexed before schema v9 fall back to a
  * source-root path convention (`src/main/kotlin/com/example/Foo.kt` → "com.example").
  *
- * Specifier shapes handled (as emitted by the four handlers):
+ * Phase 83 extends the same machinery to C#: `using X.Y` is a namespace import
+ * (every using is a wildcard), `using static X.Y.T` and alias `using F = X.Y.T`
+ * arrive as class-path specifiers — both shapes were already handled. The
+ * declared-namespace column is fed by the C# handler's extractPackage.
+ *
+ * Specifier shapes handled (as emitted by the handlers):
  *   com.example.Foo            plain class import (Kotlin/Java/Groovy/Scala)
  *   com.example.foo            Kotlin/Java wildcard (the star is not in the specifier)
  *   com.example.*  /  a.b._    Groovy / Scala wildcard
@@ -25,20 +30,35 @@
  * picking one candidate is not.
  */
 
-import { existsSync } from 'fs';
+import { readdirSync } from 'fs';
 import { join } from 'path';
 import type Database from 'better-sqlite3';
 import { getDeclaredPackages } from '../core/db/file-store.js';
+import { getConfig } from '../config/config-loader.js';
+import { logger } from '../core/logger.js';
 
 // ─── Public surface ───────────────────────────────────────────────────────────
 
-export const JVM_EXTENSIONS = new Set(['.kt', '.kts', '.java', '.scala', '.sc', '.groovy', '.gradle']);
+/**
+ * Languages whose imports name a DECLARED MODULE (package/namespace header)
+ * rather than a file path. Phase 82 covered the JVM family; Phase 83 adds C#
+ * (`using` directives resolve against `namespace` declarations the same way).
+ */
+export const DECLARED_MODULE_EXTENSIONS = new Set([
+  '.kt', '.kts', '.java', '.scala', '.sc', '.groovy', '.gradle', '.cs',
+]);
 
-export function isJvmSourceFile(filePath: string): boolean {
+export function isDeclaredModuleSourceFile(filePath: string): boolean {
   const dot = filePath.lastIndexOf('.');
   if (dot < 0) return false;
-  return JVM_EXTENSIONS.has(filePath.slice(dot).toLowerCase());
+  return DECLARED_MODULE_EXTENSIONS.has(filePath.slice(dot).toLowerCase());
 }
+
+/** @deprecated Renamed in Phase 83 — use DECLARED_MODULE_EXTENSIONS. */
+export const JVM_EXTENSIONS = DECLARED_MODULE_EXTENSIONS;
+
+/** @deprecated Renamed in Phase 83 — use isDeclaredModuleSourceFile. */
+export const isJvmSourceFile = isDeclaredModuleSourceFile;
 
 export interface JvmResolver {
   /**
@@ -100,19 +120,70 @@ export function derivePackageFromPath(filePath: string): string | null {
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
-const MODULE_MARKERS = ['build.gradle', 'build.gradle.kts', 'pom.xml'];
+const MODULE_MARKER_NAMES = new Set(['build.gradle', 'build.gradle.kts', 'pom.xml']);
+const MODULE_MARKER_SUFFIXES = ['.csproj', '.sln'];
+
+/**
+ * Does this directory contain a module marker? Gradle/Maven markers are exact
+ * filenames; .NET project files have arbitrary basenames (`Foo.csproj`), so the
+ * check needs one directory listing (memoized by the caller), not existsSync of
+ * fixed names.
+ */
+function dirHasModuleMarker(absDir: string): boolean {
+  let entries: string[];
+  try {
+    entries = readdirSync(absDir);
+  } catch {
+    return false;
+  }
+  return entries.some((e) => {
+    const lower = e.toLowerCase();
+    return (
+      MODULE_MARKER_NAMES.has(lower) || MODULE_MARKER_SUFFIXES.some((s) => lower.endsWith(s))
+    );
+  });
+}
+
+export interface JvmResolverOptions {
+  /**
+   * Cap on files a single wildcard/namespace import expands to (C# `using X.Y`
+   * imports a whole namespace, so a popular namespace in a large repo would
+   * explode dep_edges). 0 = uncapped. Default: config `graph.maxWildcardFanout`.
+   */
+  maxWildcardFanout?: number;
+}
 
 export function createJvmResolver(
   db: Database.Database,
   repoId: string,
   projectRoot: string,
+  options?: JvmResolverOptions,
 ): JvmResolver {
+  const maxWildcardFanout =
+    options?.maxWildcardFanout ?? getConfig().graph.maxWildcardFanout;
+  let fanoutWarned = false;
+
+  /**
+   * Deterministically cap a package-wide expansion. Logged once per
+   * resolver (= once per repo graph build).
+   */
+  function capFanout(files: string[], pkg: string): string[] {
+    if (maxWildcardFanout <= 0 || files.length <= maxWildcardFanout) return files;
+    if (!fanoutWarned) {
+      fanoutWarned = true;
+      logger.warn(
+        `Wildcard/namespace import fanout capped at ${maxWildcardFanout} files ` +
+          `(package "${pkg}" has ${files.length}; graph.maxWildcardFanout, 0 = uncapped)`,
+      );
+    }
+    return [...files].sort().slice(0, maxWildcardFanout);
+  }
   // ── Build the package maps once ────────────────────────────────────────────
   const allPaths = db
     .prepare<[string], { path: string }>('SELECT path FROM files WHERE repo_id = ?')
     .all(repoId)
     .map((r) => r.path);
-  const jvmFiles = allPaths.filter(isJvmSourceFile);
+  const jvmFiles = allPaths.filter(isDeclaredModuleSourceFile);
 
   const declared = getDeclaredPackages(db, repoId);
 
@@ -170,7 +241,7 @@ export function createJvmResolver(
     let root = '';
     if (dir !== '') {
       const abs = join(projectRoot, dir);
-      if (MODULE_MARKERS.some((m) => existsSync(join(abs, m)))) {
+      if (dirHasModuleMarker(abs)) {
         root = dir;
       } else {
         const lastSlash = dir.lastIndexOf('/');
@@ -226,9 +297,13 @@ export function createJvmResolver(
       break; // prefix exists but the name doesn't — shorter prefixes would be wrong
     }
 
-    // Kotlin/Java wildcard imports reach the resolver as a bare package name.
+    // Kotlin/Java wildcard imports and C# namespace usings reach the resolver
+    // as a bare package/namespace name.
     if (pkgFiles.has(specifier)) {
-      return preferSameModule(packageFiles(specifier, sourceFile), sourceFile);
+      return capFanout(
+        preferSameModule(packageFiles(specifier, sourceFile), sourceFile),
+        specifier,
+      );
     }
     return [];
   }
@@ -251,7 +326,7 @@ export function createJvmResolver(
         for (const name of names) {
           const hits =
             name === '_' || name === '*'
-              ? preferSameModule(packageFiles(prefix, sourceFile), sourceFile)
+              ? capFanout(preferSameModule(packageFiles(prefix, sourceFile), sourceFile), prefix)
               : resolveQualified(`${prefix}.${name}`, sourceFile);
           for (const h of hits) results.add(h);
         }
@@ -261,7 +336,7 @@ export function createJvmResolver(
       // Groovy `.*` / Scala `._` wildcard suffix
       if (spec.endsWith('.*') || spec.endsWith('._')) {
         const pkg = spec.slice(0, -2);
-        return preferSameModule(packageFiles(pkg, sourceFile), sourceFile);
+        return capFanout(preferSameModule(packageFiles(pkg, sourceFile), sourceFile), pkg);
       }
 
       return resolveQualified(spec, sourceFile);

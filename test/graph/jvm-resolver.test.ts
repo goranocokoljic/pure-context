@@ -54,11 +54,12 @@ function addFile(db: ReturnType<typeof seedDb>, path: string, pkg: string | null
 }
 
 describe('isJvmSourceFile', () => {
-  it('accepts JVM extensions and rejects others', () => {
+  it('accepts declared-module extensions and rejects others', () => {
     expect(isJvmSourceFile('a/B.kt')).toBe(true);
     expect(isJvmSourceFile('a/B.java')).toBe(true);
     expect(isJvmSourceFile('a/B.scala')).toBe(true);
     expect(isJvmSourceFile('a/B.groovy')).toBe(true);
+    expect(isJvmSourceFile('a/B.cs')).toBe(true); // Phase 83
     expect(isJvmSourceFile('a/B.ts')).toBe(false);
     expect(isJvmSourceFile('a/noext')).toBe(false);
   });
@@ -229,5 +230,68 @@ describe('createJvmResolver', () => {
     expect(r.resolve('com.example.Assertions', 'app/Main.java')).toEqual([
       'lib/com/example/Assertions.java',
     ]);
+  });
+
+  // ── C# (Phase 83, Task 511) ─────────────────────────────────────────────────
+
+  it('resolves a C# namespace using to all files declaring the namespace', () => {
+    addFile(db, 'Lib/Services/OrderService.cs', 'My.App.Services');
+    addFile(db, 'Lib/Services/UserService.cs', 'My.App.Services');
+    addFile(db, 'Web/Program.cs', 'My.Web');
+    const r = createJvmResolver(db, REPO, '/nonexistent');
+    const hits = r.resolve('My.App.Services', 'Web/Program.cs');
+    expect(hits.sort()).toEqual([
+      'Lib/Services/OrderService.cs',
+      'Lib/Services/UserService.cs',
+    ]);
+  });
+
+  it('resolves a C# static using (class-path specifier) to the type file', () => {
+    // `using static My.App.Util.Guard;` reaches the resolver as "My.App.Util.Guard".
+    addFile(db, 'Lib/Util/Guard.cs', 'My.App.Util');
+    addFile(db, 'Web/Program.cs', 'My.Web');
+    const r = createJvmResolver(db, REPO, '/nonexistent');
+    expect(r.resolve('My.App.Util.Guard', 'Web/Program.cs')).toEqual(['Lib/Util/Guard.cs']);
+  });
+
+  it('resolves a C# alias using (rhs specifier) to the target type file', () => {
+    // `using Db = My.App.Data.Context;` reaches the resolver as "My.App.Data.Context".
+    addFile(db, 'Lib/Data/Context.cs', 'My.App.Data');
+    addFile(db, 'Web/Program.cs', 'My.Web');
+    const r = createJvmResolver(db, REPO, '/nonexistent');
+    expect(r.resolve('My.App.Data.Context', 'Web/Program.cs')).toEqual(['Lib/Data/Context.cs']);
+  });
+
+  it('caps wildcard/namespace fanout at maxWildcardFanout (deterministic order)', () => {
+    for (let i = 0; i < 5; i++) {
+      addFile(db, `Lib/Big/File${i}.cs`, 'My.App.Big');
+    }
+    addFile(db, 'Web/Program.cs', 'My.Web');
+    const r = createJvmResolver(db, REPO, '/nonexistent', { maxWildcardFanout: 2 });
+    const hits = r.resolve('My.App.Big', 'Web/Program.cs');
+    expect(hits).toEqual(['Lib/Big/File0.cs', 'Lib/Big/File1.cs']);
+    // 0 = uncapped
+    const r2 = createJvmResolver(db, REPO, '/nonexistent', { maxWildcardFanout: 0 });
+    expect(r2.resolve('My.App.Big', 'Web/Program.cs')).toHaveLength(5);
+  });
+
+  it('prefers candidates in the importing file\'s own .csproj project on ambiguity', () => {
+    const root = mkdtempSync(join(tmpdir(), 'pc-clr-'));
+    try {
+      mkdirSync(join(root, 'ProjA', 'Models'), { recursive: true });
+      mkdirSync(join(root, 'ProjB', 'Models'), { recursive: true });
+      writeFileSync(join(root, 'ProjA', 'ProjA.csproj'), '');
+      writeFileSync(join(root, 'ProjB', 'ProjB.csproj'), '');
+
+      addFile(db, 'ProjA/Models/Config.cs', 'My.Shared');
+      addFile(db, 'ProjB/Models/Config.cs', 'My.Shared');
+      addFile(db, 'ProjA/Program.cs', 'My.A');
+      const r = createJvmResolver(db, REPO, root);
+      expect(r.resolve('My.Shared.Config', 'ProjA/Program.cs')).toEqual([
+        'ProjA/Models/Config.cs',
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

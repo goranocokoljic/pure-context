@@ -36,11 +36,14 @@ describe('C# handler — extractSymbols', () => {
     expect(sym2.id).toBe(sym.id);
   });
 
-  it('does NOT extract internal/private class', async () => {
+  it('extracts internal class (with visibility metadata) but NOT private class', async () => {
+    // Phase 83: internal types are assembly-visible — exactly the indexed unit.
     const src = `internal class InternalClass {}\nprivate class PrivateClass {}\n`;
     const { tree, buf } = await parse(src);
     const syms = csharpHandler.extractSymbols(tree, buf, 'Foo.cs');
-    expect(syms).toHaveLength(0);
+    expect(syms).toHaveLength(1);
+    expect(syms[0].name).toBe('InternalClass');
+    expect(syms[0].frameworkMeta?.['visibility']).toBe('internal');
   });
 
   it('extracts a public interface', async () => {

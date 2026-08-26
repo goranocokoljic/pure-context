@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { initParser, parseFile, _resetForTesting } from '../../src/core/parse-dispatcher.js';
 import { kotlinHandler } from '../../src/handlers/kotlin.js';
+import { csharpHandler } from '../../src/handlers/csharp.js';
 import { javaHandler } from '../../src/handlers/java.js';
 import { scalaHandler } from '../../src/handlers/scala.js';
 import { groovyHandler } from '../../src/handlers/groovy.js';
@@ -121,6 +122,38 @@ describe('Groovy extractPackage', () => {
 
   it('returns null for a typical build.gradle with no package', async () => {
     expect(await pkgOf(groovyHandler, `plugins {\n  id 'java'\n}\n`)).toBeNull();
+  });
+});
+
+// ─── C# (Phase 83, Task 510) ──────────────────────────────────────────────────
+
+describe('C# extractPackage', () => {
+  it('extracts a block-scoped namespace', async () => {
+    const pkg = await pkgOf(
+      csharpHandler,
+      `using System;\n\nnamespace My.App.Services {\n  public class Svc {}\n}\n`,
+    );
+    expect(pkg).toBe('My.App.Services');
+  });
+
+  it('extracts a file-scoped namespace', async () => {
+    const pkg = await pkgOf(
+      csharpHandler,
+      `namespace My.App.Data;\n\npublic class Row {}\n`,
+    );
+    expect(pkg).toBe('My.App.Data');
+  });
+
+  it('stores only the OUTERMOST namespace for nested blocks (v1 limitation)', async () => {
+    const pkg = await pkgOf(
+      csharpHandler,
+      `namespace Outer {\n  namespace Inner {\n    public class Deep {}\n  }\n}\n`,
+    );
+    expect(pkg).toBe('Outer');
+  });
+
+  it('returns null when the file declares no namespace', async () => {
+    expect(await pkgOf(csharpHandler, `public class NoNs {}\n`)).toBeNull();
   });
 });
 

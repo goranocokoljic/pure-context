@@ -240,6 +240,20 @@ export interface PureContextConfig {
     maxSymbolsPerPartner: number;
   };
   /**
+   * Dependency-graph build settings (Phase 83).
+   */
+  graph: {
+    /**
+     * Maximum files a single wildcard/namespace import may expand to when the
+     * declared-module resolver (JVM + C#) resolves it. Every C# `using X.Y`
+     * imports a whole namespace, so a popular namespace in a very large repo
+     * would explode dep_edges without a cap. When exceeded, the first N files
+     * (deterministic order) get edges and a warning is logged once per build.
+     * 0 = uncapped. Default: 100.
+     */
+    maxWildcardFanout: number;
+  };
+  /**
    * Which transport(s) to start.
    *   'stdio' — stdin/stdout (default; required for Claude Code)
    *   'http'  — HTTP + Streamable HTTP
@@ -454,6 +468,9 @@ export const DEFAULT_CONFIG: PureContextConfig = {
     maxPool: 60,
     maxCoChangePartners: 5,
     maxSymbolsPerPartner: 5,
+  },
+  graph: {
+    maxWildcardFanout: 100,
   },
   transport: 'stdio',
   http: {
@@ -809,6 +826,20 @@ export function validateConfig(raw: unknown): ValidationResult {
           if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
             errors.push(`taskContext.${key} must be a non-negative integer`);
           }
+        }
+      }
+    }
+  }
+  if ('graph' in cfg) {
+    const g = cfg['graph'];
+    if (typeof g !== 'object' || g === null || Array.isArray(g)) {
+      errors.push('graph must be an object');
+    } else {
+      const gr = g as Record<string, unknown>;
+      if ('maxWildcardFanout' in gr) {
+        const v = gr['maxWildcardFanout'];
+        if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+          errors.push('graph.maxWildcardFanout must be a non-negative integer (0 = uncapped)');
         }
       }
     }

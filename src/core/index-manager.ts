@@ -32,7 +32,7 @@ import { createWorkerPool } from './worker-pool.js';
 import type { ParseJob } from './worker-pool.js';
 import { createResolver } from '../graph/path-resolver.js';
 import { buildGraph } from '../graph/graph-builder.js';
-import { createJvmResolver, isJvmSourceFile } from '../graph/jvm-resolver.js';
+import { createJvmResolver, isDeclaredModuleSourceFile } from '../graph/jvm-resolver.js';
 import { join } from 'path';
 import { track } from './telemetry.js';
 import { discoverProviders } from '../providers/provider-registry.js';
@@ -281,7 +281,7 @@ export async function indexFolder(
   // JVM imports need the package resolver, built here — after file/symbol
   // persistence — so it sees the full declared_package + symbol tables. The
   // map build is skipped when the batch has no JVM source files.
-  const jvmResolver = allImports.some((imp) => isJvmSourceFile(imp.sourceFile))
+  const jvmResolver = allImports.some((imp) => isDeclaredModuleSourceFile(imp.sourceFile))
     ? createJvmResolver(db, repoId, absRoot)
     : undefined;
   const edges = buildGraph(allImports, resolver, repoId, jvmResolver);
@@ -568,7 +568,7 @@ export async function reindexFiles(
   // Build edges only for the re-processed files. The JVM resolver reads the
   // full files/symbols tables (already updated above), so targeted re-index
   // edges match what a full index_folder would produce.
-  const jvmResolver = allImports.some((imp) => isJvmSourceFile(imp.sourceFile))
+  const jvmResolver = allImports.some((imp) => isDeclaredModuleSourceFile(imp.sourceFile))
     ? createJvmResolver(db, repoId, absRoot)
     : undefined;
   const edges = buildGraph(allImports, resolver, repoId, jvmResolver);

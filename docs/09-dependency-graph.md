@@ -20,6 +20,8 @@ Edges are stored in the `dep_edges` SQLite table. An edge is created only when t
 
 JVM imports (Kotlin, Java, Scala, Groovy) ARE resolved: each file's declared `package` is captured at index time and `com.example.Foo` maps to the file that declares it, including wildcard imports, Kotlin top-level member imports, and same-package-in-several-modules disambiguation (own Gradle/Maven module preferred, otherwise edges to all candidates). Repos indexed before v1.15.0 need one re-index to populate the package data.
 
+C# `using` directives ARE resolved the same way (v1.16.0): each file's declared `namespace` (file-scoped or outermost block) is captured at index time. A plain `using X.Y` imports the whole namespace, so it produces edges to **every** file declaring it — capped at `graph.maxWildcardFanout` files (default 100, deterministic order, 0 = uncapped). `using static X.Y.T` and alias `using F = X.Y.T` resolve to the type's file. Cross-project ambiguity prefers the importing file's own `*.csproj`/`*.sln` project. Repos indexed before v1.16.0 need one re-index to populate the namespace data.
+
 Two directions of traversal:
 - **Forward walk** — "what does X depend on?" (imports, transitively)
 - **Reverse walk** — "what depends on X?" (importers, transitively)

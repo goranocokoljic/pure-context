@@ -202,6 +202,10 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
       maxSymbolsPerPartner:
         partial.taskContext?.maxSymbolsPerPartner ?? DEFAULT_CONFIG.taskContext.maxSymbolsPerPartner,
     },
+    graph: {
+      maxWildcardFanout:
+        partial.graph?.maxWildcardFanout ?? DEFAULT_CONFIG.graph.maxWildcardFanout,
+    },
     transport: partial.transport ?? DEFAULT_CONFIG.transport,
     http: {
       port: pctxPort ?? partial.http?.port ?? DEFAULT_CONFIG.http.port,

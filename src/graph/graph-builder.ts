@@ -1,6 +1,6 @@
 import type { ImportRecord, DepEdge } from '../core/types.js';
 import type { PathResolver } from './path-resolver.js';
-import { isJvmSourceFile, type JvmResolver } from './jvm-resolver.js';
+import { isDeclaredModuleSourceFile, type JvmResolver } from './jvm-resolver.js';
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -8,8 +8,8 @@ import { isJvmSourceFile, type JvmResolver } from './jvm-resolver.js';
  * Convert a batch of ImportRecords into DepEdges.
  *
  * Each ImportRecord may or may not have `resolvedPath` pre-filled; if it is
- * null a resolver is called to fill it. Imports from JVM source files
- * (.kt/.java/.scala/.groovy/…) go through the JVM package resolver when one is
+ * null a resolver is called to fill it. Imports from declared-module source
+ * files (.kt/.java/.scala/.groovy/.cs/…) go through the package resolver when one is
  * supplied — it can yield SEVERAL targets (wildcard imports, cross-module
  * ambiguity), each becoming an edge. All other files use the path resolver,
  * whose behavior is unchanged. Records that resolve to nothing (external
@@ -37,7 +37,7 @@ export function buildGraph(
     let targetFiles: string[];
     if (rec.resolvedPath !== null) {
       targetFiles = [rec.resolvedPath];
-    } else if (jvmResolver && isJvmSourceFile(rec.sourceFile)) {
+    } else if (jvmResolver && isDeclaredModuleSourceFile(rec.sourceFile)) {
       targetFiles = jvmResolver.resolve(rec.specifier, rec.sourceFile);
     } else {
       const resolved = resolver.resolve(rec.specifier, rec.sourceFile);
