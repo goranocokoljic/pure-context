@@ -150,6 +150,8 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
     allowSymlinks: partial.allowSymlinks ?? DEFAULT_CONFIG.allowSymlinks,
     indexing: {
       cssVariables: partial.indexing?.cssVariables ?? DEFAULT_CONFIG.indexing.cssVariables,
+      commitBatchSize:
+        partial.indexing?.commitBatchSize ?? DEFAULT_CONFIG.indexing.commitBatchSize,
     },
     git: {
       coChangeDepth: partial.git?.coChangeDepth ?? DEFAULT_CONFIG.git.coChangeDepth,

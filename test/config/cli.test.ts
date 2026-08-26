@@ -72,16 +72,16 @@ describe('cmdCheck', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns true when no config file exists (defaults are valid)', () => {
+  it('returns true when no config file exists (defaults are valid)', async () => {
     vi.spyOn(schema, 'getConfigPath').mockReturnValue('/definitely/not/a/real/path.json');
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const result = cmdCheck();
+    const result = await cmdCheck();
     expect(result).toBe(true);
   });
 
-  it('returns false when config file has invalid content', () => {
+  it('returns false when config file has invalid content', async () => {
     const dir = join(tmpdir(), `purecontext-check-${Date.now()}`);
     mkdirSync(dir, { recursive: true });
     const path = join(dir, 'config.json');
@@ -91,7 +91,7 @@ describe('cmdCheck', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const result = cmdCheck();
+    const result = await cmdCheck();
     expect(result).toBe(false);
 
     rmSync(dir, { recursive: true, force: true });

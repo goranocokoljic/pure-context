@@ -222,7 +222,7 @@ export function cmdHealth(write: (line: string) => void = (l) => process.stdout.
  * Validate the current config and verify prerequisites (grammars, SQLite).
  * Returns true if all checks pass.
  */
-export function cmdCheck(): boolean {
+export async function cmdCheck(): Promise<boolean> {
   // Show the quick health summary as a preamble
   const healthOk = cmdHealth();
   process.stdout.write('\n');
@@ -263,14 +263,23 @@ export function cmdCheck(): boolean {
     }
   }
 
-  // ── SQLite sanity check ───────────────────────────────────────────────────
+  // ── SQLite sanity check + active tier (Phase 91) ──────────────────────────
+  // Report WHICH engine actually backs this install: native better-sqlite3,
+  // or the WASM fallback (a Node version without a matching prebuild lands
+  // there silently at runtime — make it visible here).
   try {
-    const db = openInMemoryDatabase();
+    const { initSqliteBackend } = await import('../core/db/sqlite-loader.js');
+    const factory = await initSqliteBackend();
+    const db = factory.open(':memory:');
     db.prepare('SELECT 1').get();
     db.close();
-    passing.push('SQLite working');
+    passing.push(
+      factory.backend === 'wasm'
+        ? 'SQLite working — tier: WASM (@sqlite.org/sqlite-wasm; native better-sqlite3 unavailable on this Node, slower but functional)'
+        : 'SQLite working — tier: native better-sqlite3',
+    );
   } catch (err) {
-    issues.push(`SQLite error: ${err}`);
+    issues.push(`SQLite error (both native and WASM tiers failed): ${err}`);
   }
 
   // ── Effective settings ────────────────────────────────────────────────────

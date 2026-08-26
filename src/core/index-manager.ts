@@ -109,13 +109,25 @@ export async function indexFolder(
   const allExtensions = [...getSupportedExtensions(), ...getAdapterExtensions(adapters)];
   const effectiveFileLimit = options.fileLimit ?? DEFAULT_FILE_LIMIT;
 
-  const { files: discovered, totalBeforeLimit } = discoverFiles(absRoot, {
+  const { files: discovered, totalBeforeLimit, excludedDirs } = discoverFiles(absRoot, {
     extensions: allExtensions,
     fileLimit: effectiveFileLimit,
     extraExcludePatterns: options.excludePatterns,
     ...(options.maxFileSizeBytes !== undefined && { maxFileSizeBytes: options.maxFileSizeBytes }),
     ...(options.extensionlessFilenames && { extensionlessFilenames: options.extensionlessFilenames }),
   });
+
+  // Honesty (Task 565): top-level dirs dropped ENTIRELY by ignore rules are
+  // reported, not silent — a root .gitignore hiding a nested repo was
+  // previously invisible. Config patterns now apply AFTER .gitignore, so
+  // `!dir/` in excludePatterns can rescue such a directory.
+  for (const ex of excludedDirs) {
+    if (ex.source === 'builtin') continue; // node_modules/.git/etc — expected noise
+    logger.info(
+      `Excluded top-level directory '${ex.dir}/' (${ex.source} rule). ` +
+        `Add '!${ex.dir}/' to excludePatterns to index it.`,
+    );
+  }
 
   // ── 3b. Filter to files with known language handlers OR active adapters ──
   const supportedExts = new Set(getSupportedExtensions());
@@ -234,93 +246,138 @@ export async function indexFolder(
   const knownAdapterNames = new Set(getRegisteredAdapters().map((a) => a.name));
   const canParallelize = adapters.every((a) => knownAdapterNames.has(a.name));
 
+  // ── Chunked commits (Phase 91, Task 563) ──────────────────────────────────
+  // One unbounded transaction meant a killed large-tree run (89k files,
+  // 110 min) committed ZERO rows — the WAL grew unboundedly and all work was
+  // lost. Files now commit every `indexing.commitBatchSize` files (default
+  // 500; 0 = single transaction, the pre-91 behavior). A killed run keeps
+  // every committed batch; re-running resumes via the content-hash skip cache.
+  // Small repos fit one batch, so their commit behavior is unchanged.
+  const commitBatchSize =
+    options.commitBatchSize ?? getConfig().indexing?.commitBatchSize ?? 500;
+  const batchSize =
+    commitBatchSize > 0 ? commitBatchSize : Math.max(toProcess.length, 1);
+  const totalBatches = Math.max(Math.ceil(toProcess.length / batchSize), 0);
+  let batchesCommitted = 0;
+
+  /** Write one batch of parse results in a single transaction. */
+  const commitBatch = (
+    batch: Array<{
+      relPath: string;
+      content: Buffer;
+      hash: string;
+      symbols: SymbolRecord[];
+      imports: ImportRecord[];
+      declaredPackage: string | null;
+    }>,
+  ): void => {
+    db.transaction(() => {
+      for (const r of batch) {
+        allImports.push(...r.imports);
+
+        deleteByFile(db, repoId, r.relPath);
+        // Reprocess: clear only OUTGOING edges — incoming edges belong to
+        // other files' parses and would not regenerate (report critical 1).
+        deleteEdgesBySource(db, repoId, r.relPath);
+        if (r.symbols.length > 0) {
+          insertSymbols(db, repoId, r.symbols);
+        }
+        symbolsFound += r.symbols.length;
+
+        // Always persist the file record — even when this file yielded 0 symbols
+        // AND 0 imports. Skipping the upsert here was the cause of the recurring
+        // re-parse churn: such files were never recorded, so every subsequent
+        // no-op index re-read and re-parsed them. Recording the hash lets the
+        // next run recognise them as unchanged and skip them.
+        upsertFile(db, repoId, r.relPath, r.hash, r.content, 'local', r.declaredPackage);
+        replaceImportRecords(db, repoId, r.relPath, r.imports);
+        cache.set(r.relPath, r.hash);
+
+        logger.debug(
+          `Processed ${r.relPath}: ${r.symbols.length} symbols, ${r.imports.length} imports`,
+        );
+      }
+    })();
+    batchesCommitted++;
+
+    // Move committed WAL pages into the main .db so progress is visible and
+    // the WAL cannot balloon unboundedly on huge runs (the observed failure
+    // shape: 4KB main db + 444MB WAL). PASSIVE never blocks readers; failure
+    // is harmless (e.g. the WASM tier without WAL support).
+    try {
+      db.exec('PRAGMA wal_checkpoint(PASSIVE)');
+    } catch {
+      /* checkpoint unavailable on this backend — ignore */
+    }
+
+    if (totalBatches > 1) {
+      logger.info(`Committed batch ${batchesCommitted}/${totalBatches} (${batch.length} files)`);
+    }
+  };
+
   if (concurrency > 1 && toProcess.length > 1 && canParallelize) {
-    // ── Parallel path: dispatch to worker thread pool ──────────────────────
+    // ── Parallel path: dispatch to worker thread pool, one pool.run per batch ──
+    // Batching pool.run also caps peak memory: parse results for at most one
+    // batch are held at a time (previously the entire repo's results).
     const pool = createWorkerPool(concurrency);
     try {
       const adapterNames = adapters.map((a) => a.name);
-      const jobs: ParseJob[] = toProcess.map(({ relPath, content }) => ({
-        relPath,
-        // Uint8Array view over the Buffer — structured clone copies just this slice.
-        content: new Uint8Array(content.buffer, content.byteOffset, content.byteLength),
-        adapterNames,
-      }));
+      for (let start = 0; start < toProcess.length; start += batchSize) {
+        const chunk = toProcess.slice(start, start + batchSize);
+        const jobs: ParseJob[] = chunk.map(({ relPath, content }) => ({
+          relPath,
+          // Uint8Array view over the Buffer — structured clone copies just this slice.
+          content: new Uint8Array(content.buffer, content.byteOffset, content.byteLength),
+          adapterNames,
+        }));
 
-      const parseResults = await pool.run(jobs);
+        const parseResults = await pool.run(jobs);
 
-      // Single outer transaction for all DB writes — major speedup on spinning disk.
-      db.transaction(() => {
+        const batch: Parameters<typeof commitBatch>[0] = [];
         for (let i = 0; i < parseResults.length; i++) {
           const pr = parseResults[i];
-          const { relPath, content, hash } = toProcess[i];
-
+          const { relPath, content, hash } = chunk[i];
           if (pr.error) {
             errors.push({ file: pr.relPath, message: pr.error });
             logger.warn(`Worker failed to process ${pr.relPath}: ${pr.error}`);
             continue;
           }
-
-          allImports.push(...pr.imports);
-
-          deleteByFile(db, repoId, relPath);
-          // Reprocess: clear only OUTGOING edges — incoming edges belong to
-          // other files' parses and would not regenerate (report critical 1).
-          deleteEdgesBySource(db, repoId, relPath);
-          if (pr.symbols.length > 0) {
-            insertSymbols(db, repoId, pr.symbols);
-          }
-          symbolsFound += pr.symbols.length;
-
-          // Always persist the file record — even when this file yielded 0 symbols
-          // AND 0 imports. Skipping the upsert here was the cause of the recurring
-          // re-parse churn: such files were never recorded, so every subsequent
-          // no-op index re-read and re-parsed them. Recording the hash lets the
-          // next run recognise them as unchanged and skip them.
-          upsertFile(db, repoId, relPath, hash, content, 'local', pr.declaredPackage ?? null);
-          replaceImportRecords(db, repoId, relPath, pr.imports);
-          cache.set(relPath, hash);
-
-          logger.debug(`Processed ${relPath}: ${pr.symbols.length} symbols, ${pr.imports.length} imports`);
+          batch.push({
+            relPath,
+            content,
+            hash,
+            symbols: pr.symbols,
+            imports: pr.imports,
+            declaredPackage: pr.declaredPackage ?? null,
+          });
         }
-      })();
+        commitBatch(batch);
+      }
     } finally {
       await pool.terminate();
     }
   } else {
     // ── Sequential path: concurrency=1 or single file ─────────────────────
-    for (const entry of toProcess) {
-      const { relPath, content, hash } = entry;
-
-      try {
-        const { symbols, imports, declaredPackage } = await processFile(relPath, content, adapters);
-
-        allImports.push(...imports);
-
-        // Persist: clear old data for this file, insert new.
-        // Reprocess: outgoing edges only (incoming ones would not regenerate).
-        deleteByFile(db, repoId, relPath);
-        deleteEdgesBySource(db, repoId, relPath);
-        if (symbols.length > 0) {
-          insertSymbols(db, repoId, symbols);
+    // Parsing is async so it happens outside the (synchronous) transaction;
+    // each batch of results is then written in one transaction like the
+    // parallel path.
+    for (let start = 0; start < toProcess.length; start += batchSize) {
+      const chunk = toProcess.slice(start, start + batchSize);
+      const batch: Parameters<typeof commitBatch>[0] = [];
+      for (const entry of chunk) {
+        const { relPath, content, hash } = entry;
+        try {
+          const { symbols, imports, declaredPackage } = await processFile(relPath, content, adapters);
+          batch.push({ relPath, content, hash, symbols, imports, declaredPackage });
+        } catch (err) {
+          errors.push({
+            file: relPath,
+            message: err instanceof Error ? err.message : String(err),
+          });
+          logger.warn(`Failed to process ${relPath}: ${err}`);
         }
-        symbolsFound += symbols.length;
-
-        // Update file record (hash already computed in step 5). We persist even
-        // when symbols.length === 0 && imports.length === 0 so a true no-op
-        // re-index recognises the file next time instead of re-parsing it on
-        // every run (the recurring-churn fix).
-        upsertFile(db, repoId, relPath, hash, content, 'local', declaredPackage);
-        replaceImportRecords(db, repoId, relPath, imports);
-        cache.set(relPath, hash);
-
-        logger.debug(`Processed ${relPath}: ${symbols.length} symbols, ${imports.length} imports`);
-      } catch (err) {
-        errors.push({
-          file: relPath,
-          message: err instanceof Error ? err.message : String(err),
-        });
-        logger.warn(`Failed to process ${relPath}: ${err}`);
       }
+      commitBatch(batch);
     }
   }
 
@@ -513,6 +570,12 @@ export async function indexFolder(
     filesPruned,
     limitReached: limitSkipped > 0,
     totalBeforeLimit,
+    batchesCommitted,
+    // Builtin exclusions (node_modules, .git, …) are expected — only surface
+    // gitignore/config-driven whole-directory drops.
+    ...(excludedDirs.some((e) => e.source !== 'builtin')
+      ? { excludedDirs: excludedDirs.filter((e) => e.source !== 'builtin') }
+      : {}),
   };
 
   logger.info(

@@ -129,6 +129,14 @@ export interface PureContextConfig {
      * Default: false.
      */
     cssVariables: boolean;
+    /**
+     * Commit indexed files to SQLite every N files instead of one unbounded
+     * transaction (Phase 91). Keeps partial progress durable on very large
+     * trees — a killed run resumes from the last committed batch via the
+     * content-hash cache. 0 = single transaction (pre-91 behavior).
+     * Default: 500.
+     */
+    commitBatchSize: number;
   };
   /**
    * Git / temporal-coupling capture settings (Phase 76).
@@ -445,6 +453,7 @@ export const DEFAULT_CONFIG: PureContextConfig = {
   allowSymlinks: false,
   indexing: {
     cssVariables: false,
+    commitBatchSize: 500,
   },
   git: {
     coChangeDepth: 300,
@@ -730,6 +739,14 @@ export function validateConfig(raw: unknown): ValidationResult {
       const i = idx as Record<string, unknown>;
       if ('cssVariables' in i && typeof i['cssVariables'] !== 'boolean') {
         errors.push('indexing.cssVariables must be a boolean');
+      }
+      if (
+        'commitBatchSize' in i &&
+        (typeof i['commitBatchSize'] !== 'number' ||
+          !Number.isInteger(i['commitBatchSize']) ||
+          (i['commitBatchSize'] as number) < 0)
+      ) {
+        errors.push('indexing.commitBatchSize must be a non-negative integer');
       }
     }
   }

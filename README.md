@@ -174,6 +174,7 @@ The guide explains what PureContext does, why each feature exists, and how to us
 | [Language Support](LANGUAGE-SUPPORT.md) | All 34 supported languages and what's extracted |
 | [Framework Adapters](FRAMEWORK-ADAPTERS.md) | Vue, React, Django, Spring, Rails, Flutter, ORMs, and more |
 | [Using PureContext with a Team](TEAM-SETUP.md) | Shared server, enterprise setup |
+| [Operations Guide](docs/28-operations.md) | Large repos, scoped indexes, branch discipline, verification, privacy |
 
 **Real-world workflows:**
 

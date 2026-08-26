@@ -211,7 +211,7 @@ async function main(): Promise<void> {
     if (flag === '--check') {
       // --check needs grammars path, which requires bootstrap
       await bootstrap();
-      const ok = cmdCheck();
+      const ok = await cmdCheck();
       process.exit(ok ? 0 : 1);
     }
 

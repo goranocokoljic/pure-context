@@ -129,14 +129,19 @@ For `claude`, registration uses the `claude` CLI (falling back to printing the c
 Install or inspect Claude Code hook registrations.
 
 ```bash
-# Register all PureContext hooks in ~/.claude/settings.json
+# Register PureContext hooks in ~/.claude/settings.json
 npx purecontext-mcp hooks --install
+
+# Also install the PreToolUse per-edit reminder (opt-in — prints to stderr on EVERY edit)
+npx purecontext-mcp hooks --install --with-reminders
 
 # List current hook registration status
 npx purecontext-mcp hooks --list
 ```
 
-Hooks are registered as CLI commands in `~/.claude/settings.json`. Re-running `--install` is safe — it replaces existing PureContext entries (including any old `.mjs`-path style entries from earlier versions) while leaving other tools' hooks untouched.
+Hooks are registered as CLI commands in `~/.claude/settings.json`. Re-running `--install` is safe — it replaces existing PureContext entries (including any old `.mjs`-path style entries from earlier versions) while leaving other tools' hooks untouched. The installer prints exactly what it will write before writing.
+
+Since v1.24.0: `install claude` / `install all` do NOT install hooks by default — pass `--with-hooks` there, or run `hooks --install` explicitly. The PreToolUse edit reminder is a separate opt-in (`--with-reminders`); re-running `hooks --install` without it removes a previously installed reminder.
 
 ### `hook-*` (Claude Code hook handlers)
 
@@ -145,7 +150,7 @@ These are the hook handlers invoked by Claude Code. They are not meant to be cal
 | Command | Hook event | What it does |
 |---------|-----------|--------------|
 | `hook-posttooluse` | `PostToolUse` | Re-indexes files modified by Edit/Write/MultiEdit |
-| `hook-pretooluse` | `PreToolUse` | Soft edit guard — suggests read tools before editing |
+| `hook-pretooluse` | `PreToolUse` | Soft edit guard — suggests read tools before editing (opt-in via `--with-reminders`) |
 | `hook-precompact` | `PreCompact` | Injects the list of indexed repos before context compaction |
 | `hook-worktree-create` | `WorktreeCreate` | Auto-indexes a newly created agent worktree |
 | `hook-worktree-remove` | `WorktreeRemove` | Fires when an agent worktree is removed (no-op, reserved) |

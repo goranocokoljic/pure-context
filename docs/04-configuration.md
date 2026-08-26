@@ -109,6 +109,9 @@ purecontext-mcp config --check
 | `adapters` | `string` or `string[]` | `"auto"` | `"auto"` = detect from project files; `"none"` = disable all; `["vue", "nuxt"]` = explicit list |
 | `maxFileSizeBytes` | `number` | `1048576` | Files larger than this (default: 1 MB) are skipped |
 | `allowSymlinks` | `boolean` | `false` | When `false`, symlinks that resolve outside the project root are blocked |
+| `indexing.commitBatchSize` | `number` | `500` | Commit indexed files to SQLite every N files (Phase 91). Keeps partial progress durable on huge trees — a killed run resumes from the last committed batch. `0` = one unbounded transaction (pre-1.24 behavior). |
+
+Note on exclusions (since v1.24.0): precedence is built-ins → repo `.gitignore` → `excludePatterns`. Later rules win, so a negation like `"!protected/"` in `excludePatterns` can rescue a directory the repo `.gitignore` hides.
 
 ### Git & temporal coupling (`git.*`)
 

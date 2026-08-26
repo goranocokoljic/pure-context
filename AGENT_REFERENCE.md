@@ -731,3 +731,4 @@ Every response includes:
 | **Health & Debt** | `health_radar` stability axis requires git metadata. | Set `includeStability: false` if no git history. |
 | **Code Intelligence** | `find_untested_symbols` uses import heuristics, not runtime coverage. | Combine with Istanbul/c8 for precise branch-level coverage data. |
 | **AST Search** | `search_ast` only searches files backed by a WASM grammar — regex-only handlers silently skipped. | Use `search_text` for content in unsupported file types. |
+| **Harness integration** | In harnesses that defer MCP tool schemas (only tool NAMES in context until fetched), a bare name carries little signal and the tools get under-used. | Name the tool explicitly in the prompt ("use get_blast_radius on X") when you want it used. Operational guidance: `docs/28-operations.md`. |

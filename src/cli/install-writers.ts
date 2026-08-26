@@ -13,7 +13,7 @@ import yaml from 'js-yaml';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir, platform } from 'os';
-import { cmdHooksInstall } from './hooks.js';
+import { cmdHooksInstall, injectClaudeMd } from './hooks.js';
 import { getClaudeDesktopConfigPath } from './install-detect.js';
 import { resolveServerLaunch, nodeMajor } from './resolve-node.js';
 
@@ -90,13 +90,22 @@ function writeIdempotent(filePath: string, content: string): void {
 /**
  * Install for Claude Code.
  * local  → writes instruction block to <project>/CLAUDE.md
- * global → writes hooks + ~/.claude/CLAUDE.md (existing behaviour)
+ * global → writes ~/.claude/CLAUDE.md instruction block (hooks only with
+ *          opts.withHooks — Phase 91 safe-by-default installer)
  * both   → both of the above
+ *
+ * Hooks are NO LONGER installed by default: `install claude --with-hooks`
+ * opts in, and `hooks --install` remains the explicit path.
  */
-export async function installClaude(projectRoot: string, scope: Scope): Promise<void> {
+export async function installClaude(
+  projectRoot: string,
+  scope: Scope,
+  opts: { withHooks?: boolean; withReminders?: boolean } = {},
+): Promise<void> {
   if (scope === 'local' || scope === 'both') {
     const filePath = join(projectRoot, 'CLAUDE.md');
     const block = markedBlock(getPureContextInstructions('markdown'));
+    console.log(`  Will write instruction block: ${filePath}`);
     if (existsSync(filePath)) {
       const existing = readFileSync(filePath, 'utf-8');
       writeFileSync(filePath, replaceMarkerBlock(existing, block), 'utf-8');
@@ -105,7 +114,13 @@ export async function installClaude(projectRoot: string, scope: Scope): Promise<
     }
   }
   if (scope === 'global' || scope === 'both') {
-    cmdHooksInstall();
+    if (opts.withHooks) {
+      cmdHooksInstall({ withReminders: opts.withReminders ?? false });
+    } else {
+      injectClaudeMd();
+      console.log('  Hooks NOT installed (safe default). Opt in with: install claude --with-hooks');
+      console.log('  or: npx purecontext-mcp hooks --install');
+    }
   }
   registerClaudeCodeMcpServer(scope);
 }
@@ -580,7 +595,17 @@ function warnIfNodeTooOld(version: string | null): void {
 
 // ─── Dispatch table ───────────────────────────────────────────────────────────
 
-export const INSTALL_WRITERS: Record<string, (projectRoot: string, scope: Scope) => Promise<void>> = {
+export interface InstallWriterOptions {
+  /** Install Claude Code hooks (Phase 91: off by default; `--with-hooks` opts in). */
+  withHooks?: boolean;
+  /** Install the PreToolUse edit-reminder hook (implies noise on every edit). */
+  withReminders?: boolean;
+}
+
+export const INSTALL_WRITERS: Record<
+  string,
+  (projectRoot: string, scope: Scope, opts?: InstallWriterOptions) => Promise<void>
+> = {
   'claude': installClaude,
   'cursor': installCursor,
   'windsurf': installWindsurf,

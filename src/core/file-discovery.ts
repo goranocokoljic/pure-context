@@ -60,6 +60,12 @@ export interface DiscoveryResult {
   files: DiscoveredFile[];
   /** Total files found before the fileLimit was applied. */
   totalBeforeLimit: number;
+  /**
+   * Top-level directories excluded ENTIRELY by ignore rules, with the layer
+   * that excluded them (Phase 91 honesty signal — a root .gitignore can
+   * silently drop a whole nested repo and nobody notices).
+   */
+  excludedDirs: Array<{ dir: string; source: 'builtin' | 'gitignore' | 'config' }>;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -76,9 +82,29 @@ export function discoverFiles(
     extensionlessFilenames,
   } = options;
 
-  const ig = buildIgnoreFilter(rootPath, extraExcludePatterns);
+  const { ig, igBuiltin, igBuiltinGit } = buildIgnoreFilter(rootPath, extraExcludePatterns);
   const results: DiscoveredFile[] = [];
   const extensionlessSet = extensionlessFilenames ? new Set(extensionlessFilenames) : undefined;
+
+  // Honesty pre-pass: which TOP-LEVEL directories will the walk drop entirely,
+  // and which rule layer drops them? (builtin < gitignore < config precedence —
+  // attribute to the earliest layer that already excludes the dir.)
+  const excludedDirs: DiscoveryResult['excludedDirs'] = [];
+  try {
+    for (const entry of readdirSync(rootPath, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const checkPath = entry.name + '/';
+      if (!ig.ignores(checkPath)) continue;
+      const source = igBuiltin.ignores(checkPath)
+        ? 'builtin'
+        : igBuiltinGit.ignores(checkPath)
+          ? 'gitignore'
+          : 'config';
+      excludedDirs.push({ dir: entry.name, source });
+    }
+  } catch {
+    // Root unreadable — the walk will surface that on its own.
+  }
 
   walk(rootPath, rootPath, ig, extensions, maxFileSizeBytes, results, extensionlessSet);
 
@@ -89,25 +115,38 @@ export function discoverFiles(
 
   const totalBeforeLimit = results.length;
   const files = fileLimit > 0 ? results.slice(0, fileLimit) : results;
-  return { files, totalBeforeLimit };
+  return { files, totalBeforeLimit, excludedDirs };
 }
 
 // ─── Internals ────────────────────────────────────────────────────────────────
 
-function buildIgnoreFilter(rootPath: string, extra: string[]): Ignore {
-  const ig = ignore();
-  ig.add(BUILT_IN_EXCLUDES);
-  ig.add(extra);
-
+function buildIgnoreFilter(
+  rootPath: string,
+  extra: string[],
+): { ig: Ignore; igBuiltin: Ignore; igBuiltinGit: Ignore } {
+  // Precedence (Phase 91, Task 565): built-ins → repo .gitignore → USER
+  // patterns LAST. In the `ignore` package, later rules win negation
+  // conflicts — user excludePatterns (including negations like `!protected/`)
+  // must be able to rescue a directory the repo .gitignore hides. Previously
+  // the .gitignore was added last, so no user negation could ever override it
+  // (verified consequence: a nested repo silently dropped by a parent
+  // .gitignore with no way to restore it from config).
+  let gitignoreContent: string | null = null;
   try {
-    const gitignorePath = join(rootPath, '.gitignore');
-    const content = readFileSync(gitignorePath, 'utf8');
-    ig.add(content);
+    gitignoreContent = readFileSync(join(rootPath, '.gitignore'), 'utf8');
   } catch {
     // No .gitignore present — that's fine.
   }
 
-  return ig;
+  const igBuiltin = ignore().add(BUILT_IN_EXCLUDES);
+  const igBuiltinGit = ignore().add(BUILT_IN_EXCLUDES);
+  if (gitignoreContent !== null) igBuiltinGit.add(gitignoreContent);
+
+  const ig = ignore().add(BUILT_IN_EXCLUDES);
+  if (gitignoreContent !== null) ig.add(gitignoreContent);
+  ig.add(extra);
+
+  return { ig, igBuiltin, igBuiltinGit };
 }
 
 function walk(

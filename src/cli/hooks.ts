@@ -121,17 +121,42 @@ Do not re-search when \`search_symbols\` returns \`negative_evidence\`. If the r
 
 // ─── Public install/list commands ─────────────────────────────────────────────
 
-export function cmdHooksInstall(): void {
+export interface HooksInstallOptions {
+  /**
+   * Install the PreToolUse edit-reminder hook (a stderr line on EVERY edit).
+   * Off by default since Phase 91 — a per-edit reminder trains users to
+   * ignore output. Opt in with `hooks --install --with-reminders`.
+   */
+  withReminders?: boolean;
+}
+
+export function cmdHooksInstall(opts: HooksInstallOptions = {}): void {
+  const withReminders = opts.withReminders ?? false;
+
+  // Print exactly what will be written, where, BEFORE writing (Phase 91 —
+  // the install-runbook complaint was surprise, not capability).
+  console.log('\nAbout to write:');
+  console.log(`  ${SETTINGS_PATH}`);
+  console.log('    hook entries: PostToolUse, PreCompact, WorktreeCreate, WorktreeRemove,');
+  console.log(`    TaskCompleted, SubagentStart${withReminders ? ', PreToolUse (edit reminder)' : ''}`);
+  if (!withReminders) {
+    console.log('    (PreToolUse edit reminder NOT installed — opt in with --with-reminders)');
+  }
+  console.log(`  ${CLAUDE_MD_PATH}`);
+  console.log('    PureContext instruction block (marker-delimited, idempotent)\n');
+
   mkdirSync(CLAUDE_DIR, { recursive: true });
 
-  mergeSettings();
+  mergeSettings({ withReminders });
   injectClaudeMd();
 
   console.log('\nHooks installed. Reopen Claude Code to activate them.\n');
   console.log('Hooks registered (invoked directly via your global Node, no npx):');
   console.log('  PostToolUse  (hook-posttooluse):       re-indexes edited files automatically');
   console.log('  PreCompact   (hook-precompact):        injects repo state before context compaction');
-  console.log('  PreToolUse   (hook-pretooluse):        suggests PureContext read tools before editing');
+  if (withReminders) {
+    console.log('  PreToolUse   (hook-pretooluse):        suggests PureContext read tools before editing');
+  }
   console.log('  WorktreeCreate  (hook-worktree-create):  auto-indexes new agent worktrees');
   console.log('  WorktreeRemove  (hook-worktree-remove):  fires when an agent worktree is removed');
   console.log('  TaskCompleted   (hook-taskcompleted):    post-task diagnostics and repo summary');
@@ -149,15 +174,24 @@ export function cmdHooksList(): void {
     console.log('  Active hooks (invoked via direct node, no npx):');
     console.log('    PostToolUse    → hook-posttooluse');
     console.log('    PreCompact     → hook-precompact');
-    console.log('    PreToolUse     → hook-pretooluse');
+    try {
+      if (readFileSync(SETTINGS_PATH, 'utf-8').includes('hook-pretooluse')) {
+        console.log('    PreToolUse     → hook-pretooluse (edit reminder, opt-in)');
+      }
+    } catch {
+      /* unreadable settings — skip the optional line */
+    }
     console.log('    WorktreeCreate → hook-worktree-create');
     console.log('    WorktreeRemove → hook-worktree-remove');
+    console.log('    TaskCompleted  → hook-taskcompleted');
+    console.log('    SubagentStart  → hook-subagentstart');
   }
 }
 
 // ─── Settings merge ───────────────────────────────────────────────────────────
 
-export function mergeSettings(): void {
+export function mergeSettings(opts: HooksInstallOptions = {}): void {
+  const withReminders = opts.withReminders ?? false;
   let settings: Record<string, unknown> = {};
   if (existsSync(SETTINGS_PATH)) {
     try {
@@ -179,11 +213,22 @@ export function mergeSettings(): void {
     { matcher: '', hooks: [{ type: 'command', command: makeHookCmd('hook-precompact') }] },
     ['purecontext-precompact-hook.mjs', 'hook-precompact'],
   );
-  hooks.PreToolUse = mergeHookEntry(
-    hooks.PreToolUse ?? [],
-    { matcher: 'Edit|Write|MultiEdit', hooks: [{ type: 'command', command: makeHookCmd('hook-pretooluse') }] },
-    ['purecontext-edit-guard.mjs', 'hook-pretooluse'],
-  );
+  // PreToolUse edit reminder is opt-in (Phase 91): without --with-reminders,
+  // an existing purecontext entry is REMOVED so re-running the installer
+  // converges on the default-quiet configuration.
+  if (withReminders) {
+    hooks.PreToolUse = mergeHookEntry(
+      hooks.PreToolUse ?? [],
+      { matcher: 'Edit|Write|MultiEdit', hooks: [{ type: 'command', command: makeHookCmd('hook-pretooluse') }] },
+      ['purecontext-edit-guard.mjs', 'hook-pretooluse'],
+    );
+  } else {
+    hooks.PreToolUse = removeHookEntry(hooks.PreToolUse ?? [], [
+      'purecontext-edit-guard.mjs',
+      'hook-pretooluse',
+    ]);
+    if (hooks.PreToolUse.length === 0) delete (hooks as Record<string, unknown>).PreToolUse;
+  }
   hooks.WorktreeCreate = mergeHookEntry(
     (hooks.WorktreeCreate ?? []) as unknown[],
     { matcher: '', hooks: [{ type: 'command', command: makeHookCmd('hook-worktree-create') }] },
@@ -211,21 +256,25 @@ export function mergeSettings(): void {
   console.log(`  Updated: ${SETTINGS_PATH}`);
 }
 
-function mergeHookEntry(
-  existing: unknown[],
-  entry: Record<string, unknown>,
-  matchStrings: string[],
-): unknown[] {
-  // Remove any existing purecontext entry for this hook type (idempotent).
-  // Matches both old .mjs script paths and current CLI command forms.
-  const filtered = existing.filter((e) => {
+/** Remove any purecontext-owned entry for a hook type (matches old .mjs paths + CLI forms). */
+function removeHookEntry(existing: unknown[], matchStrings: string[]): unknown[] {
+  return existing.filter((e) => {
     const hooks = (e as Record<string, unknown[]>).hooks ?? [];
     return !hooks.some((h) => {
       const cmd = (h as Record<string, string>).command ?? '';
       return matchStrings.some((s) => cmd.includes(s));
     });
   });
-  return [...filtered, entry];
+}
+
+function mergeHookEntry(
+  existing: unknown[],
+  entry: Record<string, unknown>,
+  matchStrings: string[],
+): unknown[] {
+  // Remove any existing purecontext entry for this hook type (idempotent),
+  // then append the fresh one.
+  return [...removeHookEntry(existing, matchStrings), entry];
 }
 
 function areSettingsMerged(): boolean {
@@ -643,11 +692,11 @@ export async function cmdHookSubagentStart(): Promise<void> {
 export function runHooksCommand(args: string[]): void {
   const flag = args[0];
   if (flag === '--install') {
-    cmdHooksInstall();
+    cmdHooksInstall({ withReminders: args.includes('--with-reminders') });
   } else if (flag === '--list') {
     cmdHooksList();
   } else {
-    process.stderr.write('Usage: purecontext-mcp hooks --install | --list\n');
+    process.stderr.write('Usage: purecontext-mcp hooks --install [--with-reminders] | --list\n');
     process.exit(1);
   }
 }

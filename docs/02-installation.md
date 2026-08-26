@@ -32,7 +32,10 @@ The `@latest` tag is recommended in AI-client configurations so new versions are
 
 ## Prebuilt binary support matrix
 
-`better-sqlite3` is the only native dependency. Prebuilt binaries are bundled for:
+`better-sqlite3` is the only native dependency — and since v1.24.0 it is an
+**optional dependency**: if its install or build fails (no prebuilt binary for
+your Node version, no local C++ toolchain), `npm install` still succeeds and
+the WASM tier (below) takes over at runtime. Guaranteed prebuilt binaries:
 
 | Platform | Node 18 | Node 20 | Node 22 |
 |----------|:-------:|:-------:|:-------:|
@@ -42,7 +45,11 @@ The `@latest` tag is recommended in AI-client configurations so new versions are
 | Linux x64 | ✓ | ✓ | ✓ |
 | Linux arm64 | ✓ | ✓ | ✓ |
 
-When your platform matches a row above, `npm install` completes with zero native compilation. For unsupported combinations, `npm install` falls back to a source build, which requires Python 3.x, a C++ toolchain, and `node-gyp`.
+Newer Node lines (24, 26) get native prebuilds as upstream `better-sqlite3`
+ships them. Where none exists, npm attempts a source build (Python 3.x + C++
+toolchain); if that fails the install still completes and the server runs on
+the WASM tier — no "use node@22, not node" workaround needed.
+`npx purecontext-mcp config --check` reports which tier is active.
 
 ### Runs on any Node ≥ 18 (WASM fallback)
 

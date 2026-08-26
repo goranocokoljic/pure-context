@@ -79,6 +79,7 @@ Companion narratives also relevant here: [Making Changes Safely](../SAFE-CHANGES
 - [Troubleshooting](26-troubleshooting.md) — common errors, `--health` output, debug logging
 - [Architecture Overview](25-architecture-overview.md) — three-layer design, data flow, SQLite schema
 - [API Stability & Changelog](27-api-stability.md) — semver policy, stable vs experimental tools, version history
+- [Operations Guide](28-operations.md) — large repos, chunked commits, scoped indexes, branch discipline, post-index verification, privacy defaults
 
 ---
 

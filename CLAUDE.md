@@ -123,7 +123,11 @@ dev-docs/          # Phase task files, benchmark notes (gitignored, not public)
 
 ## Current Phase
 
-**Latest: Phase 90 — COMPLETE** (Offset Integrity — char-vs-byte corruption in stored symbol spans)
+**Latest: Phase 91 — COMPLETE** (Index Durability at Scale + Install UX — install-runbook findings)
+
+Trigger: the reporter's install runbook (`dev-docs/purecontext-install-runbook.md`) — 89,187-file tree ran 110 min committing ZERO rows (one unbounded transaction, 4KB main .db + 444MB WAL, kill = total loss), installer "is a trap" (7 hooks, per-edit stderr reminder, ~3KB absolutist instruction block), `.gitignore` beat user excludePatterns, Node 26 forced a native compile. (1) **Task 563 chunked commits:** the single outer transaction in `index-manager` replaced by per-batch transactions (`indexing.commitBatchSize` config + `IndexOptions.commitBatchSize` override, default 500; 0 = pre-91 single transaction) with `PRAGMA wal_checkpoint(PASSIVE)` per batch (try/catch — WASM tier tolerated); PARALLEL path runs one `pool.run` per batch (peak memory = one batch of parse results, not the whole repo), SEQUENTIAL path parses async per chunk then writes one sync transaction (better-sqlite3 transactions can't await); shared `commitBatch` closure = one write-body for both paths; kill+resume works because upsertFile commits per batch and the hash cache skips committed files; additive `batchesCommitted` on IndexResult + tool response. (2) **Task 565 exclusion precedence:** `buildIgnoreFilter` order now built-ins → `.gitignore` → USER patterns (later wins negations in the `ignore` package, so `!protected/` in config rescues a nested repo the root .gitignore hides — previously impossible); honesty pre-pass reports TOP-LEVEL dirs entirely dropped with rule source (`excludedDirs: [{dir, source: builtin|gitignore|config}]` — builtin drops filtered out of the tool response as expected noise); RabbitMQ trailing-slash negation tests stay green. (3) **Task 564 installer diet:** all four questioned hook events VERIFIED against current Claude Code docs (WorktreeCreate/WorktreeRemove/TaskCompleted/SubagentStart all exist — none deleted); PreToolUse edit reminder now opt-in (`hooks --install --with-reminders`; default run REMOVES a previously opted-in reminder so re-runs converge; foreign PreToolUse hooks never touched); `install claude`/`install all` default = registration + instruction block only, hooks behind `--with-hooks` (global scope still injects ~/.claude/CLAUDE.md via `injectClaudeMd`); print-before-write; `assets/agent-rules.md` rewritten as defaults-with-exceptions (~half size, "Prefer…" not "Never…", gate loop scoped to non-trivial changes) + `npm run sync:rules`. (4) **Task 566 clean install on current Node:** `better-sqlite3` → **optionalDependencies** (install succeeds without a toolchain; Phase-78 WASM tier takes over at runtime), prebuild targets extended (+node@24/26 — matrix claim in docs kept honest: upstream-dependent), postinstall canary message now says "NOT fatal, WASM fallback"; `config --check` made async and reports the ACTIVE tier via `initSqliteBackend()` (was: a sync native-only probe that couldn't see the WASM tier). (5) **Task 567 runbook → docs:** new `docs/28-operations.md` (scoped-index guidance + corpus-hygiene numbers 56.1%→78.2%→96.9%, post-index verification recipe, branch discipline incl. worktree-per-branch + rebase→invalidate_cache, privacy defaults, PCTX_DATA_DIR, registration pinning + `--scope local` = git-repo-root); README + docs/README links; AGENT_REFERENCE "name the tool explicitly" deferred-tools row; docs/02 native-binary section rewritten (optional dep + tier check, "use node@22" caveat dropped). New tests: chunked-commits (4), discovery-precedence (7), hooks-defaults (4); cmdCheck tests await. Version **1.24.0**. Tasks 563–568. **Offered to the reporter:** re-run the 89k tree — durability is the unblock (their per-file rates predict ~35–90 min). Gap-analysis-v2 strawman phases shift to 92 (resolver hygiene) / 93 (visibility) / 94 (honesty sweep). See `dev-docs/PHASE91_TASKS.md`.
+
+**Phase 90 — COMPLETE** (Offset Integrity — char-vs-byte corruption in stored symbol spans)
 
 Trigger: gap-analysis-v2 CRITICAL 1. The old "CRLF offset drift" memory was a MISDIAGNOSIS (`\r` is 1 byte = 1 char): `parse-dispatcher` feeds tree-sitter a decoded string, so `node.startIndex` is a UTF-16 code-unit index — stored as `startByte` and then used to slice raw byte Buffers. 254/267 of PureContext's own src files (95%) had non-zero drift (em-dashes, `───` dividers, `→`); `get_symbol_source(verifyContentHash)` started ~8 lines early. Fix (canonical decision: **storage = TRUE bytes; conversion ONCE in the pipeline**): (1) **`src/core/offsets.ts`** — `buildOffsetConverter(buffer, decoded?)` (ASCII identity fast path `buffer.length === str.length` → shared zero-cost converter; surrogate pairs 2 units/4 bytes; BOM 1 unit/3 bytes; out-of-range clamps so `str.length` AND `buffer.length` both map to `buffer.length` — whole-file spans survive either convention), `convertSymbolSpans`, `lineOfByte`, `lineOfChar`, memoized `decodeCached` (WeakMap). (2) **`file-processor.ts` converts at 4 sites** (normal tree parse, C-header fallback, adapter preProcess per-BLOCK — block char indices were being added to the BYTE `offsetInOriginal`, a real mixed-math bug on SFCs with non-ASCII before the script block — and adapter non-preProcess tree branch) + `frameworkSymbols` uniformly; the android adapter's local `byteOffset` helper was deleted so ALL adapters emit char-space. **Regex-only handlers (19) already emitted true bytes (`Buffer.byteLength` line accumulation) and are NOT converted** — documented contract in the file-processor header. (3) **Audit result: every stored-span consumer was already byte-space** (Buffer slices / byte newline counts) — zero char-space consumers, so the storage fix healed all ~30 sites without touching them; 11 duplicate `byteOffsetToLine` impls consolidated onto `symbol-lines.ts` → `offsets.lineOfByte`. (4) **Bonus bug class (audit find):** go/javascript/python/ruby handlers built signatures via `Buffer.toString('utf8', charIdx, charIdx)` (byte-range API fed char indices → garbled text after multi-byte chars) — now `decodeCached(source).slice(...)` (rust/php already documented the rule). (5) **Live-re-parse tools pure char-space:** `search_ast` (+ response `startByte`/`endByte` now converted to true bytes), `get_lexical_scope_matches` (memoized decode), `search_by_decorator` — exact snippets + `lineOfChar` line numbers. (6) **Stale indexes: schema v10→v11** (values-correctness bump, no DDL); `indexFolder` force-re-parses pre-v11 repos once (empty hash cache — the Phase-89 v10 mechanism widened); `check_index_staleness` returns `schemaWarning` on pre-v11. (7) Proofs: e2e mixed-encoding fixture (BOM/CRLF/emoji/CJK/em-dash + ASCII control) — every stored symbol byte-slices losslessly + exact-declaration spot checks; **self-index of PureContext: 5,919 symbols, 0 lossy slices, `verifyContentHash` byte-exact**; `analyze_diff` wrong-symbol-attribution fixture (60-em-dash header) green. New tests: offsets (14), file-processor-offsets (6), offset-integrity-e2e (3), live-parse-charspace (3), analyze-diff attribution (1). Version **1.23.0**. Tasks 555–560. See `dev-docs/PHASE90_TASKS.md`.
 
@@ -183,7 +187,7 @@ Tasks 451–459 complete. Adds the one capability the static graph cannot derive
 
 **Phase 75 — COMPLETE** (Adapter-extension wiring fixes + Svelte/Astro support). Tasks 440–450 complete. **Root cause from the `.vue not indexed` investigation:** `indexFolder()` never called `discoverAdapters()` (fixed in 1.6.0 — adapters now auto-discovered when `options.adapters` is absent). Phase 75 closes the remaining instances of the same bug class and adds two new SFC adapters. (1) File watcher (`file-watcher.ts`) and GitHub remote-index path (`index-repo.ts`) now union `getAdapterExtensions(getRegisteredAdapters())` into their handler-extension sets, so `.vue`/`.svelte`/`.astro` edits trigger re-index and remote SFC blobs aren't dropped. New exported `watchedExtensions()` helper for testability. (2) Benchmark harness (`run_benchmark.ts` + `run_purecontext.ts`) now imports all framework adapters for self-registration — previously it registered 40 handlers but 0 adapters, so it had **never** indexed `.vue` (historical Vue/Nuxt benchmark numbers measured only `.ts`/`.scss`). Expect Vue/Nuxt benchmark deltas on next run — measurement-scope correction, not a regression. (3) New **Svelte** adapter (`.svelte`): `splitSvelteSFC` extracts `<script>`/`<script context="module">` blocks; component symbol per file; `useXxx`→composable. (4) New **Astro** adapter (`.astro`): `splitAstroSFC` extracts leading `---` frontmatter as a TS block; component symbol per file. Both use a shared `detect-utils.ts` (bounded recursive monorepo detection mirroring Vue/Nuxt; Vue/Nuxt keep their own inline copies). Registered in all three registries (`src/index.ts`, `indexing-worker.ts`, both harness files). 39 new tests (svelte/astro preprocessor + adapter + watcher). Version bumped to **1.7.0** (from actual 1.6.0). See `dev-docs/PHASE75_TASKS.md`.
 
-Phases 51–75 summaries and all earlier history live in `dev-docs/PHASE*_TASKS.md` (one file per phase) and the auto-memory index. Current real version: **1.23.0**.
+Phases 51–75 summaries and all earlier history live in `dev-docs/PHASE*_TASKS.md` (one file per phase) and the auto-memory index. Current real version: **1.24.0**.
 
 ---
 
@@ -193,6 +197,10 @@ Recent significant decisions:
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
+| 2026-08-26 | Phase 91: batched commits replace the single outer transaction; WAL checkpoint per batch | The spinning-disk single-transaction optimization became the scale wall: nothing committed until the END, so a killed 89k-file run (110 min) lost everything, and FTS5-vs-growing-WAL was the super-linear term. Per-batch transactions (default 500 files) keep small repos at effectively one commit while giving big runs durability + a monotonically growing main .db; `wal_checkpoint(PASSIVE)` per batch stops WAL ballooning without blocking readers; the parallel path also gains a memory cap (one batch of parse results in flight). Resume needed zero new machinery — the content-hash skip cache already did it, it just never got committed data to work with. |
+| 2026-08-26 | Phase 91: exclusion precedence = built-ins → .gitignore → user patterns (user LAST); report whole-directory drops | The `ignore` package gives later rules negation precedence, and .gitignore-added-last meant NO user config could rescue a directory a repo .gitignore hid (verified: a nested repo silently dropped). User intent must outrank repo defaults, and built-ins stay first so users can still `!node_modules/` them deliberately. The honesty signal reports only gitignore/config drops at top level (builtin drops are expected noise) — complements gap-analysis H7 without building the full per-file drop report. |
+| 2026-08-26 | Phase 91: installer safe-by-default — hooks opt-in, reminder double-opt-in, absolutist rules softened; all 7 hook events kept (verified documented) | The runbook's complaint was surprise and noise, not capability: default `install` now registers + writes instructions only (`--with-hooks` opts in); the per-edit stderr reminder trains users to ignore output so it's a separate `--with-reminders`, and a default re-run REMOVES it (converges, never leaves surprise state); the four "undocumented" events (WorktreeCreate/WorktreeRemove/TaskCompleted/SubagentStart) were verified against current Claude Code docs and ALL exist — deletion would have been wrong. agent-rules.md rewritten defaults-with-exceptions because the chat fragment showed absolutist rules get rationalized away wholesale rather than followed partially. |
+| 2026-08-26 | Phase 91: better-sqlite3 → optionalDependencies; config --check reports the active SQLite tier | A failed native build aborted the ENTIRE npm install on Node versions without a prebuild — the Phase-78 WASM runtime tier existed but was unreachable from a normal install. As an optional dep the build failure is non-fatal and the tier chain takes over; the risk (silently slower WASM) is countered by making the active tier visible: config --check now async-inits the real backend and prints it, and the postinstall canary says "NOT fatal — WASM fallback" instead of prescribing a Node downgrade. |
 | 2026-08-26 | Phase 90: canonical storage = TRUE byte offsets, converted ONCE in file-processor; handlers keep emitting node indices | Tree-sitter node indices are UTF-16 code units (decoded-string parsing), and ~200 handler sites store them — converting in each handler is unmaintainable, while converting at the shared pipeline choke point fixes every emitter at 4 sites. Regex-only handlers already computed true bytes (Buffer.byteLength line accumulation) and are exempt; all adapters were normalized to char-space (android's local byteOffset helper deleted) so frameworkSymbols convert uniformly. ASCII files take a shared identity converter (byte-identical output by construction, regression-guarded). |
 | 2026-08-26 | Phase 90: pre-v11 indexes heal by schema-version force-re-parse, not by migration or docs caveat | Corrupted span VALUES cannot be fixed without re-parsing (no migration can recover char→byte without the source), and a docs-only caveat leaves agents silently reading shifted source. The Phase-89 v10 mechanism (empty hash cache in indexFolder when repo schemaVersion < N) was widened to < 11 — one full re-parse on next index_folder, plus a `schemaWarning` from check_index_staleness until then. |
 | 2026-08-26 | Phase 90: query-time re-parse tools operate purely in CHAR space; never mix node indices with Buffers | search_ast/search_by_decorator/get_lexical_scope_matches parse fresh at query time — converting to bytes there is pointless work; the bug was slicing Buffers (or counting buffer newlines) with char indices. Rule: decoded string slices + lineOfChar for lines. The one byte-space output (search_ast's startByte/endByte response fields) IS converted, because the field names promise bytes. Same rule applied to the handler-internal signature builders (go/js/py/ruby) the audit caught slicing buffers with `toString('utf8', charIdx, charIdx)`. |
@@ -338,59 +346,28 @@ claude mcp add purecontext-mcp npx purecontext-mcp
 <!-- purecontext-mcp-start -->
 ## PureContext MCP — Code Navigation & Safe Change
 
-Use PureContext MCP tools to read and change code. Never read whole files to find code, and assess impact before you edit.
+Prefer PureContext MCP tools for code navigation and impact checks — one indexed lookup usually replaces several whole-file reads. These are defaults, not hard rules: fall back to plain file reads when the index lacks what you need or you already know exactly where to look.
 
-### Mandatory workflow
+### Recommended workflow
 
-1. **Start every session**: `list_repos()` → get `repoId` (required for all tools). Not indexed? `index_folder({ path })`.
-2. **Orient on a task**: `get_task_context({ repoId, task })` → the symbols and files most relevant to the work, walked over the real dependency + co-change graph (not just keyword matches), plus `evidenceGaps` for what you haven't seen yet. If it returns nothing, your task text shares no terms with indexed symbols and no embeddings are configured — name a real symbol/term, or fall back to `search_symbols`/`search_semantic`.
-3. **Find code**: `search_symbols` (by name) → read `summary`/`signature` → `get_symbol_source` only for what you'll edit. `search_semantic` for concepts, `search_text` for literals.
+1. `list_repos()` once per session → `repoId` (all tools need it). Not indexed? `index_folder({ path })`.
+2. Orient: `get_task_context({ repoId, task })` → the most relevant symbols + files, walked over the real dependency/co-change graph. Empty result → name a real symbol, or use `search_symbols` / `search_semantic`.
+3. Find: `search_symbols` (names), `search_semantic` (concepts), `search_text` (literals). Read `summary`/`signature` first; fetch `get_symbol_source` for what you will actually work with.
 
-### Changing code safely — close the loop
+### For non-trivial changes — close the loop
 
-PureContext is judgment, not actuation: it never edits files. You make the edit; these tools say what's safe and what you forgot.
+PureContext is judgment, not actuation: you make the edit; these tools say what's safe and what you forgot. Use them when the change is risky or touches shared code; skip them for trivial edits.
 
-1. **Before editing existing code**: `prepare_change({ repoId, intent, targetSymbolId | query })` → predicted files, risk, co-changing files you'd forget (`missingCoChange`), tests, and a `gate`. Keep `predictedFilePaths` + `missingCoChange` for step 5.
-2. **Before writing a NEW symbol** (greenfield): `check_consistency({ repoId, name, kind, signature, intendedFilePath })` → duplicates ("you already wrote this"), the pattern to follow, where it belongs.
-3. **Make the edit.**
-4. **Refresh the index**: `index_file({ repoId, filePaths })` after each write — O(one file). Never `index_folder` mid-task (it re-scans the whole tree).
-5. **Verify**: `verify_change({ repoId, diff, predictedFilePaths, predictedCoChange })` → did you address everything (and only what) you planned?
-6. **Before merge**: `merge_readiness({ repoId, diff, ... })` → one go/no-go folding completeness + architecture regression.
+- Pre-edit: `prepare_change` (existing code) or `check_consistency` (new symbols) → risk, forgotten co-change partners (`missingCoChange`), tests, and a `gate`.
+- After a write: `index_file({ repoId, filePaths })` — one file, cheap. Prefer it over full `index_folder` mid-task.
+- Verify: `verify_change({ repoId, diff, predictedFilePaths, predictedCoChange })`; pre-merge: `merge_readiness`.
+- Gate tools return `{ gate: "pass" | "warn" | "block", gateReasons, nextAction }` — `block` means fix first.
 
-Every gate tool returns `{ gate: "pass" | "warn" | "block", gateReasons, nextAction }` — branch on `gate`: `pass`=proceed, `warn`=proceed with judgment, `block`=fix first.
+### Useful defaults
 
-### Pick the right tool
+- Impact before changing a shared symbol: `get_blast_radius`; every call site: `find_references`; risk verdict: `get_symbol_risk`.
+- Rename / delete / move pre-flight: `check_rename_safe` / `check_delete_safe` / `check_move_safe`.
+- A `verdict: "no_match"` from `search_symbols` means the symbol is not in the index — report the gap instead of retrying many query variants.
 
-| I need to… | Use |
-|------------|-----|
-| Orient on a task (relevant symbols + files) | `get_task_context` |
-| Find a function/class/method by name | `search_symbols` |
-| Find code by what it does (meaning) | `search_semantic` |
-| Find a literal string / comment / config value | `search_text` |
-| Read a symbol's implementation | `get_symbol_source` |
-| Survey one file / whole project | `get_file_outline` / `get_repo_outline` |
-| Know what breaks if I change a symbol | `get_blast_radius` |
-| Find every call site of a symbol | `find_references` |
-| Judge how risky a symbol is to change | `get_symbol_risk` |
-| Files that historically change together | `get_co_change` |
-| Impact verdict BEFORE an edit | `prepare_change` |
-| Dedup / pattern check before writing NEW code | `check_consistency` |
-| Re-index a file after editing it (mid-task) | `index_file` |
-| Confirm a finished edit is complete | `verify_change` |
-| Did my change add a cycle / layer violation? | `compare_change_impact` |
-| One go/no-go before merging | `merge_readiness` |
-| Pre-flight a rename / delete / move | `check_rename_safe` / `check_delete_safe` / `check_move_safe` |
-| Find exported symbols with no tests | `find_untested_symbols` |
-| Codebase health / debt report | `health_radar` / `get_debt_report` |
-
-### Anti-patterns — never do these
-
-- Do not read whole files to find a function — use `search_symbols` + `get_symbol_source`
-- Do not call `get_symbol_source` for every result — read `summary` first
-- Do not skip `list_repos` — every tool needs a `repoId`
-- Do not run `index_folder` after every edit — use `index_file` (single-file, cheap)
-- Do not use `search_text` for symbol lookups — use `search_symbols`
-- Do not re-search after `verdict: "no_match"` — the symbol does not exist
-
-Full tool reference, navigation patterns, and harness loop recipes: **`AGENT_REFERENCE.md`** and **`docs/HARNESS-CONTRACT.md`**.
+Full tool reference: `AGENT_REFERENCE.md` in the project root; harness loop recipes: `docs/HARNESS-CONTRACT.md`.
 <!-- purecontext-mcp-end -->

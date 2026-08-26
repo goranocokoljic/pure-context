@@ -1,6 +1,6 @@
 {
   "name": "purecontext-mcp",
-  "version": "1.23.0",
+  "version": "1.24.0",
   "description": "Change-aware code intelligence for AI coding agents (MCP): blast radius, temporal co-change, and per-symbol risk before the edit — built on token-efficient code navigation",
   "type": "module",
   "license": "MIT",
@@ -86,7 +86,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
-    "build:prebuilds": "prebuildify --napi --strip --targets node@18 node@20 node@22",
+    "build:prebuilds": "prebuildify --napi --strip --targets node@18 node@20 node@22 node@24 node@26",
     "prepublishOnly": "npm run build && npm test",
     "postinstall": "node scripts/check-sqlite.js"
   },
@@ -97,7 +97,6 @@
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@sqlite.org/sqlite-wasm": "3.53.0-build1",
     "@types/js-yaml": "^4.0.9",
-    "better-sqlite3": "^11.9.0",
     "chokidar": "^3.6.0",
     "hnswlib-wasm": "^0.8.2",
     "ignore": "^7.0.5",
@@ -105,6 +104,9 @@
     "minimatch": "^9.0.9",
     "web-tree-sitter": "^0.22.6",
     "zod": "^4.3.6"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.9.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

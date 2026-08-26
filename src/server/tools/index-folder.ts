@@ -49,6 +49,11 @@ export async function handler(
             warnings: result.warnings,
             limitReached: result.limitReached,
             totalBeforeLimit: result.totalBeforeLimit,
+            ...(result.batchesCommitted !== undefined
+              ? { batchesCommitted: result.batchesCommitted }
+              : {}),
+            ...(result.filesPruned !== undefined ? { filesPruned: result.filesPruned } : {}),
+            ...(result.excludedDirs ? { excludedDirs: result.excludedDirs } : {}),
             _meta: buildMeta({ timingMs: result.durationMs }),
           },
           null,

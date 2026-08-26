@@ -14,7 +14,7 @@
 import { createInterface } from 'readline';
 import { join } from 'path';
 import { detectInstalledIDEs } from './install-detect.js';
-import { INSTALL_WRITERS, type Scope } from './install-writers.js';
+import { INSTALL_WRITERS, type Scope, type InstallWriterOptions } from './install-writers.js';
 
 // ─── Scope helpers ────────────────────────────────────────────────────────────
 
@@ -71,17 +71,28 @@ function isKnownTool(tool: string): tool is KnownTool {
   return (KNOWN_TOOLS as readonly string[]).includes(tool);
 }
 
-async function runInstall(tool: string, projectRoot: string, dryRun: boolean, scope: Scope): Promise<boolean> {
+async function runInstall(
+  tool: string,
+  projectRoot: string,
+  dryRun: boolean,
+  scope: Scope,
+  opts: InstallWriterOptions = {},
+): Promise<boolean> {
   const writer = INSTALL_WRITERS[tool];
   if (!writer) return false;
 
   if (dryRun) {
     console.log(`  [dry-run] Would install: ${tool} (${scope})`);
+    if (tool === 'claude') {
+      console.log(
+        `  [dry-run]   hooks: ${opts.withHooks ? 'YES (--with-hooks)' : 'no (default; pass --with-hooks)'}`,
+      );
+    }
     return true;
   }
 
   try {
-    await writer(projectRoot, scope);
+    await writer(projectRoot, scope, opts);
     return true;
   } catch (err) {
     process.stderr.write(`  Error installing ${tool}: ${(err as Error).message}\n`);
@@ -91,7 +102,13 @@ async function runInstall(tool: string, projectRoot: string, dryRun: boolean, sc
 
 // ─── Sub-commands ─────────────────────────────────────────────────────────────
 
-async function cmdInstallOne(tool: string, projectRoot: string, dryRun: boolean, scope: Scope): Promise<void> {
+async function cmdInstallOne(
+  tool: string,
+  projectRoot: string,
+  dryRun: boolean,
+  scope: Scope,
+  opts: InstallWriterOptions,
+): Promise<void> {
   if (!isKnownTool(tool)) {
     process.stderr.write(
       `Unknown tool: "${tool}"\nValid tools: ${KNOWN_TOOLS.join(', ')}\n`,
@@ -99,13 +116,18 @@ async function cmdInstallOne(tool: string, projectRoot: string, dryRun: boolean,
     process.exit(1);
   }
 
-  const ok = await runInstall(tool, projectRoot, dryRun, scope);
+  const ok = await runInstall(tool, projectRoot, dryRun, scope, opts);
   if (ok && !dryRun) {
     console.log(`\nInstalled for ${tool} (${scope}).`);
   }
 }
 
-async function cmdInstallAll(projectRoot: string, dryRun: boolean, scope: Scope): Promise<void> {
+async function cmdInstallAll(
+  projectRoot: string,
+  dryRun: boolean,
+  scope: Scope,
+  opts: InstallWriterOptions,
+): Promise<void> {
   const detected = await detectInstalledIDEs(projectRoot);
 
   if (detected.length === 0) {
@@ -126,7 +148,7 @@ async function cmdInstallAll(projectRoot: string, dryRun: boolean, scope: Scope)
 
   for (const tool of toInstall) {
     const label = `Installing ${tool}...`.padEnd(24);
-    const ok = await runInstall(tool, projectRoot, dryRun, scope);
+    const ok = await runInstall(tool, projectRoot, dryRun, scope, opts);
     console.log(`${label} ${ok ? '✓' : '✗'}`);
   }
 
@@ -152,6 +174,11 @@ export async function runInstallCommand(args: string[]): Promise<void> {
   const projectRoot = process.cwd();
   const dryRun = args.includes('--dry-run');
   const listFlag = args.includes('--list');
+  // Phase 91 safe-by-default: hooks only on explicit request.
+  const opts: InstallWriterOptions = {
+    withHooks: args.includes('--with-hooks'),
+    withReminders: args.includes('--with-reminders'),
+  };
   const toolArg = args.find((a) => !a.startsWith('--'));
 
   if (listFlag) {
@@ -161,7 +188,8 @@ export async function runInstallCommand(args: string[]): Promise<void> {
 
   if (!toolArg) {
     process.stderr.write(
-      'Usage: purecontext-mcp install <tool|all>  [--scope=local|global|both]  [--dry-run]  [--list]\n',
+      'Usage: purecontext-mcp install <tool|all>  [--scope=local|global|both]  ' +
+        '[--with-hooks]  [--with-reminders]  [--dry-run]  [--list]\n',
     );
     process.stderr.write(`Supported tools: ${KNOWN_TOOLS.join(', ')}\n`);
     process.exit(1);
@@ -170,8 +198,8 @@ export async function runInstallCommand(args: string[]): Promise<void> {
   const scope: Scope = parseScope(args) ?? (await promptScope());
 
   if (toolArg === 'all') {
-    await cmdInstallAll(projectRoot, dryRun, scope);
+    await cmdInstallAll(projectRoot, dryRun, scope, opts);
   } else {
-    await cmdInstallOne(toolArg, projectRoot, dryRun, scope);
+    await cmdInstallOne(toolArg, projectRoot, dryRun, scope, opts);
   }
 }

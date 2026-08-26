@@ -11,6 +11,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.24.0] - 2026-08-26 — Phase 91: Index Durability at Scale + Install UX
+
+From the reporter's installation runbook on a ~90k-file polyrepo: an index of
+that tree ran 110 minutes and committed ZERO rows (one unbounded transaction),
+and the installer was called "a trap". Both fixed.
+
+### ⚠ Installer behavior change (user-visible)
+
+- **`install claude` / `install all` no longer install hooks by default.**
+  Default = MCP registration + instruction block only. Opt in with
+  `--with-hooks`. `hooks --install` remains the explicit path.
+- **The PreToolUse per-edit stderr reminder is now opt-in**
+  (`--with-reminders`); re-running the installer without the flag removes a
+  previously installed reminder. All other hook events were verified against
+  current Claude Code documentation (WorktreeCreate, WorktreeRemove,
+  TaskCompleted, SubagentStart all exist) and are kept.
+- The installer prints exactly what it will write, where, BEFORE writing.
+- The injected instruction block was rewritten as defaults-with-exceptions
+  (roughly half the size, no absolutist rules that fight other instructions).
+
+### Fixed (critical)
+
+- **Chunked index commits.** `index_folder` commits every N files
+  (`indexing.commitBatchSize`, default 500; 0 = old single-transaction
+  behavior) with a passive WAL checkpoint per batch. A killed run keeps every
+  committed batch and resumes via the content-hash cache. Response gains
+  `batchesCommitted`. Peak memory also drops: parse results are held one
+  batch at a time.
+- **User excludePatterns now override the repo .gitignore.** Precedence is
+  built-ins → .gitignore → user patterns, so `!protected/` in config can
+  rescue a nested repo the root .gitignore hides. Discovery also reports
+  top-level directories dropped entirely by ignore rules (`excludedDirs` with
+  rule source).
+
+### Changed
+
+- **`better-sqlite3` moved to optionalDependencies** — `npm install` succeeds
+  on any Node ≥ 18 without a C++ toolchain; the Phase-78 WASM tier takes over
+  at runtime. `config --check` now reports the active SQLite tier. Prebuild
+  targets extended toward current Node lines.
+- New docs: `docs/28-operations.md` (scoped indexes, verification recipe,
+  branch discipline, privacy defaults, PCTX_DATA_DIR) — the runbook's
+  operational knowledge, official.
+
+---
+
 ## [1.23.0] - 2026-08-26 — Phase 90: Offset Integrity (char-vs-byte fix)
 
 The `start_byte`/`end_byte` columns now hold TRUE byte offsets on every

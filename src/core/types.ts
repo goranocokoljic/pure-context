@@ -120,6 +120,11 @@ export interface AISummarizerService {
 export interface IndexOptions {
   fileLimit?: number;
   excludePatterns?: string[];
+  /**
+   * Commit indexed files every N files (Phase 91 chunked commits). Overrides
+   * config `indexing.commitBatchSize`. 0 = one transaction for the whole run.
+   */
+  commitBatchSize?: number;
   watch?: boolean;
   watchDebounceMs?: number;
   /** Active framework adapters to apply during indexing. */
@@ -208,6 +213,18 @@ export interface IndexResult {
   filesPruned?: number;
   /** Files discovery found before fileLimit was applied. */
   totalBeforeLimit: number;
+  /**
+   * Number of per-batch transactions committed during processing (Phase 91
+   * chunked commits). 1 for small repos that fit one batch; 0 when nothing
+   * needed processing.
+   */
+  batchesCommitted?: number;
+  /**
+   * Top-level directories that discovery excluded ENTIRELY, with the rule
+   * source (Phase 91 honesty signal — a root .gitignore can silently drop a
+   * whole nested repo).
+   */
+  excludedDirs?: Array<{ dir: string; source: 'builtin' | 'gitignore' | 'config' }>;
 }
 
 export interface DiscoveredFile {

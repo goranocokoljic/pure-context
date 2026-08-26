@@ -19,19 +19,18 @@ try {
   process.stderr.write(
     '\n' +
     '╔══════════════════════════════════════════════════════════════╗\n' +
-    '║  PureContext MCP — native module load failed                 ║\n' +
+    '║  PureContext MCP — native SQLite unavailable                 ║\n' +
     '╠══════════════════════════════════════════════════════════════╣\n' +
     '║  better-sqlite3 could not load its native binary.            ║\n' +
     '║                                                              ║\n' +
-    '║  This usually means:                                         ║\n' +
-    '║    • Your Node.js version is not 18, 20, or 22.              ║\n' +
-    '║    • The prebuilt binary for your platform is missing.       ║\n' +
+    '║  This is NOT fatal: PureContext falls back to a pure-WASM    ║\n' +
+    '║  SQLite engine at runtime (slower, but fully functional on   ║\n' +
+    '║  any Node >= 18).                                            ║\n' +
     '║                                                              ║\n' +
-    '║  To rebuild from source (requires Python + build tools):     ║\n' +
+    '║  For native speed (requires Python + build tools):           ║\n' +
     '║    npm rebuild better-sqlite3                                ║\n' +
-    '║                                                              ║\n' +
-    '║  To report an issue:                                         ║\n' +
-    '║    https://github.com/Goran-Ocokoljic/purecontext-mcp/issues ║\n' +
+    '║  Check which tier is active:                                 ║\n' +
+    '║    npx purecontext-mcp config --check                        ║\n' +
     '╚══════════════════════════════════════════════════════════════╝\n' +
     '\n' +
     '  Error detail: ' + err.message + '\n\n'
