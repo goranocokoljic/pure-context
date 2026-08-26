@@ -2062,4 +2062,23 @@ describe('rankSymbols — unexported visibility penalty', () => {
     );
     expect(results[0]!.symbol.name).toBe('helperLookup');
   });
+
+  // Phase 87: Rust module-private items ride the same penalty
+  it('applies -20 to Rust symbols with visibility "module"', () => {
+    const modSym: SymbolRecord = {
+      ...sym('parse_config', { filePath: 'src/config.rs' }),
+      frameworkMeta: { visibility: 'module' },
+    };
+    const results = rankSymbols([modSym], 'parse config', true);
+    expect(results[0]!.debugScore?.unexportedPenalty).toBe(-20);
+  });
+
+  it('does NOT penalize Rust visibility "crate" (crate-visible API)', () => {
+    const crateSym: SymbolRecord = {
+      ...sym('parse_config', { filePath: 'src/config.rs' }),
+      frameworkMeta: { visibility: 'crate' },
+    };
+    const results = rankSymbols([crateSym], 'parse config', true);
+    expect(results[0]!.debugScore?.unexportedPenalty).toBe(0);
+  });
 });

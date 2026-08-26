@@ -931,13 +931,15 @@ function score(
   // names must not outrank it.  Mild penalty (-20): below the library penalty
   // (-35) and well below identityExact (+40), so an explicit search for the
   // exact unexported name still surfaces it at the top.
+  // Phase 87 extends the same rule to Rust: no-modifier items are indexed with
+  // visibility 'module' (module-private) — same "findable but not first" call.
   let unexportedPenalty = 0;
-  if (
-    (symbol.frameworkMeta as Record<string, unknown> | undefined)?.['visibility'] ===
-    'unexported'
-  ) {
-    unexportedPenalty = -20;
-    total += unexportedPenalty;
+  {
+    const vis = (symbol.frameworkMeta as Record<string, unknown> | undefined)?.['visibility'];
+    if (vis === 'unexported' || vis === 'module') {
+      unexportedPenalty = -20;
+      total += unexportedPenalty;
+    }
   }
 
   // ── Core path boost (Task 414) ────────────────────────────────────────────

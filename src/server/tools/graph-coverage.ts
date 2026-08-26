@@ -43,7 +43,9 @@ export function graphCoverageWarning(
     graphCoverageNote:
       'This repo has ZERO import edges — empty results here mean the dependency graph is missing, ' +
       'NOT that nothing depends on the symbol. Import resolution may not cover this language mix ' +
-      '(see LANGUAGE-SUPPORT.md). Use find_references (content scan) and get_co_change (git history) instead, ' +
-      'and re-index if the repo was indexed before v1.15.0.',
+      '(unresolved: Ruby and the long tail — see LANGUAGE-SUPPORT.md). Use find_references ' +
+      '(content scan) and get_co_change (git history) instead, and re-index if the repo was indexed ' +
+      'before the version that added its resolver (JVM v1.15.0, C# v1.16.0, Python/Go v1.17.0, ' +
+      'PHP/Haskell/Elixir/Erlang/Fortran v1.19.0, Rust v1.20.0).',
   };
 }

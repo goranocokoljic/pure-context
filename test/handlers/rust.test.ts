@@ -39,12 +39,26 @@ describe('Rust handler — extractSymbols', () => {
     expect(sym2.id).toBe(sym.id);
   });
 
-  it('does NOT extract private functions', async () => {
+  it('indexes non-pub functions with visibility "module" (Phase 87)', async () => {
     const src = `pub fn exported() {}\nfn private() {}\n`;
     const { tree, buf } = await parse(src);
-    const names = rustHandler.extractSymbols(tree, buf, 'src/a.rs').map((s) => s.name);
-    expect(names).toContain('exported');
-    expect(names).not.toContain('private');
+    const syms = rustHandler.extractSymbols(tree, buf, 'src/a.rs');
+    const exported = syms.find((s) => s.name === 'exported');
+    const priv = syms.find((s) => s.name === 'private');
+    expect(exported).toBeDefined();
+    expect(exported!.frameworkMeta?.['visibility']).toBeUndefined();
+    expect(priv).toBeDefined();
+    expect(priv!.frameworkMeta?.['visibility']).toBe('module');
+  });
+
+  it('indexes pub(crate) items with visibility "crate" (Phase 87)', async () => {
+    const src = `pub(crate) fn internal_api() {}\npub(super) struct Guard {}\n`;
+    const { tree, buf } = await parse(src);
+    const syms = rustHandler.extractSymbols(tree, buf, 'src/a.rs');
+    const fn = syms.find((s) => s.name === 'internal_api');
+    const st = syms.find((s) => s.name === 'Guard');
+    expect(fn!.frameworkMeta?.['visibility']).toBe('crate');
+    expect(st!.frameworkMeta?.['visibility']).toBe('crate');
   });
 
   it('extracts pub struct as kind=class', async () => {
@@ -55,11 +69,13 @@ describe('Rust handler — extractSymbols', () => {
     expect(sym.kind).toBe('class');
   });
 
-  it('does NOT extract private struct', async () => {
+  it('indexes a no-modifier struct with visibility "module" (Phase 87)', async () => {
     const src = `struct Internal {\n    secret: String,\n}\n`;
     const { tree, buf } = await parse(src);
     const syms = rustHandler.extractSymbols(tree, buf, 'src/a.rs');
-    expect(syms).toHaveLength(0);
+    expect(syms).toHaveLength(1);
+    expect(syms[0].name).toBe('Internal');
+    expect(syms[0].frameworkMeta?.['visibility']).toBe('module');
   });
 
   it('extracts pub enum as kind=enum', async () => {
@@ -118,12 +134,13 @@ describe('Rust handler — extractSymbols', () => {
     expect(login!.signature).toContain('login');
   });
 
-  it('does NOT extract private impl methods (no pub)', async () => {
+  it('indexes non-pub impl methods with visibility "module" (Phase 87)', async () => {
     const src = `pub struct MyType {}\nimpl MyType {\n    fn internal_method(&self) {}\n}\n`;
     const { tree, buf } = await parse(src);
     const syms = rustHandler.extractSymbols(tree, buf, 'src/a.rs');
-    const methods = syms.filter((s) => s.kind === 'method');
-    expect(methods.some((m) => m.name === 'internal_method')).toBe(false);
+    const method = syms.find((s) => s.kind === 'method' && s.name === 'internal_method');
+    expect(method).toBeDefined();
+    expect(method!.frameworkMeta?.['visibility']).toBe('module');
   });
 
   it('extracts pub trait impl methods with bare method name', async () => {
@@ -154,11 +171,13 @@ describe('Rust handler — impl_item visibility filtering', () => {
     expect(syms.some((s) => s.name === 'Svc.fetch')).toBe(false);
   });
 
-  it('private fn in impl → NOT extracted', async () => {
+  it('private fn in impl → extracted with visibility "module" (Phase 87)', async () => {
     const src = `pub struct Svc {}\nimpl Svc {\n    fn helper(&self) {}\n}\n`;
     const { tree, buf } = await parse(src);
     const syms = rustHandler.extractSymbols(tree, buf, 'src/a.rs');
-    expect(syms.some((s) => s.name === 'helper')).toBe(false);
+    const helper = syms.find((s) => s.name === 'helper');
+    expect(helper).toBeDefined();
+    expect(helper!.frameworkMeta?.['visibility']).toBe('module');
   });
 
   it('pub(crate) fn in impl → extracted with bare name (starts with pub)', async () => {
@@ -169,7 +188,7 @@ describe('Rust handler — impl_item visibility filtering', () => {
     expect(syms.some((s) => s.name === 'Svc.internal_api')).toBe(false);
   });
 
-  it('mix of pub and private in one impl → only pub extracted with bare names', async () => {
+  it('mix of pub and private in one impl → all extracted, visibility recorded (Phase 87)', async () => {
     const src = [
       'pub struct Cache {}',
       'impl Cache {',
@@ -184,14 +203,16 @@ describe('Rust handler — impl_item visibility filtering', () => {
     const names = methods.map((m) => m.name);
     expect(names).toContain('get');
     expect(names).toContain('set');
-    expect(names).not.toContain('evict');
-    expect(names).not.toContain('hash_key');
+    expect(names).toContain('evict');
+    expect(names).toContain('hash_key');
+    expect(methods.find((m) => m.name === 'get')!.frameworkMeta?.['visibility']).toBeUndefined();
+    expect(methods.find((m) => m.name === 'evict')!.frameworkMeta?.['visibility']).toBe('module');
     // Qualified names should not appear
     expect(names).not.toContain('Cache.get');
     expect(names).not.toContain('Cache.set');
   });
 
-  it('trait impl (impl Trait for Type) — pub methods extracted with bare names, private skipped', async () => {
+  it('trait impl (impl Trait for Type) — all methods extracted with bare names', async () => {
     const src = [
       'pub trait Writer { fn write(&self, data: &str); fn flush(&self); }',
       'pub struct FileWriter {}',
@@ -204,15 +225,16 @@ describe('Rust handler — impl_item visibility filtering', () => {
     const methods = rustHandler.extractSymbols(tree, buf, 'src/a.rs').filter((s) => s.kind === 'method');
     const names = methods.map((m) => m.name);
     expect(names).toContain('write');
-    expect(names).not.toContain('flush');
+    expect(names).toContain('flush');
     expect(names).not.toContain('FileWriter.write');
   });
 
-  it('impl with only private methods → no methods extracted', async () => {
+  it('impl with only private methods → extracted with visibility "module" (Phase 87)', async () => {
     const src = `pub struct Builder {}\nimpl Builder {\n    fn init(&self) {}\n    fn validate(&self) -> bool { true }\n}\n`;
     const { tree, buf } = await parse(src);
     const methods = rustHandler.extractSymbols(tree, buf, 'src/a.rs').filter((s) => s.kind === 'method');
-    expect(methods).toHaveLength(0);
+    expect(methods).toHaveLength(2);
+    expect(methods.every((m) => m.frameworkMeta?.['visibility'] === 'module')).toBe(true);
   });
 
   it('bare name uses TypeName from impl, not trait name', async () => {
@@ -307,6 +329,102 @@ describe('Rust handler — extractImports', () => {
   });
 });
 
+// ─── extractImports — specifier shapes for the resolver (Phase 87, Task 537) ──
+
+describe('Rust handler — use specifier shapes (Phase 87)', () => {
+  it('preserves the leading crate keyword', async () => {
+    const src = `use crate::auth::Session;\n`;
+    const { tree, buf } = await parse(src);
+    const imports = rustHandler.extractImports(tree, buf);
+    expect(imports).toHaveLength(1);
+    expect(imports[0].specifier).toBe('crate::auth::Session');
+    expect(imports[0].importedNames).toEqual(['Session']);
+  });
+
+  it('preserves the leading super / self keywords', async () => {
+    const src = `use super::util::helper;\nuse self::inner::Thing;\n`;
+    const { tree, buf } = await parse(src);
+    const specs = rustHandler.extractImports(tree, buf).map((i) => i.specifier);
+    expect(specs).toContain('super::util::helper');
+    expect(specs).toContain('self::inner::Thing');
+  });
+
+  it('flattens a grouped use into one record per leaf', async () => {
+    const src = `use crate::models::{User, Order};\n`;
+    const { tree, buf } = await parse(src);
+    const imports = rustHandler.extractImports(tree, buf);
+    expect(imports.map((i) => i.specifier).sort()).toEqual([
+      'crate::models::Order',
+      'crate::models::User',
+    ]);
+    expect(imports.every((i) => i.importedNames.length === 1)).toBe(true);
+  });
+
+  it('flattens nested groups', async () => {
+    const src = `use app::{net::{http, tcp}, io};\n`;
+    const { tree, buf } = await parse(src);
+    const specs = rustHandler.extractImports(tree, buf).map((i) => i.specifier).sort();
+    expect(specs).toEqual(['app::io', 'app::net::http', 'app::net::tcp']);
+  });
+
+  it('keeps the crate keyword for a grouped use directly under crate', async () => {
+    const src = `use crate::{auth, models};\n`;
+    const { tree, buf } = await parse(src);
+    const specs = rustHandler.extractImports(tree, buf).map((i) => i.specifier).sort();
+    expect(specs).toEqual(['crate::auth', 'crate::models']);
+  });
+
+  it('handles self inside a group (imports the module itself)', async () => {
+    const src = `use crate::net::{self, http};\n`;
+    const { tree, buf } = await parse(src);
+    const specs = rustHandler.extractImports(tree, buf).map((i) => i.specifier).sort();
+    expect(specs).toEqual(['crate::net', 'crate::net::http']);
+  });
+
+  it('marks glob imports with importedNames ["*"]', async () => {
+    const src = `use crate::prelude::*;\n`;
+    const { tree, buf } = await parse(src);
+    const imports = rustHandler.extractImports(tree, buf);
+    expect(imports).toHaveLength(1);
+    expect(imports[0].specifier).toBe('crate::prelude');
+    expect(imports[0].importedNames).toEqual(['*']);
+  });
+
+  it('marks a glob inside a group', async () => {
+    const src = `use app::{prelude::*, config};\n`;
+    const { tree, buf } = await parse(src);
+    const imports = rustHandler.extractImports(tree, buf);
+    const glob = imports.find((i) => i.importedNames.includes('*'));
+    expect(glob).toBeDefined();
+    expect(glob!.specifier).toBe('app::prelude');
+    expect(imports.some((i) => i.specifier === 'app::config')).toBe(true);
+  });
+
+  it('renames carry the ORIGINAL path, not the alias', async () => {
+    const src = `use crate::io::Reader as FileReader;\n`;
+    const { tree, buf } = await parse(src);
+    const imports = rustHandler.extractImports(tree, buf);
+    expect(imports).toHaveLength(1);
+    expect(imports[0].specifier).toBe('crate::io::Reader');
+    expect(imports[0].importedNames).toEqual(['Reader']);
+  });
+
+  it('renames inside a group carry the full original path', async () => {
+    const src = `use app::io::{Reader as R, Writer};\n`;
+    const { tree, buf } = await parse(src);
+    const specs = rustHandler.extractImports(tree, buf).map((i) => i.specifier).sort();
+    expect(specs).toEqual(['app::io::Reader', 'app::io::Writer']);
+  });
+
+  it('bare external use keeps its full path', async () => {
+    const src = `use serde::Deserialize;\n`;
+    const { tree, buf } = await parse(src);
+    const imports = rustHandler.extractImports(tree, buf);
+    expect(imports[0].specifier).toBe('serde::Deserialize');
+    expect(imports[0].importedNames).toEqual(['Deserialize']);
+  });
+});
+
 // ─── Fixture-based test ───────────────────────────────────────────────────────
 
 describe('Rust handler — fixture files', () => {
@@ -332,8 +450,10 @@ describe('Rust handler — fixture files', () => {
     expect(names).toContain('email');
     expect(names).not.toContain('User.new');
     expect(names).not.toContain('User.email');
-    // Private function should NOT be present
-    expect(names).not.toContain('private_helper');
+    // Module-private function IS indexed since Phase 87, with visibility metadata
+    const priv = syms.find((s) => s.name === 'private_helper');
+    expect(priv).toBeDefined();
+    expect(priv!.frameworkMeta?.['visibility']).toBe('module');
   });
 
   it('indexes rust-project/src/auth.rs correctly', async () => {

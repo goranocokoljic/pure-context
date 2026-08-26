@@ -68,13 +68,13 @@ CSS-family languages don't have a stable tree-sitter grammar, so PureContext use
 
 | Language | What is excluded |
 |----------|------------------|
-| Go | Unexported identifiers (lowercase first letter) |
+| Go | Nothing since v1.17.0 — unexported identifiers are indexed with `frameworkMeta.visibility: 'unexported'` |
 | C | `static` functions (translation-unit internal) |
 | Java | `private` members |
 | C# | `private` members; interface members are implicitly public |
 | PHP | `private` members |
 | Dart | `_`-prefixed identifiers |
-| Rust | Non-`pub` impl methods |
+| Rust | Nothing since v1.20.0 — `pub(crate)`-family items record `frameworkMeta.visibility: 'crate'`, no-modifier items record `'module'` |
 
 `get_public_api` and related tools depend on these rules being applied consistently.
 

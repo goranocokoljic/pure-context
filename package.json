@@ -1,6 +1,6 @@
 {
   "name": "purecontext-mcp",
-  "version": "1.18.0",
+  "version": "1.20.0",
   "description": "Change-aware code intelligence for AI coding agents (MCP): blast radius, temporal co-change, and per-symbol risk before the edit — built on token-efficient code navigation",
   "type": "module",
   "license": "MIT",

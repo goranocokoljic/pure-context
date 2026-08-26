@@ -622,6 +622,30 @@ function extractImports(tree: Tree, source: Buffer): ImportRecord[] {
   return imports;
 }
 
+// ─── extractPackage ───────────────────────────────────────────────────────────
+
+/**
+ * Declared namespace of the file: `namespace App\Http;` (or the braced form)
+ * → "App\Http", stored with backslashes as written. Only the FIRST namespace
+ * declaration is captured — files with several braced namespaces store the
+ * first one (documented v1 limitation, mirrors the C# outermost-only rule;
+ * the resolver's symbol-table lookup covers the rest).
+ */
+function extractPackage(tree: Tree | null, source: Buffer): string | null {
+  if (!tree) return null;
+  const sourceStr = source.toString('utf8');
+  for (const node of tree.rootNode.children) {
+    if (node.type !== 'namespace_definition') continue;
+    const nameNode = node.childForFieldName?.('name') ??
+      node.children.find((c) => c.type === 'namespace_name');
+    const ns = nameNode
+      ? sourceStr.slice(nameNode.startIndex, nameNode.endIndex).trim()
+      : '';
+    return ns.length > 0 ? ns : null;
+  }
+  return null;
+}
+
 // ─── Handler export ───────────────────────────────────────────────────────────
 
 export const phpHandler: LanguageHandler = {
@@ -634,4 +658,6 @@ export const phpHandler: LanguageHandler = {
   extractImports,
 
   extractDocstring,
+
+  extractPackage,
 };

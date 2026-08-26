@@ -26,6 +26,8 @@ import type Database from 'better-sqlite3';
 
 // ─── Public surface ───────────────────────────────────────────────────────────
 
+export const GO_FAMILY_EXTENSIONS = new Set(['.go']);
+
 export function isGoSourceFile(filePath: string): boolean {
   return filePath.toLowerCase().endsWith('.go');
 }

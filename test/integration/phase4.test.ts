@@ -176,11 +176,11 @@ describe('1. Rust: public symbol extraction', () => {
     expect(all.some((s) => s.kind === 'function')).toBe(true);
   });
 
-  it('skips private fn (no pub modifier)', () => {
+  it('indexes module-private fn with visibility metadata (Phase 87)', () => {
     const db = openDatabase(rustRepoId);
-    const symbols = searchSymbols(db, rustRepoId, 'internal_helper', {});
+    const symbols = searchSymbols(db, rustRepoId, 'private_helper', {});
     db.close();
-    expect(symbols).toHaveLength(0);
+    expect(symbols.some((s) => s.name === 'private_helper')).toBe(true);
   });
 });
 

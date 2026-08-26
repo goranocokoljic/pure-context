@@ -39,7 +39,7 @@ This page is the user-facing tour: what's supported, what gets pulled out, and w
 |----------|-----------|-------------|
 | C | `.c`, `.h` | functions, structs, enums, macros, types — `static` functions skipped (translation-unit internal) |
 | C++ | `.cpp`, `.cxx`, `.cc`, `.hpp`, `.hxx`, `.hh` | All C kinds plus namespaces, templates, template classes with export macros |
-| Rust | `.rs` | functions, methods (bare names), structs, enums, traits, consts, types — `pub` filter for impl methods |
+| Rust | `.rs` | functions, methods (bare names), structs, enums, traits, consts, types — everything indexed since v1.20.0; non-`pub` items carry `frameworkMeta.visibility` (`crate` for `pub(crate)`/`pub(super)`/`pub(in …)`, `module` for no modifier) |
 | Fortran | `.f90`, `.f95`, `.for`, `.f` | functions, subroutines, modules |
 | Objective-C | `.m`, `.h` | functions, classes, methods |
 
@@ -104,8 +104,14 @@ Symbol extraction and search work for all 34 languages. **Import / dependency ed
 | Hilt/Dagger DI edges (v1.18.0, Android repos: `@Provides`/`@Binds`/`@Inject` metadata → `di` edges, consumer file → provider file — coupling the import graph cannot see; name-based, ambiguous names edge to all providers; excluded from `find_cycles`) | Kotlin, Java (android adapter active) |
 | Layout-convention resolver (dotted module path → file path; absolute, from-, and relative imports; `src/` layouts; `pyproject` package-dir remapping not yet supported) | Python |
 | `go.mod` resolver (module path → package directory → every `.go` file in it; nested modules / workspaces supported) | Go |
+| PSR-4 + declared-namespace resolver (`use X\Y\Class` → declared `namespace` map first, composer.json PSR-4 map as fallback; composer roots disambiguate) | PHP |
+| Declared-module resolver, exact form (`module A.B.C where` → one module per file; path-suffix fallback for headerless files) | Haskell |
+| Module-symbol resolver (`alias`/`import`/`use` → `defmodule` symbol map; nested modules fall back to the longest known prefix) | Elixir |
+| Basename resolver (module == file basename: `-import(mod, …)` → `mod.erl`; `-include`/`-include_lib` → `.hrl` basename) | Erlang |
+| Module-symbol resolver (`USE module_name` → files declaring that MODULE, case-insensitive) | Fortran |
+| Mod-tree resolver (`use crate::a::b::Item` → module map derived from the `src/` file layout per Cargo crate; `self::`/`super::` relative to the source file's module; workspace crates by `Cargo.toml` name) | Rust |
 | Imports are literal file paths | C, C++, Dart, SCSS/LESS/CSS, Terraform/HCL, Protobuf, Nix, Perl, XML, Bash |
-| **Not yet resolved — symbols only, no dependency edges** | PHP, Rust, Haskell, Elixir, Erlang, Fortran, and other languages with package-style imports (PHP namespaces, Rust `use` paths, …) |
+| **Not yet resolved — symbols only, no dependency edges** | Ruby and the long tail without a clear module→file rule (Gleam, Lua, R, GDScript, …) |
 
 For languages in the last row, the graph-based tools return empty or partial results: an empty blast radius there means "no graph", **not** "nothing depends on this symbol". `find_references` (a content scan) and `get_co_change` (git history) work for every language and are the graph-independent alternatives.
 
@@ -116,6 +122,10 @@ C# notes (v1.16.0): every `using X.Y` imports a whole namespace, so it resolves 
 Python notes (v1.17.0): module identity is the file path, so no stored header is needed — `a/b.py` answers to `a.b`, `a/b/__init__.py` to `a.b`. `src/` layouts (and other non-package first-level source dirs) are stripped, so `mypkg.core` finds `src/mypkg/core.py`. Relative imports (`from . import x`, `from ..pkg import y`) resolve exactly by directory walk. `from a.b import c` prefers the submodule `a/b/c.py`, else the module file itself (symbol-table tiebreak when the name is ambiguous). Unknown modules (numpy, django) produce no edge. Not yet supported: `sys.path` manipulation, editable installs, `pyproject` package-dir remapping. Re-index a repo indexed before v1.17.0 to build the edges.
 
 Go notes (v1.17.0): resolution parses every `go.mod` above an indexed `.go` file (`module` directive → directory; nested modules / workspaces supported, longest prefix wins). An import path resolves to **every** indexed `.go` file of the target package directory — that's the true Go package semantic, not over-approximation. `_test.go` files are included; stdlib and third-party imports produce no edge; edges are never emitted into `vendor/`. Build tags and cgo are ignored. Re-index a repo indexed before v1.17.0 to build the edges.
+
+Rust notes (v1.20.0): the module map is derived from the file layout under each crate's `src/` (`src/a/b.rs` and `src/a/b/mod.rs` both answer to `a::b`; both 2015 and 2018 layouts work) — `#[path]` overrides and `build.rs`-generated modules are not followed (v1 limitation; layout and `mod` declarations agree in almost all real code). Crate boundaries come from the nearest ancestor `Cargo.toml`; crate names (`[package] name`, dash→underscore) let same-workspace crates resolve by name. `crate::`/`self::`/`super::` resolve against the source file's own module position; grouped uses are flattened (one edge target per leaf); globs (`use x::*`) expand to the module subtree, capped by `graph.maxWildcardFanout`; leaf items check the symbol table scoped to the resolved module's files, falling back to the module file itself (inline `mod` blocks, macro-generated items). `std` and crates.io imports produce no edge. A repo with no `Cargo.toml` still resolves a plain root `src/` layout. Re-index a repo indexed before v1.20.0 to build the edges.
+
+Wave 2 notes (v1.19.0 — PHP, Haskell, Elixir, Erlang, Fortran): all five ride the same family-resolver seam. PHP resolves `use` clauses against declared namespaces (captured per file) plus the fully-qualified symbol table, then falls back to composer.json PSR-4 maps (`autoload` + `autoload-dev`, root and nested); whole-namespace `use App\Models;` expands to all namespace files, capped by `graph.maxWildcardFanout`; multi-namespace files store only the FIRST namespace (v1 limitation). Haskell resolves `import A.B.C` by exact declared module header (one module per file). Elixir builds its module map from `defmodule`/`defprotocol` symbols, so multi-module files work; `A.B.C` without an exact match falls back to the longest known module prefix. Erlang maps `module:fun` to `module.erl` by basename (collisions edge to all candidates) and `-include`/`-include_lib` to `.hrl` files by header basename — include dirs are build configuration the indexer cannot see. Fortran maps `USE name` to files declaring `MODULE name` (case-insensitive). External/stdlib specifiers (`Symfony\…`, `Data.Map`, `Ecto.*`, `lists:`, `iso_fortran_env`) produce no edge. Re-index a repo indexed before v1.19.0 to build the edges.
 
 ---
 
@@ -132,6 +142,7 @@ Some things you don't want in the index — they bloat it and pollute search res
 It also respects language-level visibility:
 
 - **Go**: nothing skipped since v1.17.0 — unexported names (lowercase first letter) ARE indexed with `frameworkMeta.visibility: 'unexported'` recorded, because they are package-visible and the package sits inside the indexed unit
+- **Rust**: nothing skipped since v1.20.0 — Rust has no true `private` keyword, so everything is indexed: `pub` items carry no metadata, `pub(crate)`/`pub(super)`/`pub(in …)` record `frameworkMeta.visibility: 'crate'`, and no-modifier items (module-private, but visible to child modules and the same file) record `'module'`
 - **C**: `static` functions (translation-unit internal)
 - **Java / PHP**: `private` members
 - **C#**: `private` members and no-modifier members (implicitly private). `internal` and modifier-less top-level types (implicitly internal) ARE indexed, with `frameworkMeta.visibility` recorded — assembly-visible types are exactly the unit being indexed
@@ -143,7 +154,7 @@ Public API tools (`get_public_api`) rely on these rules being applied consistent
 
 ## Known limitations
 
-- **Import resolution is not universal** — languages with package-style imports other than the JVM family, C#, Python, and Go (PHP, Rust, Haskell, …) index symbols but produce **no dependency edges** today, so graph tools return empty results there. See [Which languages get dependency edges](#which-languages-get-dependency-edges) above.
+- **Import resolution is not universal** — Ruby (plus the long tail without a clear module→file rule) indexes symbols but produces **no dependency edges** today, so graph tools return empty results there. See [Which languages get dependency edges](#which-languages-get-dependency-edges) above.
 - **TypeScript `.tsx`** uses a separate `tree-sitter-tsx` grammar from `.ts`. Both are bundled.
 - **Python stubs** (`.pyi`) are not indexed — only `.py` files.
 - **Terraform** `dynamic` blocks with complex expressions may not be fully extracted.

@@ -374,6 +374,30 @@ function extractImports(tree: Tree, source: Buffer): ImportRecord[] {
   return imports;
 }
 
+// ─── extractPackage ───────────────────────────────────────────────────────────
+
+/**
+ * Declared module of the file: `module A.B.C where` → "A.B.C". Haskell has
+ * one module per file, so this is the authoritative identity for import
+ * resolution. Falls back to a line-anchored regex when the grammar exposes no
+ * header node (e.g. parse damage in an otherwise valid file).
+ */
+function extractPackage(tree: Tree | null, source: Buffer): string | null {
+  if (tree) {
+    const sourceStr = source.toString('utf8');
+    const header = tree.rootNode.children.find((c) => c.type === 'header');
+    // The header has TWO `module`-typed children: the keyword and the dotted
+    // name (the one carrying module_id children) — the LAST one is the name.
+    const moduleNode = header?.children.filter((c) => c.type === 'module').pop();
+    if (moduleNode) {
+      const name = sourceStr.slice(moduleNode.startIndex, moduleNode.endIndex).trim();
+      if (name.length > 0) return name;
+    }
+  }
+  const m = source.toString('utf8').match(/^module\s+([A-Z][A-Za-z0-9_.']*)/m);
+  return m ? m[1]! : null;
+}
+
 // ─── Handler export ───────────────────────────────────────────────────────────
 
 export const haskellHandler: LanguageHandler = {
@@ -382,4 +406,5 @@ export const haskellHandler: LanguageHandler = {
   extractSymbols,
   extractImports,
   extractDocstring,
+  extractPackage,
 };

@@ -12,6 +12,8 @@ import { csharpHandler } from '../../src/handlers/csharp.js';
 import { javaHandler } from '../../src/handlers/java.js';
 import { scalaHandler } from '../../src/handlers/scala.js';
 import { groovyHandler } from '../../src/handlers/groovy.js';
+import { phpHandler } from '../../src/handlers/php.js';
+import { haskellHandler } from '../../src/handlers/haskell.js';
 import type { LanguageHandler } from '../../src/core/types.js';
 import { openInMemoryDatabase, upsertRepo, SCHEMA_VERSION } from '../../src/core/db/schema.js';
 import { upsertFile, getDeclaredPackages } from '../../src/core/db/file-store.js';
@@ -154,6 +156,62 @@ describe('C# extractPackage', () => {
 
   it('returns null when the file declares no namespace', async () => {
     expect(await pkgOf(csharpHandler, `public class NoNs {}\n`)).toBeNull();
+  });
+});
+
+// ─── PHP (Phase 86) ───────────────────────────────────────────────────────────
+
+describe('PHP extractPackage', () => {
+  it('extracts an unbraced namespace declaration with backslashes as written', async () => {
+    const pkg = await pkgOf(
+      phpHandler,
+      `<?php\n\nnamespace App\\Http\\Controllers;\n\nclass UserController {}\n`,
+    );
+    expect(pkg).toBe('App\\Http\\Controllers');
+  });
+
+  it('extracts a braced namespace declaration', async () => {
+    const pkg = await pkgOf(
+      phpHandler,
+      `<?php\nnamespace App\\Models {\n  class User {}\n}\n`,
+    );
+    expect(pkg).toBe('App\\Models');
+  });
+
+  it('captures only the FIRST namespace in a multi-namespace file', async () => {
+    const pkg = await pkgOf(
+      phpHandler,
+      `<?php\nnamespace First {\n  class A {}\n}\nnamespace Second {\n  class B {}\n}\n`,
+    );
+    expect(pkg).toBe('First');
+  });
+
+  it('returns null when the file declares no namespace', async () => {
+    expect(await pkgOf(phpHandler, `<?php\nclass Legacy {}\n`)).toBeNull();
+  });
+});
+
+// ─── Haskell (Phase 86) ───────────────────────────────────────────────────────
+
+describe('Haskell extractPackage', () => {
+  it('extracts a hierarchical module header', async () => {
+    const pkg = await pkgOf(
+      haskellHandler,
+      `module Data.Util.Strings where\n\nshout :: String -> String\nshout = map id\n`,
+    );
+    expect(pkg).toBe('Data.Util.Strings');
+  });
+
+  it('extracts a module header with an export list', async () => {
+    const pkg = await pkgOf(
+      haskellHandler,
+      `module App.Core (run, Config(..)) where\n\nrun :: IO ()\nrun = pure ()\n`,
+    );
+    expect(pkg).toBe('App.Core');
+  });
+
+  it('returns null when the file has no module header', async () => {
+    expect(await pkgOf(haskellHandler, `main :: IO ()\nmain = pure ()\n`)).toBeNull();
   });
 });
 

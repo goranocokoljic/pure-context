@@ -30,6 +30,8 @@ import type Database from 'better-sqlite3';
 
 // ─── Public surface ───────────────────────────────────────────────────────────
 
+export const PYTHON_FAMILY_EXTENSIONS = new Set(['.py']);
+
 export function isPythonSourceFile(filePath: string): boolean {
   return filePath.toLowerCase().endsWith('.py');
 }

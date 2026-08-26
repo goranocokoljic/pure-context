@@ -11,6 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.20.0] - 2026-08-26
+
+### Added
+
+**Rust: mod-tree import resolution + crate-visibility indexing.** Rust repos previously indexed to zero dependency edges (every `use crate::…` was an unresolvable bare specifier) and skipped every non-`pub` item — both Phase 82 bug classes. After one re-index, `get_blast_radius`, `find_importers`, `find_cycles`, the architecture tools, and the centrality axis of `get_symbol_risk` work on Rust repos.
+
+- **`src/graph/rust-resolver.ts`** — the only family that needs a real module TREE, not a flat map. Crate boundaries come from the nearest ancestor `Cargo.toml` (crate names dash→underscore normalized; a Cargo-less repo falls back to the repo root); the module map is derived from the file layout under `src/` (`src/a/b.rs` and `src/a/b/mod.rs` both answer to `a::b`; 2015 + 2018 layouts). `crate::`/`self::`/`super::` (chains included) resolve against the source file's own module position; a bare leading segment resolves as a top-level module of the own crate (2018 uniform paths) or as a same-workspace crate by name; `std`/crates.io imports produce no edge. Leaf items check the symbol table scoped to the resolved module's files, falling back to the module file itself (inline `mod` blocks, macro-generated items — over-approximation is the safe direction). Globs expand to the module subtree, capped by `graph.maxWildcardFanout`.
+- **Rust handler `use` extraction extended** — grouped uses are flattened to one record per leaf (`use a::{b, c::{d}}` → `a::b` + `a::c::d`), leading `crate`/`self`/`super` keywords are preserved (previously `use crate::{a, b}` lost the `crate`), globs are marked with `importedNames: ['*']`, and renames carry the ORIGINAL path (`use a::b as c` → `a::b`).
+- **Everything is indexed now** (the Kotlin-`internal` rule): `pub` items carry no metadata; `pub(crate)`/`pub(super)`/`pub(in …)` record `frameworkMeta.visibility: 'crate'`; no-modifier items (module-private, but visible to child modules and the same file — Rust has no true `private`) record `'module'`. Kills the false `no_match` → confident-wrong-answer chain for the most-searched symbols.
+- **Ranker**: the mild `-20` unexported-visibility penalty (Go, v1.17.0) now also applies to `visibility: 'module'`, so module-private helpers stay findable without outranking the public API on natural-language queries; `'crate'` is not penalized. Exact-name searches still surface penalized symbols first (identityExact +40).
+
+### Known limitations (documented)
+
+- `#[path]` overrides, `build.rs`-generated modules, and `macro_rules!` expansion are not followed; `#[cfg]`-conditional mod trees index all branches (over-approximation; cfg metadata exists since Phase 51). Cross-crate edges via Cargo path-dependencies resolve only for crates indexed in the same repo.
+
+---
+
+## [1.19.0] - 2026-08-26
+
+### Added
+
+**Declared-Module Wave 2 — dependency edges for PHP, Haskell, Elixir, Erlang, and Fortran.** Five more languages that previously indexed to zero dependency edges now build graphs, riding the Phase 82/84 family-resolver seam. `get_blast_radius`, `find_importers`, `find_cycles`, the architecture tools, and the centrality axis of `get_symbol_risk` work on these repos after one re-index.
+
+- **PHP** (`src/graph/php-resolver.ts`): `use X\Y\Class` resolves via the file's declared `namespace` (new `extractPackage` on the PHP handler → `files.declared_package`) plus the fully-qualified symbol table, with composer.json PSR-4 maps (`autoload` + `autoload-dev`, root and nested, memoized) as the fallback for files without a namespace row. Whole-namespace uses (`use App\Models;`) expand to all namespace files, capped by `graph.maxWildcardFanout`. Cross-package ambiguity prefers the importing file's own composer.json root, else edges to all candidates. Multi-namespace files store only the first namespace (v1 limitation).
+- **Haskell** (`src/graph/haskell-resolver.ts`): `import A.B.C` resolves by exact declared module header (`module A.B.C where`, new `extractPackage` on the Haskell handler) — one module per file, no member lookup. Headerless files fall back to a dotted path-suffix match (`src/App/Core/Run.hs` answers to `App.Core.Run`).
+- **Elixir** (`src/graph/elixir-resolver.ts`): `alias`/`import`/`use`/`require` resolve against the `defmodule`/`defprotocol` SYMBOL map (multiple modules per file are legal), with a longest-known-prefix fallback for nested module names.
+- **Erlang** (`src/graph/erlang-resolver.ts`): module == file basename, so `-import(mod, …)` (and `mod:fun` specifiers) resolve to `mod.erl`; basename collisions edge to all candidates. The handler now also emits `-include` / `-include_lib` directives, resolved by `.hrl` basename — the previous "always external" hardcoding is gone.
+- **Fortran** (`src/graph/fortran-resolver.ts`): `USE module_name` resolves to the files declaring `MODULE module_name` (case-insensitive, as Fortran is).
+
+### Changed
+
+- `buildGraph` now dispatches family resolvers through one extension → resolver map instead of a growing per-family if-chain; `buildFamilyResolvers` is table-driven. TypeScript/JavaScript output is byte-identical (regression-guarded), and the Phase 82 bare-`JvmResolver` back-compat still holds.
+- The empty-graph honesty note (`graphCoverage: 'empty'`) now names the remaining unresolved languages (Rust, Ruby, long tail) and the re-index version per resolver family.
+
+---
+
 ## [1.18.0] - 2026-08-26
 
 ### Added

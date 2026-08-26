@@ -43,11 +43,32 @@ function childText(node: SyntaxNode, sourceStr: string, ...types: string[]): str
 
 // ─── Visibility ───────────────────────────────────────────────────────────────
 
-/** Returns true if the node has a `pub` visibility_modifier child. */
-function isPublic(node: SyntaxNode, sourceStr: string): boolean {
-  return node.children.some(
-    (c) => c.type === 'visibility_modifier' && nodeText(c, sourceStr).startsWith('pub'),
-  );
+/**
+ * Rust visibility of a declaration (Phase 87 — Kotlin-`internal` rule: index
+ * everything, record non-public visibility in metadata).
+ *   - `pub`                              → 'public'  (no metadata stored)
+ *   - `pub(crate)`/`pub(super)`/`pub(in …)` → 'crate'
+ *   - no modifier                        → 'module' (module-private, but
+ *     visible to child modules and the same file — Rust has no `private`)
+ */
+type RustVisibility = 'public' | 'crate' | 'module';
+
+function visibilityOf(node: SyntaxNode, sourceStr: string): RustVisibility {
+  const mod = node.children.find((c) => c.type === 'visibility_modifier');
+  if (!mod) return 'module';
+  const text = nodeText(mod, sourceStr);
+  return text === 'pub' ? 'public' : 'crate';
+}
+
+/** Merge cfg attributes + non-public visibility into an optional frameworkMeta spread. */
+function buildMeta(
+  cfgAttrs: CfgMeta[],
+  visibility: RustVisibility,
+): { frameworkMeta?: Record<string, unknown> } {
+  const meta: Record<string, unknown> = {};
+  if (cfgAttrs.length > 0) meta.cfg = cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs;
+  if (visibility !== 'public') meta.visibility = visibility;
+  return Object.keys(meta).length > 0 ? { frameworkMeta: meta } : {};
 }
 
 // ─── Signature building ───────────────────────────────────────────────────────
@@ -272,7 +293,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
   for (const node of tree.rootNode.children) {
     // ── function_item ──────────────────────────────────────────────────────
     if (node.type === 'function_item') {
-      if (!isPublic(node, sourceStr)) continue;
+      const visibility = visibilityOf(node, sourceStr);
       const name = childText(node, sourceStr, 'identifier');
       if (!name) continue;
       const cfgAttrs = extractCfgAttributes(node, sourceStr);
@@ -285,14 +306,14 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
-        ...(cfgAttrs.length > 0 ? { frameworkMeta: { cfg: cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs } } : {}),
+        ...buildMeta(cfgAttrs, visibility),
       });
       continue;
     }
 
     // ── struct_item ────────────────────────────────────────────────────────
     if (node.type === 'struct_item') {
-      if (!isPublic(node, sourceStr)) continue;
+      const visibility = visibilityOf(node, sourceStr);
       const name = childText(node, sourceStr, 'type_identifier');
       if (!name) continue;
       const cfgAttrs = extractCfgAttributes(node, sourceStr);
@@ -305,14 +326,14 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
-        ...(cfgAttrs.length > 0 ? { frameworkMeta: { cfg: cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs } } : {}),
+        ...buildMeta(cfgAttrs, visibility),
       });
       continue;
     }
 
     // ── enum_item ──────────────────────────────────────────────────────────
     if (node.type === 'enum_item') {
-      if (!isPublic(node, sourceStr)) continue;
+      const visibility = visibilityOf(node, sourceStr);
       const name = childText(node, sourceStr, 'type_identifier');
       if (!name) continue;
       const cfgAttrs = extractCfgAttributes(node, sourceStr);
@@ -325,14 +346,14 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
-        ...(cfgAttrs.length > 0 ? { frameworkMeta: { cfg: cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs } } : {}),
+        ...buildMeta(cfgAttrs, visibility),
       });
       continue;
     }
 
     // ── trait_item ─────────────────────────────────────────────────────────
     if (node.type === 'trait_item') {
-      if (!isPublic(node, sourceStr)) continue;
+      const visibility = visibilityOf(node, sourceStr);
       const name = childText(node, sourceStr, 'type_identifier');
       if (!name) continue;
       const cfgAttrs = extractCfgAttributes(node, sourceStr);
@@ -345,14 +366,14 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         endByte: node.endIndex,
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
-        ...(cfgAttrs.length > 0 ? { frameworkMeta: { cfg: cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs } } : {}),
+        ...buildMeta(cfgAttrs, visibility),
       });
       continue;
     }
 
     // ── const_item ─────────────────────────────────────────────────────────
     if (node.type === 'const_item') {
-      if (!isPublic(node, sourceStr)) continue;
+      const visibility = visibilityOf(node, sourceStr);
       const name = childText(node, sourceStr, 'identifier');
       if (!name) continue;
       const cfgAttrs = extractCfgAttributes(node, sourceStr);
@@ -369,14 +390,14 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
           .trim()
           .slice(0, 120),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
-        ...(cfgAttrs.length > 0 ? { frameworkMeta: { cfg: cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs } } : {}),
+        ...buildMeta(cfgAttrs, visibility),
       });
       continue;
     }
 
     // ── type_item (type alias) ─────────────────────────────────────────────
     if (node.type === 'type_item') {
-      if (!isPublic(node, sourceStr)) continue;
+      const visibility = visibilityOf(node, sourceStr);
       const name = childText(node, sourceStr, 'type_identifier');
       if (!name) continue;
       const cfgAttrs = extractCfgAttributes(node, sourceStr);
@@ -393,7 +414,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
           .trim()
           .slice(0, 120),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
-        ...(cfgAttrs.length > 0 ? { frameworkMeta: { cfg: cfgAttrs.length === 1 ? cfgAttrs[0] : cfgAttrs } } : {}),
+        ...buildMeta(cfgAttrs, visibility),
       });
       continue;
     }
@@ -410,7 +431,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
 
       for (const member of body.children) {
         if (member.type !== 'function_item') continue;
-        if (!isPublic(member, sourceStr)) continue;
+        const visibility = visibilityOf(member, sourceStr);
         const methodName = childText(member, sourceStr, 'identifier');
         if (!methodName) continue;
         const qualifiedName = `${typeName}.${methodName}`;
@@ -427,7 +448,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
           endByte: member.endIndex,
           signature: sigWithContext,
           summary: extractDocstringWithSource(member, sourceStr) ?? '',
-          ...(allCfg.length > 0 ? { frameworkMeta: { cfg: allCfg.length === 1 ? allCfg[0] : allCfg } } : {}),
+          ...buildMeta(allCfg, visibility),
         });
       }
       continue;
@@ -439,101 +460,87 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
 
 // ─── Import extraction ────────────────────────────────────────────────────────
 
-function extractUseListNames(node: SyntaxNode, sourceStr: string): string[] {
-  if (node.type !== 'use_list') return [];
-  const names: string[] = [];
-  for (const child of node.children) {
-    if (child.type === 'identifier' || child.type === 'type_identifier') {
-      names.push(nodeText(child, sourceStr));
-    } else if (child.type === 'use_as_clause') {
-      const orig = child.children.find(
-        (c) => c.type === 'identifier' || c.type === 'type_identifier',
-      );
-      if (orig) names.push(nodeText(orig, sourceStr));
-    } else if (child.type === 'self') {
-      names.push('self');
-    }
-  }
-  return names;
+/**
+ * Node types that can form a `use` path segment. Includes the path KEYWORDS
+ * (`crate`, `super`, `self`) — Phase 87: `use crate::{a, b}` used to lose the
+ * leading `crate` because keyword nodes were never collected.
+ */
+const USE_PATH_TYPES = new Set([
+  'identifier',
+  'type_identifier',
+  'scoped_identifier',
+  'crate',
+  'super',
+  'self',
+]);
+
+interface UseLeaf {
+  specifier: string;
+  importedNames: string[];
 }
 
-function parseUseTree(
-  node: SyntaxNode,
-  sourceStr: string,
-): { specifier: string; importedNames: string[] } {
+function joinPath(prefix: string, seg: string): string {
+  return prefix.length === 0 ? seg : `${prefix}::${seg}`;
+}
+
+function lastSegment(path: string): string {
+  const idx = path.lastIndexOf('::');
+  return idx < 0 ? path : path.slice(idx + 2);
+}
+
+/**
+ * Flatten a `use` tree into one leaf per imported item (Phase 87, mirroring
+ * PHP grouped-use). `use a::{b, c::{d}};` → `a::b` + `a::c::d`. The full path
+ * keeps leading `crate`/`self`/`super` keywords; globs carry
+ * `importedNames: ['*']`; renames carry the ORIGINAL path (`use a::b as c;`
+ * → specifier `a::b`).
+ */
+function flattenUseTree(node: SyntaxNode, sourceStr: string, prefix: string): UseLeaf[] {
   if (node.type === 'scoped_use_list') {
-    const pathParts: string[] = [];
+    // `<path>::{...}` — descend into the list with the extended prefix
+    const pathNode = node.children.find((c) => USE_PATH_TYPES.has(c.type));
     const list = node.children.find((c) => c.type === 'use_list');
-    for (const child of node.children) {
-      if (
-        child.type === 'identifier' ||
-        child.type === 'type_identifier' ||
-        child.type === 'scoped_identifier'
-      ) {
-        pathParts.push(nodeText(child, sourceStr));
-      }
-    }
-    const specifier = pathParts.join('::');
-    const importedNames = list ? extractUseListNames(list, sourceStr) : [];
-    return { specifier, importedNames };
-  }
-
-  if (node.type === 'use_wildcard') {
-    const base = node.children.find(
-      (c) => c.type === 'identifier' || c.type === 'scoped_identifier',
-    );
-    const specifier = base
-      ? nodeText(base, sourceStr)
-      : nodeText(node, sourceStr).replace(/\s*::\s*\*$/, '');
-    return { specifier, importedNames: ['*'] };
-  }
-
-  if (node.type === 'use_as_clause') {
-    const orig = node.children.find(
-      (c) => c.type === 'identifier' || c.type === 'scoped_identifier',
-    );
-    const name = node.children.find((c) => c.type === 'identifier');
-    return {
-      specifier: orig ? nodeText(orig, sourceStr) : '',
-      importedNames: name ? [nodeText(name, sourceStr)] : [],
-    };
-  }
-
-  if (node.type === 'scoped_identifier') {
-    const lastIdent = [...node.children]
-      .reverse()
-      .find((c) => c.type === 'identifier' || c.type === 'type_identifier');
-    return {
-      specifier: nodeText(node, sourceStr),
-      importedNames: lastIdent ? [nodeText(lastIdent, sourceStr)] : [],
-    };
-  }
-
-  if (node.type === 'identifier' || node.type === 'type_identifier') {
-    const text = nodeText(node, sourceStr);
-    return { specifier: text, importedNames: [text] };
+    const newPrefix = pathNode ? joinPath(prefix, nodeText(pathNode, sourceStr)) : prefix;
+    return list ? flattenUseTree(list, sourceStr, newPrefix) : [];
   }
 
   if (node.type === 'use_list') {
-    return { specifier: '', importedNames: extractUseListNames(node, sourceStr) };
+    const leaves: UseLeaf[] = [];
+    for (const child of node.children) {
+      if (child.type === '{' || child.type === '}' || child.type === ',') continue;
+      leaves.push(...flattenUseTree(child, sourceStr, prefix));
+    }
+    return leaves;
   }
 
-  return { specifier: nodeText(node, sourceStr), importedNames: [] };
-}
+  if (node.type === 'use_wildcard') {
+    const base = node.children.find((c) => USE_PATH_TYPES.has(c.type));
+    const basePath = base
+      ? nodeText(base, sourceStr)
+      : nodeText(node, sourceStr).replace(/\s*(::)?\s*\*$/, '');
+    const specifier = basePath.length > 0 ? joinPath(prefix, basePath) : prefix;
+    return specifier.length > 0 ? [{ specifier, importedNames: ['*'] }] : [];
+  }
 
-function buildUseSpecifier(
-  node: SyntaxNode,
-  sourceStr: string,
-): { specifier: string; importedNames: string[] } {
-  const useTree = node.children.find(
-    (c) =>
-      c.type !== 'use' &&
-      c.type !== 'visibility_modifier' &&
-      c.type !== ';' &&
-      c.type !== 'pub',
-  );
-  if (!useTree) return { specifier: '', importedNames: [] };
-  return parseUseTree(useTree, sourceStr);
+  if (node.type === 'use_as_clause') {
+    // `<orig> as <alias>` — the find hits the ORIGINAL path (it precedes `as`)
+    const orig = node.children.find((c) => USE_PATH_TYPES.has(c.type));
+    if (!orig) return [];
+    const specifier = joinPath(prefix, nodeText(orig, sourceStr));
+    return [{ specifier, importedNames: [lastSegment(specifier)] }];
+  }
+
+  if (USE_PATH_TYPES.has(node.type)) {
+    if (node.type === 'self') {
+      // `use a::{self, b}` — `self` imports the module itself
+      if (prefix.length === 0) return [];
+      return [{ specifier: prefix, importedNames: [lastSegment(prefix)] }];
+    }
+    const specifier = joinPath(prefix, nodeText(node, sourceStr));
+    return [{ specifier, importedNames: [lastSegment(specifier)] }];
+  }
+
+  return [];
 }
 
 function extractImports(tree: Tree, source: Buffer): ImportRecord[] {
@@ -543,15 +550,24 @@ function extractImports(tree: Tree, source: Buffer): ImportRecord[] {
   for (const node of tree.rootNode.children) {
     // ── use_declaration ────────────────────────────────────────────────────
     if (node.type === 'use_declaration') {
-      const { specifier, importedNames } = buildUseSpecifier(node, sourceStr);
-      if (!specifier && importedNames.length === 0) continue;
-      imports.push({
-        sourceFile: '',
-        specifier: specifier || importedNames.join(', '),
-        resolvedPath: null,
-        importedNames,
-        isTypeOnly: false,
-      });
+      const useTree = node.children.find(
+        (c) =>
+          c.type !== 'use' &&
+          c.type !== 'visibility_modifier' &&
+          c.type !== ';' &&
+          c.type !== 'pub',
+      );
+      if (!useTree) continue;
+      for (const leaf of flattenUseTree(useTree, sourceStr, '')) {
+        if (!leaf.specifier) continue;
+        imports.push({
+          sourceFile: '',
+          specifier: leaf.specifier,
+          resolvedPath: null,
+          importedNames: leaf.importedNames,
+          isTypeOnly: false,
+        });
+      }
       continue;
     }
 

@@ -164,6 +164,7 @@ const RECORD_RE  = /^-record\s*\(\s*([a-z_][a-zA-Z0-9_@]*)\s*,/;
 const TYPE_RE    = /^-(?:type|opaque)\s+([a-z_][a-zA-Z0-9_@?]*)\s*\(/;
 const SPEC_RE    = /^-spec\s+([a-z_][a-zA-Z0-9_@?]*)\s*[\/(]/;
 const IMPORT_RE  = /^-import\s*\(\s*([a-z_][a-zA-Z0-9_@]*)\s*,\s*\[([^\]]+)\]\s*\)/;
+const INCLUDE_RE = /^-include(_lib)?\s*\(\s*"([^"]+)"\s*\)/;
 // Any remaining attribute (catches -export, -behaviour, -define, etc.)
 const ATTR_RE    = /^-\w+/;
 // Function head: starts with a lowercase identifier followed by `(`
@@ -315,15 +316,18 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
 // ─── Import extraction ────────────────────────────────────────────────────────
 
 /**
- * Extract `-import(module, [fun/arity, ...])` as ImportRecords.
- * Each imported function becomes a separate ImportRecord with specifier `module:fun/arity`.
+ * Extract `-import(module, [fun/arity, ...])` as ImportRecords (specifier
+ * `module:fun/arity`), and `-include` / `-include_lib` header includes
+ * (specifier = the quoted path literal). Both are resolved to in-repo files
+ * by the Erlang family resolver at graph-build time (Phase 86).
  */
 function extractImports(_tree: Tree, source: Buffer): ImportRecord[] {
   const lines = buildLineIndex(source);
   const imports: ImportRecord[] = [];
 
   for (const { text } of lines) {
-    const m = IMPORT_RE.exec(text.trim());
+    const trimmed = text.trim();
+    const m = IMPORT_RE.exec(trimmed);
     if (m) {
       const module = m[1]!;
       const funs = m[2]!
@@ -334,11 +338,23 @@ function extractImports(_tree: Tree, source: Buffer): ImportRecord[] {
         imports.push({
           sourceFile: '',
           specifier: `${module}:${fun}`,
-          resolvedPath: null, // Erlang module imports are always external
+          resolvedPath: null, // resolved by the Erlang family resolver at graph build
           importedNames: [fun.split('/')[0] ?? fun],
           isTypeOnly: false,
         });
       }
+      continue;
+    }
+
+    const inc = INCLUDE_RE.exec(trimmed);
+    if (inc) {
+      imports.push({
+        sourceFile: '',
+        specifier: inc[2]!,
+        resolvedPath: null, // header basename resolved by the Erlang family resolver
+        importedNames: [],
+        isTypeOnly: false,
+      });
     }
   }
 
