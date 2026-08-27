@@ -65,6 +65,7 @@ This page is the user-facing tour: what's supported, what gets pulled out, and w
 | Protobuf | `.proto` | messages, services, enums, RPCs |
 | GraphQL | `.graphql`, `.gql` | types, queries, mutations, subscriptions, fragments |
 | OpenAPI / YAML | `.yaml`, `.yml` | endpoints, schemas (OpenAPI detected by content) |
+| Angular HTML | `.html` | component tags, structural directives, `@if`/`@for` control flow, event bindings, template refs, routerLink — only for files with a same-stem sibling `.ts` or ≥2 distinct Angular markers; plain HTML yields nothing |
 | XML | `.xml` | elements (configurable patterns — opt-in) |
 
 ### Stylesheets (regex-based, no WASM grammar)

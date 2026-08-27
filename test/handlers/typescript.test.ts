@@ -168,6 +168,103 @@ export class AuthService {
   });
 });
 
+// ─── Class field extraction (Phase 94, Task 584) ─────────────────────────────
+
+describe('TypeScript handler — class fields', () => {
+  it('extracts a decorated field with decorator names in frameworkMeta', async () => {
+    const { tree, buf } = await parse(`
+export class UserCardComponent {
+  @Input() userName!: string;
+  @Output() saved = new EventEmitter<void>();
+}`.trim());
+    const syms = typescriptHandler.extractSymbols(tree, buf, 'src/a.ts');
+    const input = syms.find((s) => s.name === 'UserCardComponent.userName');
+    expect(input).toBeDefined();
+    expect(input!.kind).toBe('property');
+    expect(input!.frameworkMeta?.decorators).toEqual(['Input']);
+    const output = syms.find((s) => s.name === 'UserCardComponent.saved');
+    expect(output).toBeDefined();
+    expect(output!.frameworkMeta?.decorators).toEqual(['Output']);
+    expect(output!.bodySnippet).toContain('new EventEmitter');
+  });
+
+  it('extracts plain typed and initialized fields with real spans', async () => {
+    const source = `
+export class CounterComponent {
+  count = signal(0);
+  total: number;
+}`.trim();
+    const { tree, buf } = await parse(source);
+    const syms = typescriptHandler.extractSymbols(tree, buf, 'src/a.ts');
+    const count = syms.find((s) => s.name === 'CounterComponent.count');
+    expect(count).toBeDefined();
+    expect(count!.kind).toBe('property');
+    expect(count!.bodySnippet).toBe('signal(0)');
+    expect(source.slice(count!.startByte, count!.endByte)).toBe('count = signal(0)');
+    const total = syms.find((s) => s.name === 'CounterComponent.total');
+    expect(total).toBeDefined();
+    expect(total!.signature).toContain('total: number');
+  });
+
+  it('skips #private fields, indexes explicit private with visibility meta', async () => {
+    const { tree, buf } = await parse(`
+export class VaultService {
+  #secret = 'x';
+  private cache = new Map<string, string>();
+  protected limit = 10;
+  readonly max = 100;
+}`.trim());
+    const syms = typescriptHandler.extractSymbols(tree, buf, 'src/a.ts');
+    const names = syms.map((s) => s.name);
+    expect(names).not.toContain('VaultService.#secret');
+    expect(names).not.toContain('VaultService.secret');
+    const cache = syms.find((s) => s.name === 'VaultService.cache');
+    expect(cache).toBeDefined();
+    expect(cache!.frameworkMeta?.visibility).toBe('private');
+    const limit = syms.find((s) => s.name === 'VaultService.limit');
+    expect(limit!.frameworkMeta?.visibility).toBe('protected');
+    const max = syms.find((s) => s.name === 'VaultService.max');
+    expect(max).toBeDefined();
+    expect(max!.frameworkMeta?.visibility).toBeUndefined();
+  });
+
+  it('captures RxJS observable and FormBuilder initializer heads', async () => {
+    const { tree, buf } = await parse(`
+export class ListComponent {
+  users$ = this.http.get<User[]>('/api/users');
+  form = this.fb.group({ name: [''], email: [''] });
+}`.trim());
+    const syms = typescriptHandler.extractSymbols(tree, buf, 'src/a.ts');
+    const users = syms.find((s) => s.name === 'ListComponent.users$');
+    expect(users).toBeDefined();
+    expect(users!.bodySnippet).toContain('this.http.get');
+    const form = syms.find((s) => s.name === 'ListComponent.form');
+    expect(form!.bodySnippet).toContain('this.fb.group');
+  });
+
+  it('does not emit interface property signatures (unchanged scope)', async () => {
+    const { tree, buf } = await parse(`
+export interface UserDto {
+  id: number;
+  name: string;
+}`.trim());
+    const syms = typescriptHandler.extractSymbols(tree, buf, 'src/a.ts');
+    expect(syms).toHaveLength(1);
+    expect(syms[0].kind).toBe('interface');
+  });
+
+  it('captures a JSDoc comment on a field', async () => {
+    const { tree, buf } = await parse(`
+export class ConfigService {
+  /** Base URL for all API calls. */
+  apiUrl = '/api';
+}`.trim());
+    const syms = typescriptHandler.extractSymbols(tree, buf, 'src/a.ts');
+    const f = syms.find((s) => s.name === 'ConfigService.apiUrl');
+    expect(f!.summary).toContain('Base URL');
+  });
+});
+
 // ─── extractImports ───────────────────────────────────────────────────────────
 
 describe('TypeScript handler — extractImports', () => {

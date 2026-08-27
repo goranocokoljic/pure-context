@@ -373,7 +373,12 @@ const INTERCEPTOR_NAME_RE = /(?:Interceptor|Resolver|Resolve|Guard|Middleware|Pi
  * explicitly mentions those concepts.
  */
 function computeInterceptorBoost(symbol: SymbolRecord, queryWords: string[]): number {
-  if (symbol.kind !== 'function' && symbol.kind !== 'class') return 0;
+  // 'middleware' included since Phase 94: functional guards/interceptors are
+  // now CORRECTLY classified as middleware (586), and excluding the kind cost
+  // them the boost their own names earn (bitwarden gt-15 1→5, jhipster gt-16
+  // 4→out measured). NestJS adapter guards were always middleware and were
+  // silently excluded from this Phase-73 boost too.
+  if (symbol.kind !== 'function' && symbol.kind !== 'class' && symbol.kind !== 'middleware') return 0;
   const baseName = symbol.name.split('.').pop() ?? symbol.name;
   if (!INTERCEPTOR_NAME_RE.test(baseName)) return 0;
   for (const w of queryWords) if (INTERCEPTOR_QUERY_WORDS.has(w)) return 30;
@@ -834,7 +839,17 @@ function score(
     {
       const fm = symbol.frameworkMeta as Record<string, unknown> | undefined;
       const dotIdx = symbol.name.lastIndexOf('.');
-      if (wordOverlap > 0 && dotIdx > 0 && fm && (fm['vue_options'] || fm['pinia_entry'])) {
+      const isVueMember = !!fm && (!!fm['vue_options'] || !!fm['pinia_entry']);
+      // Phase 94 (Task 584): TS class FIELDS (kind property, Parent.field
+      // names) carry every parent word too — same failure mode, measured on
+      // angular-realworld (new fields displaced sibling methods, P@3/R@5
+      // −8pp). Damp only, deliberately NO parent shadow transfer: boosting
+      // the parent class could displace expected methods at rank 1 (the
+      // nestjs guard shape). Gated to .ts/.tsx so C#/Ruby dotted properties
+      // stay untouched (per-language gate precedent, Phase 88).
+      const isTsField =
+        symbol.kind === 'property' && /\.(ts|tsx)$/i.test(symbol.filePath);
+      if (wordOverlap > 0 && dotIdx > 0 && (isVueMember || isTsField)) {
         const memberParts = new Set(splitNameParts(symbol.name.slice(dotIdx + 1)));
         for (const p of [...memberParts]) addStemsOf(p, memberParts);
         for (const w of queryWords) {

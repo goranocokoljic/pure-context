@@ -34,6 +34,11 @@ export interface ParseJob {
    */
   content: Uint8Array;
   adapterNames: string[];
+  /**
+   * Absolute repo root (Phase 94, Task 585) — forwarded to handlers as
+   * HandlerContext.rootPath for filesystem colocation checks.
+   */
+  rootPath?: string;
 }
 
 export interface ParseResult {
@@ -74,7 +79,10 @@ if (!isMainThread) {
     try {
       // Reconstruct a Buffer from the Uint8Array received via structured clone.
       const content = Buffer.from(job.content.buffer, job.content.byteOffset, job.content.byteLength);
-      const { symbols, imports, declaredPackage } = await processFile(job.relPath, content, adapters);
+      const { symbols, imports, declaredPackage } = await processFile(
+        job.relPath, content, adapters,
+        job.rootPath !== undefined ? { rootPath: job.rootPath } : undefined,
+      );
 
       const result: ParseResult = { relPath: job.relPath, symbols, imports, declaredPackage };
       parentPort!.postMessage(result);

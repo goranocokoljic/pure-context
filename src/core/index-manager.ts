@@ -329,6 +329,7 @@ export async function indexFolder(
           // Uint8Array view over the Buffer — structured clone copies just this slice.
           content: new Uint8Array(content.buffer, content.byteOffset, content.byteLength),
           adapterNames,
+          rootPath: absRoot,
         }));
 
         const parseResults = await pool.run(jobs);
@@ -367,7 +368,7 @@ export async function indexFolder(
       for (const entry of chunk) {
         const { relPath, content, hash } = entry;
         try {
-          const { symbols, imports, declaredPackage } = await processFile(relPath, content, adapters);
+          const { symbols, imports, declaredPackage } = await processFile(relPath, content, adapters, { rootPath: absRoot });
           batch.push({ relPath, content, hash, symbols, imports, declaredPackage });
         } catch (err) {
           errors.push({
@@ -664,7 +665,7 @@ export async function reindexFiles(
     }
 
     try {
-      const { symbols, imports, declaredPackage } = await processFile(relPath, content, adapters);
+      const { symbols, imports, declaredPackage } = await processFile(relPath, content, adapters, { rootPath: absRoot });
 
       // Always clear this file's prior rows so a re-index FULLY replaces them —
       // even when the edit removed the file's last symbol/import. Leaving stale

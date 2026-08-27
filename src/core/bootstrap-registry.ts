@@ -68,6 +68,12 @@ import '../adapters/astro.js';
 // Next.js repo has react in deps; first matching adapter wins the file.
 import '../adapters/nextjs.js';
 import '../adapters/react.js';
+// angular BEFORE nestjs — both claim `.service/.module/.guard/.pipe/
+// .interceptor.ts`, and first matching adapter wins the file. On repos where
+// BOTH are active (full-stack monorepos), angular therefore owns those
+// suffixes; its extractFrameworkSymbols yields `[]` for files importing from
+// '@nestjs/' so it never mislabels NestJS code (Phase 94, Task 587 / A-12) —
+// but nestjs route/provider extraction does not run for such shadowed files.
 import '../adapters/angular.js';
 import '../adapters/nestjs.js';
 import '../adapters/express.js';

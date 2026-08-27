@@ -97,7 +97,7 @@ Applied before any handler runs:
 - **TypeScript JSX** (`.tsx`) uses `tree-sitter-tsx`, a separate grammar from `tree-sitter-typescript`. Both are bundled.
 - **Python stubs** (`.pyi`) are not indexed — only `.py` files.
 - **Objective-C** `.h` files are guarded: parsed as ObjC only if the first 16 KB contain `@interface` or `@protocol`; otherwise treated as C.
-- **Angular HTML** `.html` files are guarded: parsed as Angular templates only if a sibling `.component.ts` exists or the first 4 KB contain Angular markers.
+- **Angular HTML** `.html` files are guarded: parsed as Angular templates only if a sibling `.ts` file with the same stem exists (`foo.component.html` → `foo.component.ts`, resolved against the repo root) or the first 4 KB contain at least TWO distinct Angular markers (structural directives, control flow, event/property bindings, interpolation, routerLink). Plain HTML never yields symbols.
 - **Terraform**: complex `dynamic` blocks may not be fully extracted.
 - **XML**: element extraction uses configurable patterns; not every tag is indexed by default. Root-element symbols are stored as `tag@module` in multi-module repos to avoid collisions.
 - **OpenAPI**: schema-name extraction supports hyphens (`[\w-]+`), so GitHub-style schemas like `pull-request` are indexed.

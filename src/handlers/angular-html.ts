@@ -2,22 +2,32 @@
  * Angular HTML template handler — regex-based extraction.
  *
  * Only indexes `.html` files that are Angular templates, identified by:
- *   1. A sibling `.component.ts` file (same stem), OR
- *   2. Angular markers in the first 4KB (ngIf, ngFor, routerLink, etc.)
+ *   1. A sibling `.ts` file with the same stem (foo.component.html →
+ *      foo.component.ts), resolved against the repo root passed via
+ *      HandlerContext (Phase 94, Task 585 — the pre-94 check built
+ *      `foo.component.component.ts` against process.cwd(): dead code), OR
+ *   2. At least TWO distinct Angular markers in the first 4KB (one marker
+ *      alone false-positived on plain HTML: `(e) =>` arrows, `href="#top"`).
  *
- * Symbols extracted:
+ * Symbols extracted (one per distinct name, real match-local byte spans):
  *   <app-foo>, <my-component>       → kind: 'component', name: tag-name
  *   *ngIf, *ngFor, *ngSwitch        → kind: 'property',  name: *ngIf etc.
  *   @if, @for, @switch (v17+ flow)  → kind: 'property',  name: @if etc.
  *   (click)="onSave()"              → kind: 'property',  name: (click), sig: onSave()
  *   #userInput                      → kind: 'const',     name: userInput
  *   routerLink="..."                → kind: 'const',     name: routerLink
+ *
+ * Regex-handler contract (file-processor header): this handler computes TRUE
+ * byte offsets itself — char match indices are converted via the shared
+ * offset converter.
  */
 import { createHash } from 'crypto';
 import { existsSync } from 'fs';
 import { join, dirname, basename } from 'path';
+import { buildOffsetConverter } from '../core/offsets.js';
 import type {
   LanguageHandler,
+  HandlerContext,
   SymbolRecord,
   SymbolKind,
   ImportRecord,
@@ -44,24 +54,42 @@ function trunc(s: string, max = 120): string {
 // ─── Angular detection ────────────────────────────────────────────────────────
 
 const ANGULAR_MARKERS = [
-  '*ngIf', '*ngFor', '*ngSwitch', '[(ng', '@for', '@if', 'routerLink', '[(ngModel)]',
+  '*ngIf', '*ngFor', '*ngSwitch', '[(ng', '@for ', '@if ', '@if(', '@for(', 'routerLink', '[(ngModel)]',
 ];
-// Angular event binding syntax (click)="..." is uniquely Angular
-const EVENT_BINDING_DETECT_RE = /\([a-z]\w*\)\s*=/;
+// Attribute-position event binding: whitespace, then (event)=" — never matches
+// arrow functions `(e) =>` (no `="`) or call arguments.
+const EVENT_BINDING_DETECT_RE = /\s\([a-z][\w.]*\)\s*=\s*"/;
+// Attribute-position property binding [prop]=" — Angular-specific (Vue uses :prop).
+const PROPERTY_BINDING_DETECT_RE = /\s\[[A-Za-z][\w.-]*\]\s*=\s*"/;
+// Interpolation — weak alone (handlebars/vue share it), counts as ONE marker.
+const INTERPOLATION_DETECT_RE = /\{\{/;
+
+/** Count DISTINCT Angular marker types present in the first 4KB. */
+function countMarkers(peek: string): number {
+  let count = 0;
+  for (const m of ANGULAR_MARKERS) {
+    if (peek.includes(m)) count++;
+  }
+  if (EVENT_BINDING_DETECT_RE.test(peek)) count++;
+  if (PROPERTY_BINDING_DETECT_RE.test(peek)) count++;
+  if (INTERPOLATION_DETECT_RE.test(peek)) count++;
+  return count;
+}
 
 /**
  * Returns true if the file should be treated as an Angular template.
- * Checks for sibling .component.ts or Angular markers in first 4KB.
+ * Sibling `.ts` colocation (needs context.rootPath) or ≥2 distinct markers.
  */
-function isAngularTemplate(source: Buffer, filePath: string): boolean {
-  // Check sibling .component.ts (filePath is relative, but we check fs anyway)
-  const stem = basename(filePath);
-  const noExt = stem.endsWith('.html') ? stem.slice(0, -5) : stem;
-  const siblingTs = join(dirname(filePath), noExt + '.component.ts');
-  if (existsSync(siblingTs)) return true;
+function isAngularTemplate(source: Buffer, filePath: string, context?: HandlerContext): boolean {
+  if (context?.rootPath) {
+    const stem = basename(filePath);
+    const noExt = stem.endsWith('.html') ? stem.slice(0, -5) : stem;
+    const siblingTs = join(context.rootPath, dirname(filePath), noExt + '.ts');
+    if (existsSync(siblingTs)) return true;
+  }
 
   const peek = source.slice(0, 4 * 1024).toString('utf8');
-  return ANGULAR_MARKERS.some((m) => peek.includes(m)) || EVENT_BINDING_DETECT_RE.test(peek);
+  return countMarkers(peek) >= 2;
 }
 
 // ─── Patterns ─────────────────────────────────────────────────────────────────
@@ -70,14 +98,17 @@ function isAngularTemplate(source: Buffer, filePath: string): boolean {
 const COMPONENT_TAG_RE = /<([\w]+-[\w-]+)[\s>]/g;
 // Structural directive usage: *ngIf, *ngFor, *ngSwitch
 const STRUCT_DIRECTIVE_RE = /\*ng(If|For|Switch)\b/g;
-// Angular 17+ control flow: @if, @for, @switch, @defer, @placeholder, @loading, @error
-const CONTROL_FLOW_RE = /@(if|for|switch|defer|placeholder|loading|error)\b/g;
-// Event binding: (eventName)="handler()"
-const EVENT_BINDING_RE = /\(([a-z]\w*)\)\s*=\s*"([^"]+)"/g;
-// Template reference variable: #varName
-const TEMPLATE_REF_RE = /#(\w+)\b/g;
+// Angular 17+ control flow: @if, @for, @switch, @defer, @placeholder, @loading,
+// @error — anchored to a preceding start/whitespace/brace so email addresses
+// and CSS at-rules in inline styles don't match.
+const CONTROL_FLOW_RE = /(?:^|[\s{}])@(if|for|switch|defer|placeholder|loading|error)\b/g;
+// Event binding at attribute position: (eventName)="handler()"
+const EVENT_BINDING_RE = /\s\(([a-z][\w.]*)\)\s*=\s*"([^"]+)"/g;
+// Template reference variable at attribute position: #varName followed by an
+// attribute/tag delimiter — kills href="#top", &#39;, color:#fff.
+const TEMPLATE_REF_RE = /\s#([A-Za-z_]\w*)(?=[\s=>/])/g;
 // routerLink attribute presence
-const ROUTER_LINK_RE = /\brouterLink\s*=/;
+const ROUTER_LINK_RE = /\brouterLink\s*=/g;
 
 // Standard HTML elements to exclude from component detection
 const HTML_ELEMENTS = new Set([
@@ -97,13 +128,22 @@ const HTML_ELEMENTS = new Set([
 
 // ─── Symbol extraction ────────────────────────────────────────────────────────
 
-function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRecord[] {
-  if (!isAngularTemplate(source, filePath)) return [];
+function extractSymbols(
+  _tree: Tree,
+  source: Buffer,
+  filePath: string,
+  context?: HandlerContext,
+): SymbolRecord[] {
+  if (!isAngularTemplate(source, filePath, context)) return [];
 
   const text = source.toString('utf8');
   const symbols: SymbolRecord[] = [];
-  const startByte = 0;
-  const endByte = source.length;
+  // Regex-handler contract: convert char match indices to TRUE byte offsets.
+  const conv = buildOffsetConverter(source, text);
+  const span = (charStart: number, charEnd: number) => ({
+    startByte: conv.charToByte(charStart),
+    endByte: conv.charToByte(charEnd),
+  });
 
   // ── Component selectors ───────────────────────────────────────────────────
   const seenComponents = new Set<string>();
@@ -118,8 +158,7 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
       name: tag,
       kind: 'component',
       filePath,
-      startByte,
-      endByte,
+      ...span(m.index, m.index + m[0].length),
       signature: trunc(`<${tag}>`),
       summary: `Angular component: ${tag}`,
     });
@@ -137,8 +176,7 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
       name,
       kind: 'property',
       filePath,
-      startByte,
-      endByte,
+      ...span(m.index, m.index + m[0].length),
       signature: trunc(name),
       summary: `Angular structural directive: ${name}`,
     });
@@ -151,13 +189,13 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
     const name = `@${m[1]!}`;
     if (seenFlow.has(name)) continue;
     seenFlow.add(name);
+    const atIdx = m.index + m[0].indexOf('@');
     symbols.push({
       id: makeId(filePath, name, 'property'),
       name,
       kind: 'property',
       filePath,
-      startByte,
-      endByte,
+      ...span(atIdx, atIdx + name.length),
       signature: trunc(name),
       summary: `Angular control flow: ${name}`,
     });
@@ -176,8 +214,7 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
       name: eventName,
       kind: 'property',
       filePath,
-      startByte,
-      endByte,
+      ...span(m.index + 1, m.index + m[0].length),
       signature: trunc(handler),
       summary: `Event binding ${eventName}: ${handler}`,
     });
@@ -195,22 +232,22 @@ function extractSymbols(_tree: Tree, source: Buffer, filePath: string): SymbolRe
       name: refName,
       kind: 'const',
       filePath,
-      startByte,
-      endByte,
+      ...span(m.index + 1, m.index + m[0].length),
       signature: trunc(`#${refName}`),
       summary: `Template reference variable: #${refName}`,
     });
   }
 
   // ── routerLink ────────────────────────────────────────────────────────────
-  if (ROUTER_LINK_RE.test(text) && !seenRefs.has('routerLink')) {
+  ROUTER_LINK_RE.lastIndex = 0;
+  const rl = ROUTER_LINK_RE.exec(text);
+  if (rl !== null && !seenRefs.has('routerLink')) {
     symbols.push({
       id: makeId(filePath, 'routerLink', 'const'),
       name: 'routerLink',
       kind: 'const',
       filePath,
-      startByte,
-      endByte,
+      ...span(rl.index, rl.index + rl[0].length),
       signature: 'routerLink',
       summary: 'Angular router link binding',
     });

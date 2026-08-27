@@ -11,6 +11,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.27.0] - 2026-08-27 — Phase 94: Angular Integrity
+
+From the Angular deep-dive audit (A-1…A-13): duplicate class rows, zero
+class-field extraction, a doubly-dead HTML-template guard, route extraction
+that never fired on real apps, and unverified Phase-70/73 fixes.
+
+> **Re-index note:** Angular repos should be re-indexed once on this version
+> to heal duplicate class rows (every `@Component`/`@Directive`/`@Pipe`/guard
+> was stored twice under two ids) and to gain field, route, and template
+> symbols. TypeScript repos in general gain class-field (`property`) symbols.
+> No schema change.
+
+### Fixed (correctness)
+
+- **Duplicate Angular class rows killed** (A-1): the adapter re-emitted every
+  decorated class under a second id (kind is inside the id hash). It now
+  collects per-file facts and upgrades the TS handler's own row in place
+  (android/react pattern) — kind + metadata + recomputed id, real spans,
+  signatures, and docstrings preserved. One row per class. Functional
+  `canX` guard consts stop duplicating their handler row too. Measured:
+  872 duplicate rows removed across the three Angular benchmark repos;
+  angular-realworld P@3 +8pp from de-duplication alone.
+- **Abstract classes recognized** (A-9): `export abstract class` +
+  `@Component`/`@Injectable`/guards now get Angular metadata (bitwarden has
+  140 abstract classes in `.service.ts` alone).
+- **Angular HTML sibling guard repaired** (A-3): the colocation check built
+  `foo.component.component.ts` (a name that never exists) and resolved it
+  against `process.cwd()` — dead code. It now checks `<stem>.ts` against the
+  repo root, threaded to handlers via the new optional `HandlerContext`
+  (worker parity included). Marker-less templates like angular-realworld's
+  `app.component.html` are indexed again.
+- **Angular HTML false positives killed** (A-5): claiming a `.html` file now
+  requires TWO distinct Angular markers; event-binding and template-ref
+  regexes are anchored to attribute position — plain HTML with `(e) =>`
+  arrows, `href="#top"`, entities, or hex colors yields zero symbols.
+- **Angular HTML spans** (A-6): every template symbol spanned the whole file;
+  spans are now match-local true byte offsets, one symbol per distinct name.
+- **Route extraction fires on real apps** (A-4): `forRoot(routesVar)` resolves
+  the same-file `Routes` declaration (the dominant pattern — 11 sites in
+  bitwarden matched none before); arrays are bracket-matched so nested
+  `children`/`canActivate` no longer truncate; standalone
+  `provideRouter(...)` and bare `const routes: Routes = [...]` are extracted;
+  route symbols get real spans plus `component`/`guards`/`lazy` metadata.
+  Cross-file route variables remain a documented limitation.
+- **Guard detection heritage-only** (A-7): a service *mentioning* CanActivate
+  in a comment/body is no longer reclassified to `middleware`; all guard
+  interfaces (`CanActivateChild`/`CanDeactivate`/`CanMatch`/`CanLoad`) are
+  recognized; guards keep `angular_injectable` alongside. Typed functional
+  providers (`CanActivateFn`/`ResolveFn`/`HttpInterceptorFn` consts) become
+  `middleware` with guard/resolver/interceptor metadata — the real-world
+  `authGuard`/`errorInterceptor`/`bankAccountResolve` names the old
+  `/^can[A-Z]/` rule missed.
+- **NestJS never mislabeled** (A-12): angular wins the shared
+  `.service/.module/.guard/...` suffixes by registration order (now
+  documented at the registration site); files importing from `@nestjs/` are
+  left completely untouched by the angular adapter — extraction AND
+  enrichment. Multi-adapter integration test added (angular + nestjs in one
+  repo, real bootstrap order).
+- **`standalone` inversion fixed** (A-11): tri-state — explicit
+  `standalone: true`/`false` recorded as written, absent = unknown (standalone
+  is the Angular ≥19 default; the old code recorded absent as not-standalone).
+  Standalone `imports: [...]` component deps captured as names.
+
+### Added
+
+- **TypeScript class-field extraction** (A-2, framework-neutral): the TS
+  handler emits `property` symbols for class fields — decorated
+  (`@Input`/`@Output`/`@ViewChild`), typed, and initialized fields
+  (`signal(0)`, `fb.group({...})`, `users$` observables) — with qualified
+  `Class.field` names, real spans, decorator names and explicit
+  `private`/`protected` visibility in frameworkMeta, and the initializer head
+  as FTS content. ECMAScript `#private` fields stay skipped (the method
+  policy). Angular stamps `angular_signal` / `angular_injection` (inject
+  token name) on top.
+- **Angular detection beyond the root package.json** (A-8): `angular.json` /
+  `workspace.json` at the root, or a bounded monorepo scan — Nx workspaces
+  start working. fileFilter now also routes `*.routes.ts`, `app.config.ts`,
+  `main.ts`, and the NgRx family (`.effects/.reducer/.facade/.store/.state.ts`).
+- **`isAngularRepo` from repo evidence** (A-10): derived once per repo from
+  the files table (angular.json anywhere, or ≥3 `.component.ts` files) instead
+  of from the current search's candidate pool (chicken-and-egg; `.module.ts`
+  also matched NestJS). Memoized; harness imports the same helper.
+
+### Ranking (benchmark-gated)
+
+- **Interceptor/guard boost extended to kind `middleware`**: the Phase-73
+  boost (+30 on guard/interceptor-named symbols for guard/interceptor
+  queries) only fired for kinds `function`/`class` — so the 586
+  reclassification of functional guards to `middleware` silently cost them
+  the boost (bitwarden gt-15 rank 1→5, jhipster gt-16 out of top-5,
+  measured). NestJS adapter guards were ALWAYS middleware and were excluded
+  from this boost since Phase 73. Fixed; bitwarden recovered to 16/20/24 and
+  jhipster reached 36/44/60 — its best result.
+- **Qualifier-word damp extended to TS fields**: new `Parent.field` symbols
+  carry every parent name word and displaced sibling methods on
+  angular-realworld (P@3/R@5 −8pp on first measurement). Query words matched
+  only via the qualifier segment now count half for kind `property` in
+  `.ts/.tsx` (the Phase-93 Vue member mechanism; damp only — the parent +15
+  shadow transfer was deliberately NOT extended). Recovered realworld R@5 to
+  72; guards all byte-identical; cal-com P@3 +4pp.
+
+### Benchmarks
+
+Fresh pre-94 baselines (v1.26.0) vs post-94 final: angular-realworld 36/60/72
+→ 36/60/72 (flat scores, +44% searchable symbols; the 583 de-dup P@3 gain of
++8pp was traded back by field-symbol near-ties — recorded as Phase-95
+evidence), jhipster 32/44/56 → 36/44/60 (P@1 +4, R@5 +4 — its best result),
+bitwarden 16/20/24 → 16/20/24 flat with symbols 27,623 → 40,094 (+45%
+searchable surface: fields, templates, routes).
+Free wins on guards: excalidraw 4/36/36 → 8/44/52 (React class fields),
+cal-com 36/48/64 → 36/52/68. All other guards byte-identical (nestjs-ecom
+80/100/100, novu, infisical, trpc, nuxt, kurirfe, vismedic). This phase also
+closes A-13: the Phase-70/73 Angular fixes are now benchmark-verified.
+
+---
+
 ## [1.26.0] - 2026-08-27 — Phase 93: Vue/Nuxt Integrity
 
 From the Vue/Nuxt deep-dive audit (V-1…V-13): phantom Nuxt symbols, dead

@@ -139,13 +139,67 @@ React adapter (its `fileFilter` claims only Next-specific paths; other
 
 ### Angular
 
-Detected by `@angular/core`. Decorated classes become first-class:
-- `@Component` → `component` (with `selector`)
-- `@Injectable` → `class` (service)
-- `@NgModule` → `class` (module)
-- `@Directive` → `component`
-- `@Pipe` → `component` (with the pipe name)
-- `RouterModule.forRoot` / `forChild` configs → `route` symbols
+Detected by `@angular/core` in the root package.json, an `angular.json` /
+`workspace.json` at the root, or a bounded monorepo scan for a nested
+`angular.json` / package.json declaring `@angular/core` (Nx workspaces work).
+
+The adapter routes only files matching these suffixes: `.component.ts`,
+`.service.ts`, `.module.ts`, `.directive.ts`, `.pipe.ts`, `.guard.ts`,
+`.resolver.ts`, `.interceptor.ts`, `-routing.module.ts`, `.routes.ts`,
+`app.config.ts`, `main.ts`, and the NgRx family (`.effects.ts`, `.reducer.ts`,
+`.facade.ts`, `.store.ts`, `.state.ts`). Off-convention file names are parsed
+by the TypeScript handler but get no Angular metadata.
+
+Decorated classes are UPGRADED in place (one row per class — the TS handler's
+spans, signatures, and docstrings are preserved; since v1.27.0 the adapter no
+longer re-emits duplicate rows):
+- `@Component` / `@Directive` → kind `component` (with `selector`, tri-state
+  `angular_standalone` — `true`/`false` only when written explicitly, absent
+  means unknown since standalone is the Angular ≥19 default — and standalone
+  `angular_imports` names)
+- `@Injectable` → kind `class` with `angular_service`/`angular_injectable`
+- `@NgModule` → kind `class` with `angular_module`
+- `@Pipe` → kind `component` with `angular_pipe` + `pipe_name`
+- A router-guard interface in the **heritage clause** (`implements
+  CanActivate`/`CanActivateChild`/`CanDeactivate`/`CanMatch`/`CanLoad`) →
+  kind `middleware` with `angular_guard` (a service merely *mentioning*
+  CanActivate in a comment or body stays a service)
+- Typed functional providers — `const x: CanActivateFn/CanDeactivateFn/
+  CanMatchFn` → `middleware` + `angular_guard`; `ResolveFn` →
+  `angular_resolver`; `HttpInterceptorFn` → `angular_interceptor`; a bare
+  `/^can[A-Z]/` const name stays as fallback
+- Abstract classes (`export abstract class`) are recognized like concrete ones
+
+Class fields (extracted by the TS handler since v1.27.0) gain
+`angular_signal` (`signal`/`computed`/`input`/`output`/`model` initializers)
+or `angular_injection` (the `inject(Token)` token name).
+
+Routes: `RouterModule.forRoot/forChild([...])` AND `forRoot(routesVar)`
+(same-file variable resolution), `provideRouter(...)`, and bare
+`const routes: Routes = [...]` declarations → `route` symbols with real spans;
+nested `children`/`canActivate` arrays no longer truncate; per route the
+`component` target, `lazy` flag, and `canActivate` guard names land in
+frameworkMeta. Cross-file route variables are a documented limitation.
+
+NestJS shadowing: angular registers before nestjs and wins the shared
+suffixes; files importing from `@nestjs/` are left completely untouched by
+the angular adapter (no metadata, no reclassification), but NestJS
+route/provider extraction does not run for those shadowed files.
+
+**Angular HTML templates** (`.html`) are handled by a dedicated regex handler:
+a file is treated as a template when a sibling `.ts` with the same stem exists
+(`foo.component.html` → `foo.component.ts`) or when it contains at least TWO
+distinct Angular markers (`*ngIf`, `@if`/`@for`, `(click)="..."` bindings,
+`[prop]="..."` bindings, `{{ }}` interpolation, `routerLink`, ...). Extracted
+per distinct name with match-local spans: component tags (kebab-case) →
+`component`, structural directives + control flow + event bindings →
+`property`, template refs + `routerLink` → `const`. Plain HTML with inline
+JS arrows, `href="#..."` anchors, or hex colors yields zero symbols.
+
+**NOT extracted:** `@HostListener`/`@ContentChild` metadata, `providedIn`
+scoping, NgModule declarations/imports/providers graph edges, template ↔
+component import edges, inline `template:` string contents, cross-file route
+variables, `loadChildren` lazy-module graph edges.
 
 ### NestJS
 

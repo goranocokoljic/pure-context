@@ -164,10 +164,58 @@ function processDeclaration(
         signature: buildSignature(outerNode, sourceStr),
         summary,
       });
-      // Extract methods from class_body
+      // Extract methods and fields from class_body
       const body = declNode.children.find((c) => c.type === 'class_body');
       if (body) {
         for (const member of body.children) {
+          if (member.type === 'public_field_definition') {
+            // Class fields (Phase 94, Task 584): decorated fields (@Input/@Output/
+            // @ViewChild), plain typed fields, initialized fields (signal(0),
+            // fb.group({...}), users$ observables). Same private policy as
+            // methods: only ECMAScript-#private names are skipped; an explicit
+            // `private` modifier is indexed with visibility recorded.
+            const fieldName = getChildText(member, sourceStr, 'property_identifier');
+            if (!fieldName || fieldName.startsWith('#')) continue;
+            const qualified = `${name}.${fieldName}`;
+            const decorators: string[] = [];
+            for (const c of member.children) {
+              if (c.type === 'decorator') {
+                const dm = /^@\s*([A-Za-z_$][\w$]*)/.exec(sourceStr.slice(c.startIndex, c.endIndex));
+                if (dm) decorators.push(dm[1]!);
+              }
+            }
+            const accessibility = getChildText(member, sourceStr, 'accessibility_modifier');
+            // Initializer head → bodySnippet (FTS): the child after '='.
+            let initSnippet = '';
+            const eqIdx = member.children.findIndex((c) => c.type === '=');
+            const valueNode = eqIdx >= 0 ? member.children[eqIdx + 1] : undefined;
+            if (valueNode) {
+              initSnippet = sourceStr
+                .slice(valueNode.startIndex, Math.min(valueNode.endIndex, valueNode.startIndex + 600))
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 200);
+            }
+            const fieldDoc = member.previousNamedSibling?.type === 'comment'
+              ? extractDocstring(member)
+              : null;
+            const meta: Record<string, unknown> = {};
+            if (decorators.length > 0) meta['decorators'] = decorators;
+            if (accessibility && accessibility !== 'public') meta['visibility'] = accessibility;
+            symbols.push({
+              id: makeId(filePath, qualified, 'property'),
+              name: qualified,
+              kind: 'property',
+              filePath,
+              startByte: member.startIndex,
+              endByte: member.endIndex,
+              signature: buildSignature(member, sourceStr),
+              summary: fieldDoc ?? '',
+              ...(initSnippet ? { bodySnippet: initSnippet } : {}),
+              ...(Object.keys(meta).length > 0 ? { frameworkMeta: meta } : {}),
+            });
+            continue;
+          }
           if (member.type === 'method_definition') {
             const methodName = getChildText(member, sourceStr, 'property_identifier', 'identifier');
             if (!methodName || methodName.startsWith('#')) continue; // skip private

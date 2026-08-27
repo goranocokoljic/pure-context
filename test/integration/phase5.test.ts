@@ -602,7 +602,8 @@ describe('20. Regression: Phase 1 TypeScript fixture unaffected by Phase 5 setup
     const db = openDatabase(tsRepoId);
     const all = searchSymbols(db, tsRepoId, '', { limit: 100 });
     db.close();
-    const validKinds = new Set(['function', 'class', 'method', 'const', 'type', 'interface', 'enum']);
+    // 'property' added in Phase 94 (class-field extraction, Task 584)
+    const validKinds = new Set(['function', 'class', 'method', 'const', 'type', 'interface', 'enum', 'property']);
     expect(all.every((s) => validKinds.has(s.kind))).toBe(true);
   });
 });

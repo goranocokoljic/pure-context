@@ -119,15 +119,19 @@ Extracts:
 
 ### Angular
 
-**Detected by:** `@angular/core` in `package.json`.
+**Detected by:** `@angular/core` in `package.json`, an `angular.json`/`workspace.json` at the root, or a bounded monorepo scan (nested `angular.json` or package.json declaring `@angular/core`).
 
-Extracts from decorated classes:
-- `@Component` → `component` (with `selector`)
-- `@Injectable` → `class` (service)
+Upgrades the TypeScript handler's rows in place (one row per class, spans/docstrings preserved):
+- `@Component` / `@Directive` → `component` (with `selector`, tri-state `angular_standalone`, standalone `angular_imports`)
+- `@Injectable` → `class` (service; `angular_service` + `angular_injectable`)
 - `@NgModule` → `class` (module)
-- `@Directive` → `component` (with `selector`)
 - `@Pipe` → `component` (with pipe name)
-- `RouterModule.forRoot/forChild` → `route` symbols
+- Guard interfaces in the heritage clause (`CanActivate(Child)`/`CanDeactivate`/`CanMatch`/`CanLoad`) → `middleware`
+- Typed functional providers (`CanActivateFn`/`ResolveFn`/`HttpInterceptorFn` consts) → `middleware`
+- Class fields get `angular_signal` (signal/computed/input/output/model) or `angular_injection` (inject(Token))
+- Routes: `RouterModule.forRoot/forChild` (inline arrays AND same-file `forRoot(routesVar)`), `provideRouter(...)`, and `const routes: Routes = [...]` → `route` symbols with component/guard/lazy metadata
+
+Files importing from `@nestjs/` are never touched (angular wins the shared `.service/.module/...` suffixes by registration order; the guard prevents mislabeling). See `FRAMEWORK-ADAPTERS.md` for the full suffix list and the NOT-extracted list.
 
 ### NestJS
 

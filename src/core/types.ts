@@ -235,6 +235,18 @@ export interface DiscoveredFile {
 
 // ─── Language handler interface ───────────────────────────────────────────────
 
+/**
+ * Optional per-file context passed to extractSymbols (Phase 94, Task 585).
+ * `rootPath` is the absolute repo root the indexed file's relative path
+ * resolves against — handlers that need a filesystem check (the Angular HTML
+ * handler's sibling `.ts` colocation test) use it; every other handler
+ * ignores the parameter. Absent on paths without a local root (remote
+ * indexing) — handlers must degrade gracefully.
+ */
+export interface HandlerContext {
+  rootPath?: string;
+}
+
 export interface LanguageHandler {
   extensions(): string[];
   /**
@@ -243,7 +255,7 @@ export interface LanguageHandler {
    * filePath hint allows per-extension grammar selection (e.g. .tsx vs .ts).
    */
   grammarPath(filePath?: string): string | null;
-  extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRecord[];
+  extractSymbols(tree: Tree, source: Buffer, filePath: string, context?: HandlerContext): SymbolRecord[];
   extractImports(tree: Tree, source: Buffer): ImportRecord[];
   extractDocstring(node: SyntaxNode): string | null;
   /**

@@ -6,7 +6,7 @@
  * pipeline (DB, watcher, etc.).
  */
 
-import type { ImportRecord, FrameworkAdapter, SymbolRecord, Tree } from './types.js';
+import type { ImportRecord, FrameworkAdapter, HandlerContext, SymbolRecord, Tree } from './types.js';
 import { parseFile } from './parse-dispatcher.js';
 import { getHandler, getHandlerByLanguage } from '../handlers/handler-registry.js';
 import { enrichSymbols } from '../summarizer/summarizer.js';
@@ -45,6 +45,7 @@ export async function processFile(
   relPath: string,
   content: Buffer,
   adapters: FrameworkAdapter[],
+  context?: HandlerContext,
 ): Promise<ProcessedResult> {
   // Find the first adapter whose fileFilter matches this path
   const adapter = adapters.find((a) => a.fileFilter(relPath));
@@ -54,7 +55,7 @@ export async function processFile(
   let declaredPackage: string | null = null;
 
   if (adapter) {
-    const result = await processWithAdapter(relPath, content, adapter);
+    const result = await processWithAdapter(relPath, content, adapter, context);
     symbols = result.symbols;
     imports = result.imports;
     declaredPackage = result.declaredPackage;
@@ -78,7 +79,7 @@ export async function processFile(
 
     if (handler.grammarPath() === null) {
       // No tree-sitter grammar — handler parses the content directly.
-      symbols = handler.extractSymbols(null as unknown as Tree, content, relPath);
+      symbols = handler.extractSymbols(null as unknown as Tree, content, relPath, context);
       imports = handler.extractImports(null as unknown as Tree, content).map((imp) => ({
         ...imp,
         sourceFile: relPath,
@@ -87,7 +88,7 @@ export async function processFile(
     } else {
       const tree = await parseFile(content, handler);
       symbols = convertSymbolSpans(
-        handler.extractSymbols(tree, content, relPath),
+        handler.extractSymbols(tree, content, relPath, context),
         buildOffsetConverter(content),
       );
       imports = handler.extractImports(tree, content).map((imp) => ({
@@ -146,6 +147,7 @@ async function processWithAdapter(
   relPath: string,
   content: Buffer,
   adapter: FrameworkAdapter,
+  context?: HandlerContext,
 ): Promise<ProcessedResult> {
   let blockSymbols: SymbolRecord[] = [];
   const imports: ImportRecord[] = [];
@@ -199,7 +201,7 @@ async function processWithAdapter(
         // Regex-only handler (XML, SCSS, …) — no tree-sitter parse. The android
         // adapter routes AndroidManifest.xml here; parseFile would throw on a
         // null grammar and drop the whole file.
-        blockSymbols = handler.extractSymbols(null as unknown as Tree, content, relPath);
+        blockSymbols = handler.extractSymbols(null as unknown as Tree, content, relPath, context);
         imports.push(
           ...handler.extractImports(null as unknown as Tree, content).map((imp) => ({
             ...imp,

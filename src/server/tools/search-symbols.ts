@@ -498,9 +498,7 @@ export async function handler(args: {
         isMixedMonorepo: detectMixedMonorepo(symbols),
         hasReactHookQuery: hasReactHookQuery(args.query),
         isJavaGroovyMixed: detectJavaGroovyMixed(symbols),
-        isAngularRepo: symbols.some(
-          (s) => s.filePath.endsWith('.component.ts') || s.filePath.endsWith('.module.ts'),
-        ),
+        isAngularRepo: detectAngularRepo(db, repo.id),
       };
       const ranked: ScoredSymbol[] = rankSymbols(symbols, args.query, args.debug, domain, rankOpts);
 
@@ -638,6 +636,46 @@ export function hasReactHookQuery(query: string): boolean {
  * Uses the already-fetched FTS5 candidate pool — no extra DB queries.
  */
 const BACKEND_APP_SEGMENTS = new Set(['api', 'server', 'backend', 'trpc']);
+
+/**
+ * Repo-evidence Angular detection (Phase 94, Task 588 / A-10).
+ *
+ * The pre-94 flag was derived from the CANDIDATE POOL (`.component.ts` /
+ * `.module.ts` present in results) — chicken-and-egg: the Phase-73 lifecycle
+ * boost could not rescue a pool that was not already Angular-shaped, and
+ * `.module.ts` also matched NestJS. Now derived once per repo from the files
+ * table (an angular.json anywhere, or ≥3 `.component.ts` files — a NestJS
+ * repo has neither), memoized per repoId for the process lifetime.
+ * Exported so the benchmark harness uses the same derivation (Phase-88 rule).
+ */
+const angularRepoCache = new Map<string, boolean>();
+
+export function detectAngularRepo(
+  db: { prepare(sql: string): { get(...params: unknown[]): unknown } },
+  repoId: string,
+): boolean {
+  const cached = angularRepoCache.get(repoId);
+  if (cached !== undefined) return cached;
+  let result = false;
+  try {
+    const row = db.prepare(
+      `SELECT
+         SUM(CASE WHEN path = 'angular.json' OR path LIKE '%/angular.json' OR path LIKE '%\\angular.json' THEN 1 ELSE 0 END) AS cfg,
+         SUM(CASE WHEN path LIKE '%.component.ts' THEN 1 ELSE 0 END) AS comps
+       FROM files WHERE repo_id = ?`,
+    ).get(repoId) as { cfg: number | null; comps: number | null } | undefined;
+    result = (row?.cfg ?? 0) > 0 || (row?.comps ?? 0) >= 3;
+  } catch {
+    result = false;
+  }
+  angularRepoCache.set(repoId, result);
+  return result;
+}
+
+/** Test hook — clear the per-repo Angular detection cache. */
+export function _clearAngularRepoCacheForTesting(): void {
+  angularRepoCache.clear();
+}
 
 export function detectMixedMonorepo(symbols: SymbolRecord[]): boolean {
   let hasFrontend = false;
