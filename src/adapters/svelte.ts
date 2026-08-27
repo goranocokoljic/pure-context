@@ -28,6 +28,12 @@ function componentNameFromPath(filePath: string): string {
   return toPascalCase(basename(filePath, '.svelte'));
 }
 
+/**
+ * Positive extension allowlist for the composable upgrade (Phase 92, Task 569a).
+ * `.svelte` plus plain JS/TS — never `.tsx`/`.jsx` (React's), never other languages.
+ */
+const COMPOSABLE_FILES = /\.(svelte|ts|js|mts|mjs|cts|cjs)$/;
+
 /** Returns true if a package.json declares a svelte / @sveltejs/* dependency. */
 function pkgDeclaresSvelte(raw: string): boolean {
   return pkgDepMatches(raw, (k) => k === 'svelte' || k.startsWith('@sveltejs/'));
@@ -93,9 +99,17 @@ export const svelteAdapter: FrameworkAdapter = {
 
   // ── Metadata enrichment ──────────────────────────────────────────────────────
 
-  /** Upgrade exported `useXxx` functions/consts to kind `'composable'`. */
+  /**
+   * Upgrade exported `useXxx` functions/consts to kind `'composable'`.
+   * Gated to `.svelte` plus plain JS/TS files (Phase 92) — never `.tsx`/`.jsx`
+   * (React's), never other languages.
+   */
   enrichMetadata(symbol: SymbolRecord): SymbolRecord {
-    if ((symbol.kind === 'function' || symbol.kind === 'const') && /^use[A-Z]/.test(symbol.name)) {
+    if (
+      (symbol.kind === 'function' || symbol.kind === 'const') &&
+      /^use[A-Z]/.test(symbol.name) &&
+      COMPOSABLE_FILES.test(symbol.filePath)
+    ) {
       return {
         ...symbol,
         kind: 'composable',

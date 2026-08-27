@@ -83,6 +83,15 @@ export interface RankOptions {
   hasReactHookQuery?: boolean;
   isJavaGroovyMixed?: boolean;
   isAngularRepo?: boolean;
+  /**
+   * Pool-derived flag (Phase 92, Task 572a) — computed once inside rankSymbols,
+   * never by callers. It gates the NEGATIVE side of the hook/composable kind
+   * hints so backend-only repos (where "hook" means webhook) take no penalty.
+   */
+  poolHasHookKind?: boolean;
+  /** Query-derived frontend-vocab flag — computed once in rankSymbols from the
+   *  ORIGINAL-cased query (572b: `user`/`usage`/`useful` must not count). */
+  hasFrontendVocabQuery?: boolean;
 }
 
 export interface ScoredSymbol {
@@ -220,31 +229,33 @@ function isJavaPluginPath(filePath: string): boolean {
  * Return true when the symbol lives in a frontend app directory of a mixed
  * monorepo (e.g. novu apps/dashboard/, cal.com apps/web/).
  */
-function isFrontendAppPath(filePath: string): boolean {
-  const p = '/' + filePath.replace(/\\/g, '/');
-  return (
-    p.includes('/apps/dashboard/') ||
-    p.includes('/apps/web/') ||
-    p.includes('/apps/frontend/') ||
-    p.includes('/apps/client/')
-  );
+export function isFrontendAppPath(filePath: string): boolean {
+  const segs = filePath.replace(/\\/g, '/').toLowerCase().split('/');
+  // Phase 92 (572c): a frontend dir as FIRST or SECOND path segment — covers
+  // apps/dashboard/… (novu), apps/web/… (cal.com), frontend/src/… (infisical),
+  // client/… — without matching deep incidental segments.
+  return segs.slice(0, 2).some((s) => FRONTEND_APP_SEGMENTS.has(s));
 }
+
+const FRONTEND_APP_SEGMENTS = new Set(['frontend', 'client', 'web', 'dashboard']);
 
 /**
  * Return true when the query contains vocabulary strongly associated with
  * React hooks or frontend components.
+ *
+ * Phase 92 (572b): operates on the ORIGINAL-cased query. A use-prefixed token
+ * only counts when it matches the hook naming convention /^use[A-Z]/ — plain
+ * English words like `user`, `usage`, `useful` no longer trigger it.
  */
-function hasFrontendVocab(queryWords: string[]): boolean {
-  return queryWords.some(
-    (w) =>
-      (w.startsWith('use') && w.length >= 4) ||
-      w === 'hook' ||
-      w === 'hooks' ||
-      w === 'component' ||
-      w === 'react' ||
-      w === 'vue' ||
-      w === 'svelte',
-  );
+export function hasFrontendVocabQuery(query: string): boolean {
+  const FRONTEND_WORDS = new Set([
+    'hook', 'hooks', 'component', 'components',
+    'composable', 'composables', 'react', 'vue', 'svelte',
+  ]);
+  return query
+    .split(/[\s-]+/)
+    .filter(Boolean)
+    .some((tok) => /^use[A-Z]/.test(tok) || FRONTEND_WORDS.has(tok.toLowerCase()));
 }
 
 // ─── Path proximity boost helpers (Task 417) ─────────────────────────────────
@@ -499,8 +510,14 @@ export function rankSymbols(
   // scaling + camelCompound boost) even when no .groovy file made this pool —
   // per-query pool composition varies on mixed repos like jenkins (Phase 88).
   const javaCount = symbols.reduce((n, s) => n + (s.filePath.endsWith('.java') ? 1 : 0), 0);
-  const effOpts: RankOptions | undefined =
-    javaCount > symbols.length / 2 ? { ...opts, isJavaGroovyMixed: true } : opts;
+  // Phase 92 (572a/b): pool + query flags for the hook/component kind hints and
+  // the frontend-path boost, computed HERE so the benchmark harness (which calls
+  // rankSymbols directly) can never drift from production (the Phase-88 lesson).
+  const effOpts: RankOptions = {
+    ...(javaCount > symbols.length / 2 ? { ...opts, isJavaGroovyMixed: true } : opts),
+    poolHasHookKind: symbols.some((s) => s.kind === 'hook' || s.kind === 'composable'),
+    hasFrontendVocabQuery: hasFrontendVocabQuery(query),
+  };
 
   // First pass: compute base scores (without BM25) for all symbols.
   const baseResults = symbols.map((symbol) => score(symbol, queryLower, queryWords, rawQueryFreq, domain, effOpts));
@@ -659,7 +676,13 @@ function score(
     // … formula files") that repetition signals it is the primary target, giving the
     // correctly-named symbol enough margin to overcome BM25 noise from generically-
     // named symbols that also match the repeated word.
-    const DATA_KINDS = new Set<string>(['const', 'type', 'interface', 'enum', 'property']);
+    // 'component' added in Phase 92: PascalCase consts in .tsx now store kind
+    // 'component' (previously 'const', already in this set) — without it the
+    // reclassification handed them the FULL +60 identity and four `Organization`
+    // components displaced the asked-for fetch function on a multi-word query
+    // (infisical gt-22). A component named by one word of a long query is
+    // exactly the context-mention pattern this scaling exists for.
+    const DATA_KINDS = new Set<string>(['const', 'type', 'interface', 'enum', 'property', 'component']);
     if (DATA_KINDS.has(symbol.kind) && queryWords.length > 1) {
       identityExact = Math.max(10, Math.round(40 / queryWords.length));
     } else {
@@ -926,6 +949,34 @@ function score(
     if (symbol.kind === 'enum') kindHintBoost = 35;
   }
 
+  // ── Hook / composable kind hints (Phase 92, Task 572a) ─────────────────────
+  // When the query names the frontend kind ("hook that…", "composable that…"),
+  // prefer symbols of that kind. `hook` and `composable` are aliases at rank
+  // time (mixed monorepos store either — the Phase-88 FTS alias reality). The
+  // NEGATIVE side is pool-gated: a pool with zero hook-kind symbols takes no
+  // penalty anywhere, so backend repos where "hook" means webhook are
+  // untouched.
+  //
+  // A `component` kind hint (+35 for kind component on the word "component")
+  // was measured and REVERTED in-phase: on Vue repos the word "component"
+  // routinely appears in queries whose target is a FUNCTION that builds or
+  // loads components ("factory function that imports the Vue component…",
+  // kurirfe gt-23/gt-24), and the hint pushed the component symbols above the
+  // asked-for factory functions (kurirfe P@3 −8pp). Hook/composable does not
+  // have this failure mode — a "hook that…" query targets the hook itself.
+  if (kindHintBoost === 0) {
+    const wantsHook =
+      queryWords.includes('hook') || queryWords.includes('hooks') ||
+      queryWords.includes('composable') || queryWords.includes('composables');
+    if (wantsHook) {
+      if (symbol.kind === 'hook' || symbol.kind === 'composable') {
+        kindHintBoost = 35;
+      } else if (opts?.poolHasHookKind && (symbol.kind === 'method' || symbol.kind === 'class')) {
+        kindHintBoost = -20;
+      }
+    }
+  }
+
   // ── Haskell kind hints (Phase 88, Task 545 — gated to .hs/.lhs files) ──────
   // Haskell ground-truth queries announce the kind explicitly ("function that
   // converts…", "record holding…", "sum type enumerating…"), and the P@1=0
@@ -1029,7 +1080,7 @@ function score(
   // In mixed monorepos (frontend + backend apps/ subdirs), boost symbols from
   // frontend paths when the query uses hook/component/use* vocabulary.
   let frontendPathBoost = 0;
-  if (opts?.isMixedMonorepo && isFrontendAppPath(symbol.filePath) && hasFrontendVocab(queryWords)) {
+  if (opts?.isMixedMonorepo && isFrontendAppPath(symbol.filePath) && opts?.hasFrontendVocabQuery) {
     frontendPathBoost = 20;
     total += frontendPathBoost;
   }

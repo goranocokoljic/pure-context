@@ -27,6 +27,14 @@ function makeId(filePath: string, name: string, kind: string): string {
 }
 
 /**
+ * Positive extension allowlist for the composable upgrade (Phase 92, Task 569a).
+ * `.vue` plus the JS/TS extensions composables live in — NEVER `.tsx`/`.jsx`
+ * (React's), NEVER other languages (a Kotlin `useCase` must not become a
+ * composable).
+ */
+const COMPOSABLE_FILES = /\.(vue|ts|js|mts|mjs|cts|cjs)$/;
+
+/**
  * Convert kebab-case or camelCase filename stems to PascalCase.
  * 'my-component' → 'MyComponent'
  * 'userCard'     → 'UserCard'
@@ -200,11 +208,17 @@ export const vueAdapter: FrameworkAdapter = {
   /**
    * Upgrade exported `useXxx` functions/consts to kind `'composable'`.
    * The id is recomputed to reflect the new kind so it remains deterministic.
+   *
+   * Gated to the extensions composables actually live in (Phase 92): `.vue`
+   * plus plain JS/TS. NEVER `.tsx`/`.jsx` (React's files — a React hook must
+   * not become a composable), NEVER other languages (a Kotlin/Swift/Java
+   * `useCase` must not become a composable just because Vue detection fired).
    */
   enrichMetadata(symbol: SymbolRecord): SymbolRecord {
     if (
       (symbol.kind === 'function' || symbol.kind === 'const') &&
-      /^use[A-Z]/.test(symbol.name)
+      /^use[A-Z]/.test(symbol.name) &&
+      COMPOSABLE_FILES.test(symbol.filePath)
     ) {
       return {
         ...symbol,

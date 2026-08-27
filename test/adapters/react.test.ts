@@ -130,6 +130,40 @@ describe('reactAdapter.detect', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // Phase 92 (Task 571) — monorepo scan
+  it('returns true when a nested package.json declares react', async () => {
+    const dir = tmpDir();
+    try {
+      writeFile(dir, 'package.json', JSON.stringify({ private: true }));
+      writeFile(dir, 'apps/web/package.json', JSON.stringify({ dependencies: { react: '^18.0.0' } }));
+      expect(await reactAdapter.detect(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns true when the repo contains a lone .tsx file', async () => {
+    const dir = tmpDir();
+    try {
+      writeFile(dir, 'src/App.tsx', 'export const x = 1;');
+      expect(await reactAdapter.detect(dir)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns false for a pure Vue repo (no react dep anywhere, no .tsx)', async () => {
+    const dir = tmpDir();
+    try {
+      writeFile(dir, 'package.json', JSON.stringify({ dependencies: { vue: '^3.0.0' } }));
+      writeFile(dir, 'src/App.vue', '<template><div /></template>');
+      writeFile(dir, 'src/composables/useFetch.ts', 'export function useFetch() {}');
+      expect(await reactAdapter.detect(dir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─── enrichMetadata — hooks ───────────────────────────────────────────────────
@@ -250,6 +284,107 @@ describe('reactAdapter.enrichMetadata — no upgrade', () => {
   });
 });
 
+// ─── enrichMetadata — Phase 92 path gates ────────────────────────────────────
+
+describe('reactAdapter.enrichMetadata — Phase 92 path gates', () => {
+  it('SCREAMING_CASE const in .tsx stays const (API_URL is not a component)', () => {
+    const result = reactAdapter.enrichMetadata!(
+      sym({ name: 'API_URL', kind: 'const', filePath: 'src/config.tsx' }),
+    );
+    expect(result.kind).toBe('const');
+  });
+
+  it('all-caps name without lowercase stays untouched (HTTP)', () => {
+    const result = reactAdapter.enrichMetadata!(
+      sym({ name: 'HTTP', kind: 'const', filePath: 'src/api.tsx' }),
+    );
+    expect(result.kind).toBe('const');
+  });
+
+  it('UIButton (leading acronym, has lowercase) in .tsx → component', () => {
+    const result = reactAdapter.enrichMetadata!(
+      sym({ name: 'UIButton', kind: 'function', filePath: 'src/UIButton.tsx' }),
+    );
+    expect(result.kind).toBe('component');
+  });
+
+  it('PascalCase function in a .ts file stays function (no repo-wide leak)', () => {
+    const result = reactAdapter.enrichMetadata!(
+      sym({ name: 'Button', kind: 'function', filePath: 'src/Button.ts' }),
+    );
+    expect(result.kind).toBe('function');
+  });
+
+  it('PascalCase Go function stays function (cross-language guard)', () => {
+    const result = reactAdapter.enrichMetadata!(
+      sym({ name: 'PushCampaignMessage', kind: 'function', filePath: 'internal/push.go' }),
+    );
+    expect(result.kind).toBe('function');
+  });
+
+  it('useXxx in src/hooks/*.ts → hook (hooks/ segment re-claim path)', () => {
+    const result = reactAdapter.enrichMetadata!(
+      sym({ name: 'useAuth', kind: 'function', filePath: 'src/hooks/useAuth.ts' }),
+    );
+    expect(result.kind).toBe('hook');
+    expect(result.frameworkMeta?.['react_hook']).toBe(true);
+  });
+
+  it('useXxx in src/utils/*.ts (no hooks/ segment) stays function', () => {
+    const result = reactAdapter.enrichMetadata!(
+      sym({ name: 'useAuth', kind: 'function', filePath: 'src/utils/useAuth.ts' }),
+    );
+    expect(result.kind).toBe('function');
+  });
+
+  it('re-claims a composable in a hooks/ .ts file and drops the vue marker', () => {
+    const result = reactAdapter.enrichMetadata!(
+      sym({
+        name: 'useCreateWorkflow',
+        kind: 'composable' as const,
+        filePath: 'apps/dashboard/src/hooks/useCreateWorkflow.ts',
+        frameworkMeta: { vue_composable: true },
+      }),
+    );
+    expect(result.kind).toBe('hook');
+    expect(result.frameworkMeta?.['react_hook']).toBe(true);
+    expect(result.frameworkMeta?.['vue_composable']).toBeUndefined();
+  });
+
+  it('re-claims a composable in a .tsx file', () => {
+    const result = reactAdapter.enrichMetadata!(
+      sym({
+        name: 'useWidget',
+        kind: 'composable' as const,
+        filePath: 'src/components/Widget.tsx',
+        frameworkMeta: { svelte_composable: true },
+      }),
+    );
+    expect(result.kind).toBe('hook');
+    expect(result.frameworkMeta?.['svelte_composable']).toBeUndefined();
+  });
+
+  it('does NOT re-claim a composable in a composables/ .ts file (Vue territory)', () => {
+    const result = reactAdapter.enrichMetadata!(
+      sym({
+        name: 'useFetch',
+        kind: 'composable' as const,
+        filePath: 'apps/web/composables/useFetch.ts',
+        frameworkMeta: { vue_composable: true },
+      }),
+    );
+    expect(result.kind).toBe('composable');
+    expect(result.frameworkMeta?.['vue_composable']).toBe(true);
+  });
+
+  it('useCase in a .kt file stays function (cross-language guard)', () => {
+    const result = reactAdapter.enrichMetadata!(
+      sym({ name: 'useCase', kind: 'function', filePath: 'app/src/main/UseCases.kt' }),
+    );
+    expect(result.kind).toBe('function');
+  });
+});
+
 // ─── Integration — full indexing ──────────────────────────────────────────────
 
 describe('reactAdapter — full index integration', () => {
@@ -314,17 +449,12 @@ export function formatLabel(s: string) {
       const symbols = searchSymbols(db, repoId, 'Button');
       db.close();
 
-      // Goes through normal handler path — enrichMetadata from React adapter
-      // is still called (cross-adapter enrichment), so Button still upgrades
-      // BUT only if React adapter's enrichMetadata is called for this file.
-      // Since fileFilter returns false for .ts, the adapter is NOT the primary
-      // handler. But cross-adapter enrichMetadata IS called for all symbols.
-      // So Button.ts → component via enrichMetadata cross-adapter call.
-      // This is intentional: enrichMetadata runs universally.
+      // Phase 92 contract: cross-adapter enrichMetadata still runs for every
+      // file, but the react component upgrade is gated to .tsx/.jsx — a
+      // PascalCase function in a plain .ts file stays a function. (Pre-92 the
+      // enrichment was repo-wide and this test locked the bug in.)
       expect(symbols).toHaveLength(1);
-      // The kind depends on whether cross-adapter enrichMetadata runs for non-matched files.
-      // From our pipeline: yes, it does. So Button in .ts gets upgraded too.
-      expect(symbols[0]!.kind).toBe('component');
+      expect(symbols[0]!.kind).toBe('function');
     } finally {
       deleteIndex(repoId);
       rmSync(dir, { recursive: true, force: true });

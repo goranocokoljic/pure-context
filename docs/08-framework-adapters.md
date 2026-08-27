@@ -56,25 +56,40 @@ Extracts:
 
 ### React
 
-**Detected by:** `react` in `package.json` dependencies.
+**Detected by:** `react` in `package.json` dependencies (root or nested — bounded
+monorepo scan), or any `.tsx`/`.jsx` file in the tree.
 
-Enriches TypeScript handler symbols:
-- PascalCase functions returning JSX → `component`
-- `use*` functions → `hook`
+Enriches TypeScript handler symbols (name heuristics — JSX-return detection is
+not implemented):
+- PascalCase-named functions/consts in `.tsx`/`.jsx` files → `component`
+  (true PascalCase only: `API_URL`/`HTTP` stay `const`)
+- `use*` functions/consts → `hook` — in `.tsx`/`.jsx` files, or in plain
+  `.ts`/`.js` files under a `hooks/` path segment
+
+Known limitation: a `use*` symbol in a plain `.ts` file outside any `hooks/`
+directory, in a repo where both Vue and React are detected, is stored as
+`composable` (the FTS kind-alias tokens keep it retrievable either way).
 
 ### Next.js
 
-**Detected by:** `next.config.*` or `next` in `package.json`.
+**Detected by:** `next.config.*` or `next` in `package.json`. Registered
+BEFORE the React adapter — its `fileFilter` claims only Next-specific paths;
+all other `.tsx`/`.jsx` files fall through to React.
 
 Extracts:
 - **Pages Router** (`pages/**`): `route` symbols with path derivation
   - `pages/blog/[slug].tsx` → `/blog/:slug`
-  - Detects `getServerSideProps` (SSR), `getStaticProps` (SSG)
-- **App Router** (`app/**/page.tsx`): `route` symbols
+  - `frameworkMeta.ssr: true` when the page exports `getServerSideProps`;
+    `ssg: true` for `getStaticProps`
+- **App Router** (`app/**/page.tsx` + layout/loading/error/not-found/template):
+  `route`/`component` symbols
   - `app/(marketing)/about/page.tsx` → `/about` (route groups stripped)
-  - Detects `'use client'` directive
+  - Detects the `'use client'` / `'use server'` directive (first statement —
+    survives license headers) → `client_component` / `server_action`;
+    default is `server_component: true`
 - **API routes**: `pages/api/**` and `app/**/route.ts` with HTTP method exports
-- **Middleware** (`middleware.ts`): `middleware` symbol with matcher config
+- **Middleware** (`middleware.ts`): `middleware` symbol (the `matcher` config
+  export is not extracted)
 
 ### Angular
 

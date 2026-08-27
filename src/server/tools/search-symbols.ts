@@ -10,7 +10,7 @@ import { VectorStore } from '../../semantic/vector-store.js';
 import { HybridSearcher } from '../../semantic/hybrid-search.js';
 import { logger } from '../../core/logger.js';
 import { preprocessQuery, toOrFallbackQuery, isStopWord } from '../../core/search/query-preprocessor.js';
-import { rankSymbols, isLibraryPath } from '../../core/search/relevance-ranker.js';
+import { rankSymbols, isLibraryPath, isFrontendAppPath } from '../../core/search/relevance-ranker.js';
 import { computeSymbolRisk } from './symbol-risk.js';
 import { resolveRepoScope } from '../../core/db/repo-scope.js';
 import type { ScoredSymbol, RankOptions } from '../../core/search/relevance-ranker.js';
@@ -614,15 +614,20 @@ function round4(n: number): number {
 }
 
 /**
- * Return true when the query is asking for a React hook: the first meaningful
- * token starts with 'use' and has ≥ 4 chars (filters out the English word
- * "use"), OR the query contains the word 'hook' / 'hooks'.
+ * Return true when the query is asking for a React hook (or Vue composable —
+ * Phase 92, V-11: composable-phrased queries get the same OR-fallback and
+ * useHookBonus): the first meaningful token starts with 'use' and has ≥ 4
+ * chars (filters out the English word "use"), OR the query contains the word
+ * 'hook' / 'hooks' / 'composable' / 'composables'.
  */
 export function hasReactHookQuery(query: string): boolean {
   const words = query.toLowerCase().split(/[\s-]+/).filter(Boolean);
   const firstMeaningful = words.find((w) => !isStopWord(w) && w.length >= 2);
   if (firstMeaningful && firstMeaningful.startsWith('use') && firstMeaningful.length >= 4) return true;
-  return words.includes('hook') || words.includes('hooks');
+  return (
+    words.includes('hook') || words.includes('hooks') ||
+    words.includes('composable') || words.includes('composables')
+  );
 }
 
 /**
@@ -632,22 +637,21 @@ export function hasReactHookQuery(query: string): boolean {
  *
  * Uses the already-fetched FTS5 candidate pool — no extra DB queries.
  */
+const BACKEND_APP_SEGMENTS = new Set(['api', 'server', 'backend', 'trpc']);
+
 export function detectMixedMonorepo(symbols: SymbolRecord[]): boolean {
   let hasFrontend = false;
   let hasBackend = false;
   for (const s of symbols) {
-    const p = '/' + s.filePath.replace(/\\/g, '/');
-    if (
-      p.includes('/apps/dashboard/') ||
-      p.includes('/apps/web/') ||
-      p.includes('/apps/frontend/') ||
-      p.includes('/apps/client/')
-    ) hasFrontend = true;
-    if (
-      p.includes('/apps/api/') ||
-      p.includes('/apps/server/') ||
-      p.includes('/apps/backend/')
-    ) hasBackend = true;
+    // Phase 92 (572c): first-or-second path segment, shared with the ranker's
+    // isFrontendAppPath — covers apps/dashboard/ (novu), frontend/src/
+    // (infisical), packages/trpc/ (cal.com) without matching deep incidental
+    // src/api/ folders inside a pure frontend app.
+    if (!hasFrontend && isFrontendAppPath(s.filePath)) hasFrontend = true;
+    if (!hasBackend) {
+      const segs = s.filePath.replace(/\\/g, '/').toLowerCase().split('/');
+      if (segs.slice(0, 2).some((seg) => BACKEND_APP_SEGMENTS.has(seg))) hasBackend = true;
+    }
     if (hasFrontend && hasBackend) return true;
   }
   return false;

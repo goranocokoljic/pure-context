@@ -47,6 +47,7 @@ const APP_SPECIAL_FILES: Record<string, string> = {
   'loading': 'loading',
   'error': 'error',
   'not-found': 'not-found',
+  'template': 'template',
 };
 
 // ─── Symbol ID ────────────────────────────────────────────────────────────────
@@ -201,10 +202,32 @@ function findExportedNames(tree: Tree | null): Set<string> {
   return names;
 }
 
-/** Check for 'use client' directive at the top of the file. */
-function hasUseClientDirective(source: Buffer): boolean {
-  const top = source.slice(0, 200).toString('utf8').trimStart();
-  return top.startsWith("'use client'") || top.startsWith('"use client"');
+/**
+ * Detect a 'use client' / 'use server' directive at the top of the file
+ * (Phase 92, Task 570b). The directive must be the first *statement*, so only
+ * whitespace and comments may precede it — a license header must not hide it.
+ * Scans the first 2KB.
+ */
+export function detectDirective(source: Buffer): 'use client' | 'use server' | null {
+  let text = source.slice(0, 2048).toString('utf8');
+  for (;;) {
+    const before = text;
+    text = text.replace(/^\s+/, '');          // blank lines / indentation
+    text = text.replace(/^\/\/[^\n]*\n?/, ''); // line comment
+    text = text.replace(/^\/\*[\s\S]*?\*\//, ''); // block comment
+    if (text === before) break;
+  }
+  const m = /^(['"])use (client|server)\1/.exec(text);
+  if (!m) return null;
+  return m[2] === 'client' ? 'use client' : 'use server';
+}
+
+/** frameworkMeta flags for an App Router file's directive. */
+function directiveMeta(source: Buffer): Record<string, boolean> {
+  const directive = detectDirective(source);
+  if (directive === 'use client') return { client_component: true };
+  if (directive === 'use server') return { server_action: true };
+  return { server_component: true }; // App Router default
 }
 
 // ─── Next.js adapter ──────────────────────────────────────────────────────────
@@ -259,6 +282,9 @@ export const nextjsAdapter: FrameworkAdapter = {
     switch (category) {
       case 'pages-router-page': {
         const routePath = derivePageRouterPath(p);
+        // Phase 92 (Task 573 stretch): record the page's data-fetching mode
+        // when the file exports the well-known Pages Router functions.
+        const exported = findExportedNames(tree);
         return [
           {
             id: makeId(filePath, routePath, 'route'),
@@ -273,6 +299,8 @@ export const nextjsAdapter: FrameworkAdapter = {
               route_path: routePath,
               router: 'pages',
               nextjs_page: true,
+              ...(exported.has('getServerSideProps') ? { ssr: true } : {}),
+              ...(exported.has('getStaticProps') ? { ssg: true } : {}),
             },
           },
         ];
@@ -311,7 +339,6 @@ export const nextjsAdapter: FrameworkAdapter = {
 
       case 'app-router-page': {
         const routePath = deriveAppRouterPath(p);
-        const isClient = hasUseClientDirective(source);
         return [
           {
             id: makeId(filePath, routePath, 'route'),
@@ -326,7 +353,7 @@ export const nextjsAdapter: FrameworkAdapter = {
               route_path: routePath,
               router: 'app',
               nextjs_page: true,
-              ...(isClient ? { client_component: true } : { server_component: true }),
+              ...directiveMeta(source),
             },
           },
         ];
@@ -351,6 +378,7 @@ export const nextjsAdapter: FrameworkAdapter = {
               route_path: routePath,
               router: 'app',
               nextjs_special: specialKind,
+              ...directiveMeta(source),
             },
           },
         ];

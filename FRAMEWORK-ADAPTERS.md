@@ -86,27 +86,37 @@ Layers Nuxt's conventional routing on top of the Vue adapter:
 
 ### React
 
-Detected by `react` in `package.json`. This adapter doesn't extract new symbols — it *enriches* what the TypeScript handler already found:
-- PascalCase functions that return JSX → `component`
-- `useFoo` functions → `hook`
+Detected by `react` in `package.json` (root or nested — bounded monorepo scan)
+or any `.tsx`/`.jsx` file. This adapter doesn't extract new symbols — it
+*enriches* what the TypeScript handler already found (name heuristics;
+JSX-return detection is not implemented):
+- PascalCase-named functions/consts in `.tsx`/`.jsx` files → `component`
+  (true PascalCase only — `API_URL` stays a `const`)
+- `useFoo` functions/consts → `hook` — in `.tsx`/`.jsx` files, or in plain
+  `.ts`/`.js` files under a `hooks/` path segment
 
 So `MyButton` shows up as a `component` rather than a generic `function`, and `useAuth` shows up as a `hook` rather than a generic `function`.
 
 ### Next.js
 
-Detected by `next.config.*` or `next` in dependencies. Supports both routers:
+Detected by `next.config.*` or `next` in dependencies. Registered before the
+React adapter (its `fileFilter` claims only Next-specific paths; other
+`.tsx`/`.jsx` files fall through to React). Supports both routers:
 
 **Pages Router** (`pages/`):
 - `pages/blog/[slug].tsx` → `route /blog/:slug`
-- Detects `getServerSideProps` (SSR) and `getStaticProps` (SSG)
+- `frameworkMeta.ssr: true` when the page exports `getServerSideProps`;
+  `ssg: true` for `getStaticProps`
 - API routes from `pages/api/`
 
 **App Router** (`app/`):
 - `app/(marketing)/about/page.tsx` → `route /about` (route groups stripped)
-- `'use client'` directive flagged on metadata
+- `'use client'` / `'use server'` directive flagged on metadata (first
+  statement — survives license headers); default `server_component: true`
+- Special files (layout/loading/error/not-found/template) → `component` symbols
 - API routes from `app/**/route.ts` with HTTP method exports
 
-**Middleware** (`middleware.ts`) → `middleware` symbol with the matcher config.
+**Middleware** (`middleware.ts`) → `middleware` symbol (the `matcher` config export is not extracted).
 
 ### Angular
 

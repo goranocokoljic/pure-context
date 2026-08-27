@@ -64,8 +64,10 @@ import '../adapters/vue.js';
 import '../adapters/nuxt.js';
 import '../adapters/svelte.js';
 import '../adapters/astro.js';
-import '../adapters/react.js';
+// nextjs BEFORE react — react's fileFilter claims every .tsx/.jsx, and every
+// Next.js repo has react in deps; first matching adapter wins the file.
 import '../adapters/nextjs.js';
+import '../adapters/react.js';
 import '../adapters/angular.js';
 import '../adapters/nestjs.js';
 import '../adapters/express.js';

@@ -11,6 +11,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.25.0] - 2026-08-27 — Phase 92: React Adapter Integrity
+
+From the React framework-support audit: the React adapter was a bare name
+heuristic with three correctness bugs and zero ranking payoff.
+
+> **Re-index note:** React and mixed (React + Vue/Svelte) repos should be
+> re-indexed once on this version to heal stored symbol kinds (hooks stored as
+> `composable`, PascalCase symbols wrongly stored as `component`). No schema
+> change — this is adapter behavior, not stored-value corruption.
+
+### Fixed (correctness)
+
+- **Vue/Svelte no longer steal React hooks.** The `use*` → `composable`
+  upgrade in the Vue and Svelte adapters is now gated to a positive extension
+  allowlist (`.vue`/`.svelte` plus plain `.ts`/`.js`) — never `.tsx`/`.jsx`,
+  never other languages (a Kotlin `useCase` no longer becomes a `composable`
+  when Vue detection fires). This was the novu 0/0/0 root cause; Phase 88 had
+  fixed retrieval only, the stored kind stayed wrong.
+- **React enrichment is no longer repo-wide.** The component upgrade fires
+  only in `.tsx`/`.jsx` files and requires true PascalCase (`API_URL`, `HTTP`
+  stay `const`; PascalCase Go/Java/Kotlin symbols are never touched). The hook
+  upgrade fires in `.tsx`/`.jsx`, or in plain `.ts`/`.js` files under a
+  `hooks/` path segment — where it also re-claims a `composable` a Vue/Svelte
+  adapter produced first (deterministic result regardless of adapter order).
+- **Next.js adapter un-shadowed.** `nextjs` now registers BEFORE `react`
+  (first matching adapter wins the file), so App Router pages finally produce
+  `route` symbols, special files (layout/loading/error/not-found/template)
+  produce `component` symbols, and the page's own symbols are still extracted.
+- **`'use client'` / `'use server'` detection fixed.** The directive is found
+  behind license headers (first-statement rule, 2KB scan) and both directives
+  are recorded (`client_component` / `server_action`; App Router default
+  `server_component: true`), on pages and special files.
+
+### Added
+
+- React `detect()` monorepo scan: nested `package.json` declaring react, or
+  any `.tsx`/`.jsx` file (shared bounded `scanForFramework`).
+- Ranker kind hints for `hook`/`composable` query words (+35 for the matching
+  kind; pool-gated −20 for method/class so backend repos where "hook" means
+  webhook are untouched). `composable` and `hook` are rank-time aliases,
+  protecting Vue queries symmetrically. A `component` kind hint was measured
+  and REVERTED in-phase: on Vue repos "component" appears in queries whose
+  target is a factory function (kurirfe P@3 −8pp with the hint).
+- `hasReactHookQuery` now also fires on "composable"/"composables" (Vue-audit
+  V-11) — composable-phrased queries get the same OR-fallback and hook bonus.
+- Pages Router pages record `frameworkMeta.ssr: true` (`getServerSideProps`)
+  / `ssg: true` (`getStaticProps`) — the docs claimed this for years; now it
+  is true.
+- `template.tsx` recognized as an App Router special file.
+
+### Changed
+
+- `component` added to the Phase-50 data-kind identityExact scaling set
+  (40/N instead of the full +60 on multi-word queries). Needed BY the kind
+  reclassification: PascalCase consts in `.tsx` were already scaled as
+  `const`; storing them as `component` un-scaled them and four `Organization`
+  components displaced the asked-for fetch function (infisical gt-22).
+- `hasFrontendVocab` false positives fixed: `user`, `usage`, `useful` no
+  longer count as frontend vocabulary (use-prefixed tokens must match the
+  `use[A-Z]` hook convention; computed once per query in `rankSymbols`).
+- Mixed-monorepo detection broadened: a frontend (`frontend/`, `client/`,
+  `web/`, `dashboard/`) or backend (`api/`, `server/`, `backend/`, `trpc/`)
+  directory as first or second path segment now counts — covers infisical
+  (`frontend/src`) and cal.com (`packages/trpc`), not just novu's `apps/*`.
+- Docs brought down to what the code does (JSX-return detection and the
+  middleware `matcher` extraction are NOT implemented; stated plainly).
+
+---
+
 ## [1.24.0] - 2026-08-26 — Phase 91: Index Durability at Scale + Install UX
 
 From the reporter's installation runbook on a ~90k-file polyrepo: an index of
