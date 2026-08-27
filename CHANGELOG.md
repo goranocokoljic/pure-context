@@ -11,6 +11,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.28.0] - 2026-08-27 — Phase 95: Generic-Verb Identity, Global
+
+The deferred global ranking fix (Phase-88 boundary: per-language gates only),
+un-gated on three-repo trigger evidence (nestjs, nuxt, origamicms-frontend).
+Pure ranking — no index/schema change, no re-index needed.
+
+### Changed
+
+- **Generic-verb identityExact scaling is now global** (was Java/Groovy-gated,
+  Phase 88): a symbol whose bare name is a single generic verb/noun (`run`,
+  `build`, `save`, …) takes ⅓ identity credit on natural-language queries of
+  ≥3 words — a query genuinely targeting the generic name still wins.
+  `GENERIC_METHOD_NAMES` additions (each with a cross-language justification):
+  `install`, `handler`, `send`, `filter`.
+- **camelCompoundBoost extended beyond Java/Groovy as a targeted
+  counterweight**: outside Java/Groovy the +30 fires only for a
+  function/const compound that CONTAINS a bare generic name actually present
+  (and query-matched) in the candidate pool — `buildNuxt` counterweights bare
+  `build`; subset-of-query compounds (`DeleteSubscribers`,
+  `createSecret`) no longer collect it (two in-phase corrections, measured;
+  see BENCHMARK-RESULTS "Phase 95 re-run notes"). Java/Groovy behavior
+  byte-identical.
+- **Member-segment generic damp** for Vue Options-API / Pinia members
+  (`vue_options`/`pinia_entry`): a member whose ONLY member-segment query
+  matches are generic-family words loses ⅔ of those words' overlap credit
+  (`documentType.updated` no longer buries `saveHeadbox`); members with any
+  non-generic member match are untouched (kurirfe store actions unaffected).
+
+### Benchmarks (18-repo sweep, fresh pre-95 baselines first)
+
+- nuxt 20/36/52 → **32/52/64**; dokku 24/56/64 → **32/56/68**;
+  origamicms-frontend 24/32/48 → **28/40/52**; listmonk P@3/R@5 +4/+4;
+  cal-com +4/+4; infisical +4/+4; novu R@5 +4; brew R@5 +4.
+- Only cost: catalyst-runtime P@3 −4 (its gt-10 expects a symbol literally
+  named `execute` — the accepted R2 shape).
+- Java/Groovy guards (jenkins/gradle/groovy/maven) + nestjs + kurirfe +
+  vismedic + eu-za-tebe + excalidraw byte-identical.
+- Cumulative head-to-head P@1: **PC 61/76** (catalyst-runtime row was a
+  stale-baseline correction — fresh pre-95 code already won it).
+
+### Added
+
+- `benchmarks/harness/replay_query.ts` — committed query-replay tool
+  (reproduces the harness Dim-2 pool + per-channel debug scores); the
+  Phase-93 equivalent was a lost scratch script.
+- `benchmarks/harness/phase95_sweep.ps1` + `phase95_diff.mjs` — labeled sweep
+  driver and per-query diff comparer.
+
+### Carried (Phase 96 planned — `dev-docs/PHASE96_TASKS.md`)
+
+- `register → add` synonym (nuxt gt-24 `addServerHandler` finisher) and the
+  -tion nominalization stem gap ("navigation" never matches `navigate` —
+  nuxt gt-22). Both retrieval-side, out of this phase's pure-ranking scope.
+- kindHint `function` (Task 595) rejected on margin evidence — no
+  kind-confusable trigger query exists; vocabulary-triggered hints are the
+  Phase-92 component-hint failure mode.
+
+---
+
 ## [1.27.0] - 2026-08-27 — Phase 94: Angular Integrity
 
 From the Angular deep-dive audit (A-1…A-13): duplicate class rows, zero

@@ -2101,10 +2101,13 @@ describe('rankSymbols — Java/Groovy generic-verb identity scaling + camelCompo
     expect(results[0]!.debugScore?.identityExact).toBe(60);
   });
 
-  it('does NOT scale outside the Java/Groovy gate (TS pool)', () => {
+  it('scales outside the Java/Groovy gate too — the rule went global in Phase 95', () => {
+    // Flipped in Phase 95 (Task 592): this test previously enshrined the
+    // Phase-88 per-language boundary. See test/core/phase95-ranking.test.ts
+    // for the full un-gated coverage (TS/Go/PHP shapes, ⅓-not-zero, R1).
     const run = sym('run', { kind: 'method', filePath: 'src/tasks/run.ts' });
     const results = rankSymbols([run], 'set the result status of a build run', true);
-    expect(results[0]!.debugScore?.identityExact).toBe(60);
+    expect(results[0]!.debugScore?.identityExact).toBe(20);
   });
 
   it('awards camelCompoundBoost when all camelCase name parts appear in the query', () => {

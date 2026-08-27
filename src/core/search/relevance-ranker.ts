@@ -94,6 +94,18 @@ export interface RankOptions {
   /** Query-derived frontend-vocab flag — computed once in rankSymbols from the
    *  ORIGINAL-cased query (572b: `user`/`usage`/`useful` must not count). */
   hasFrontendVocabQuery?: boolean;
+  /**
+   * Pool-derived set (Phase 95, Task 593) — computed once inside rankSymbols,
+   * never by callers. The bare GENERIC_METHOD_NAMES symbol names present in
+   * this pool that also match a query word on a ≥3-word query — i.e. the
+   * generics whose identityExact the ÷3 scaling is actively suppressing.
+   * camelCompoundBoost outside Java/Groovy fires only for a compound that
+   * CONTAINS one of these names as a part: the boost is the counterweight to
+   * that specific scaled generic (buildNuxt vs bare build), never a
+   * free-standing subset-of-query reward (the listmonk DeleteSubscribers
+   * failure, sweep labels phase95-593/593b).
+   */
+  poolScaledGenericNames?: ReadonlySet<string>;
 }
 
 export interface ScoredSymbol {
@@ -524,6 +536,16 @@ export function rankSymbols(
     ...(javaCount > symbols.length / 2 ? { ...opts, isJavaGroovyMixed: true } : opts),
     poolHasHookKind: symbols.some((s) => s.kind === 'hook' || s.kind === 'composable'),
     hasFrontendVocabQuery: hasFrontendVocabQuery(query),
+    // Phase 95 (Task 593): the bare generic names actually competing in this
+    // pool via identity (name ∈ GENERIC set AND matches a query word).
+    poolScaledGenericNames:
+      queryWords.length >= 3
+        ? new Set(
+            symbols
+              .map((s) => s.name.toLowerCase())
+              .filter((n) => GENERIC_METHOD_NAMES.has(n) && queryWords.includes(n)),
+          )
+        : undefined,
   };
 
   // First pass: compute base scores (without BM25) for all symbols.
@@ -728,17 +750,17 @@ function score(
       const rawFreq = rawQueryFreq.get(identityMatchWord) ?? 1;
       identityExact = 60 * Math.min(rawFreq, 2);
     }
-    // Generic-verb identity scaling (Phase 88, jenkins diagnosis) — Java/Groovy
-    // gated. Single-token generic verb names (run, execute, get, call, …) hit
-    // identityExact via one query word or its verb synonym ("build run" →
-    // run/execute) and outrank the actual compound-named target (setResult) on
-    // nearly every natural-language query. Scale to ⅓; a query genuinely
-    // targeting `run` still ranks it top since competitors carry no identity.
-    if (
-      opts?.isJavaGroovyMixed &&
-      queryWords.length >= 3 &&
-      GENERIC_METHOD_NAMES.has(nameLower)
-    ) {
+    // Generic-verb identity scaling (Phase 88, jenkins diagnosis; un-gated
+    // globally in Phase 95, Task 592 — trigger evidence from nestjs/nuxt/
+    // origamicms, see dev-docs/in-progress/phase95-margins.md). Single-token
+    // generic verb names (run, execute, build, handler, …) hit identityExact
+    // via one query word or its verb synonym ("build pipeline" → build/save)
+    // and outrank the actual compound-named target (buildNuxt, saveHeadbox)
+    // on nearly every natural-language query. Scale to ⅓ — never zero: a
+    // query genuinely targeting `run` still ranks it top since competitors
+    // carry no identity at all. The ≥3-word gate keeps short queries ("run",
+    // "execute task") targeting the generic name unaffected.
+    if (queryWords.length >= 3 && GENERIC_METHOD_NAMES.has(nameLower)) {
       identityExact = Math.round(identityExact / 3);
     }
     total += identityExact;
@@ -763,18 +785,38 @@ function score(
   // camelCase analog of compoundUnderscoreBoost: `setResult` for the query
   // "set the result status of a build run" has every name part in the query
   // but no identity signal at all, while single-verb names (run/execute) take
-  // the full identityExact. Gated to mixed Java/Groovy repos (per-language
-  // gates only — Phase 88 boundary).
+  // the full identityExact. Phase 95 (Task 593): extended beyond the Java/
+  // Groovy gate, but ONLY to pools that contain a bare generic-name symbol
+  // (poolHasScaledGeneric) — the boost is the counterweight to the ÷3-scaled
+  // generic, not a free-standing reward. The first un-gated measurement
+  // (sweep label phase95-593) showed why: with no pool condition, short
+  // 2-part compounds that are a SUBSET of the query (globalStore,
+  // createSecret, DeleteSubscribers) displaced the more specific expected
+  // symbols carrying one extra part (brew P@1 −8, kurirfe R@5 −12,
+  // listmonk R@5 −12, infisical P@3 −12). Never stacks with identityExact
+  // or compoundUnderscoreBoost.
   let camelCompoundBoost = 0;
-  if (
-    opts?.isJavaGroovyMixed &&
-    identityExact === 0 &&
-    compoundUnderscoreBoost === 0
-  ) {
+  if (identityExact === 0 && compoundUnderscoreBoost === 0) {
     const cParts = splitNameParts(symbol.name).filter((p) => p.length >= 2);
     if (cParts.length >= 2 && cParts.every((p) => queryWordsSet.has(p))) {
-      camelCompoundBoost = 30;
-      total += camelCompoundBoost;
+      // Java/Groovy keeps its unconditional Phase-88 behavior (byte-identity,
+      // R1). Everywhere else the boost is a targeted counterweight, not a
+      // subset-of-query reward: the compound must CONTAIN one of the pool's
+      // actively-scaled bare generics, and only function/const symbols
+      // qualify — methods already carry their own layer boosts (service
+      // kindBoost, methodVerbBonus), and boosting Go/Vue bare-named methods
+      // was exactly the listmonk regression (DeleteSubscribers family beating
+      // DeleteOrphanSubscribers/WipeSubscriberData, sweep phase95-593b).
+      const counterweights = opts?.poolScaledGenericNames;
+      if (
+        opts?.isJavaGroovyMixed ||
+        ((symbol.kind === 'function' || symbol.kind === 'const') &&
+          counterweights !== undefined &&
+          cParts.some((p) => counterweights.has(p)))
+      ) {
+        camelCompoundBoost = 30;
+        total += camelCompoundBoost;
+      }
     }
   }
 
@@ -856,6 +898,31 @@ function score(
           if (!memberParts.has(w) && namePartsSet.has(w)) wordOverlap -= 5;
         }
         if (wordOverlap < 0) wordOverlap = 0;
+        // ── Member-segment generic damp (Phase 95, Task 594) ────────────────
+        // origamicms class-b failures: a member whose OWN segment matches the
+        // query only through generic words (`documentType.updated`,
+        // `DocumentsList.filters`, `DocumentSeo.openHelpModal`) wins on
+        // wordOverlap + BM25 — identityExact never fires on dotted names, so
+        // Task 592 cannot reach it. When EVERY query word matched via the
+        // member segment is generic-family, scale those words' per-word
+        // contribution ×⅓ (−7 strict / −5 loose). A member with even one
+        // non-generic member match (kurirfe `setThemeColor`: theme, color)
+        // is untouched — the R4 negative case by construction. Framework-
+        // meta-gated v1 (vue_options/pinia_entry); the un-gated class-b
+        // evidence (nestjs `EmailService.send`) is recorded in
+        // phase95-margins.md and carried.
+        if (isVueMember && wordOverlap > 0) {
+          const memberMatched = queryWords.filter((w) => memberParts.has(w));
+          if (
+            memberMatched.length > 0 &&
+            memberMatched.every(isGenericFamilyWord)
+          ) {
+            for (const w of memberMatched) {
+              wordOverlap -= partStrict(w) ? 7 : 5;
+            }
+            if (wordOverlap < 0) wordOverlap = 0;
+          }
+        }
       }
     }
 
@@ -1273,14 +1340,47 @@ function score(
  * Single-token method names so generic that an identityExact hit on them is
  * almost never the query's real target in a natural-language multi-word query
  * (jenkins: "set the result status of a build run" → `run`/`execute` beat
- * `setResult`). Used only under the isJavaGroovyMixed gate.
+ * `setResult`). Global since Phase 95 (Task 592); also consulted by the
+ * member-segment generic damp (Task 594).
+ *
+ * Additions need a cross-language justification (R3 — no benchmark-specific
+ * words). Phase 95 additions:
+ *   install — install/setup verbs across every ecosystem (npm, pip, modules)
+ *   handler — the default anonymous-handler name (h3/express/nitro/lambda/Go)
+ *   send    — universal messaging verb (mailers, sockets, actors, channels)
+ *   filter  — the universal collection verb (JS/Java streams/SQL/Python)
+ * Rejected (single-query evidence): nuxt, trigger, route, calculate.
  */
 const GENERIC_METHOD_NAMES: ReadonlySet<string> = new Set([
   'run', 'execute', 'call', 'invoke', 'apply', 'main', 'start', 'stop',
   'init', 'close', 'open', 'get', 'set', 'add', 'remove', 'create', 'delete',
   'update', 'read', 'write', 'load', 'save', 'check', 'handle', 'process',
   'build', 'make', 'next', 'reset', 'clear', 'accept', 'submit', 'perform',
+  // Phase 95 additions (Task 592 audit):
+  'install', 'handler', 'send', 'filter',
 ]);
+
+/**
+ * True when a query word belongs to the generic-verb family: the word itself,
+ * one of its inflectional stems ("updated" → "update"), or a truncation stem
+ * of a generic verb ("updat", produced by stripping -ed from "updated", is a
+ * prefix of "update"). Used by the Task-594 member-segment damp, where the
+ * query-word list contains stem variants as separate entries.
+ */
+function isGenericFamilyWord(w: string): boolean {
+  if (GENERIC_METHOD_NAMES.has(w)) return true;
+  const stems = new Set<string>();
+  addStemsOf(w, stems);
+  for (const s of stems) {
+    if (GENERIC_METHOD_NAMES.has(s)) return true;
+  }
+  if (w.length >= 4) {
+    for (const g of GENERIC_METHOD_NAMES) {
+      if (g.startsWith(w) && g.length - w.length <= 2) return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Split a symbol name into word-boundary parts for precise matching.
