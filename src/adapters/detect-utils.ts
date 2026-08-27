@@ -43,6 +43,12 @@ export interface FrameworkScanOptions {
   matchesFile: (name: string) => boolean;
   /** Returns true if a package.json's raw text declares the framework dependency. */
   pkgDeclares: (raw: string) => boolean;
+  /**
+   * Additional directory names to skip beyond DETECT_IGNORE_DIRS (Phase 93,
+   * V-7): vue/nuxt pass test/fixture dirs so a repo whose only `.vue` files
+   * are test fixtures (PureContext itself) does not activate the adapter.
+   */
+  extraIgnoreDirs?: ReadonlySet<string>;
 }
 
 /**
@@ -77,7 +83,11 @@ export function scanForFramework(
           // unreadable package.json — ignore
         }
       }
-    } else if (e.isDirectory() && !DETECT_IGNORE_DIRS.has(e.name)) {
+    } else if (
+      e.isDirectory() &&
+      !DETECT_IGNORE_DIRS.has(e.name) &&
+      !opts.extraIgnoreDirs?.has(e.name)
+    ) {
       subDirs.push(e.name);
     }
   }
@@ -104,9 +114,10 @@ export function pkgDepMatches(raw: string, pred: (depName: string) => boolean): 
   }
 }
 
-/** Convert a kebab/camel/snake filename stem to PascalCase ('user-card' → 'UserCard'). */
-export function toPascalCase(str: string): string {
-  return str
-    .replace(/[-_](.)/g, (_, c: string) => c.toUpperCase())
-    .replace(/^(.)/, (_, c: string) => c.toUpperCase());
-}
+/**
+ * Convert a kebab/camel/snake filename stem to PascalCase ('user-card' →
+ * 'UserCard'). Single implementation lives with the SFC naming rules in
+ * handlers/vue-options-extractor.ts (adapter → handler import: allowed
+ * direction); re-exported here for the adapters that already import it.
+ */
+export { toPascalCase } from '../handlers/vue-options-extractor.js';

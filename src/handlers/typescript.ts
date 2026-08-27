@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { extractVueExtras } from './vue-options-extractor.js';
 import type { LanguageHandler, SymbolRecord, SymbolKind, ImportRecord, SyntaxNode, Tree } from '../core/types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -310,6 +311,9 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string, tsOnly: bo
       // Also index non-exported top-level declarations (useful for navigation)
       processDeclaration(node, node, sourceStr, filePath, symbols, tsOnly);
     }
+    // Vue Options API / script-setup macros (.vue blocks only) + Pinia stores
+    // (any file). No-op for plain TS files without defineStore (Phase 93).
+    extractVueExtras(node, sourceStr, filePath, symbols);
   }
 
   return symbols;

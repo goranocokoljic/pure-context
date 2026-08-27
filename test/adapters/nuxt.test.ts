@@ -117,6 +117,12 @@ describe('nuxtAdapter.fileFilter', () => {
     'middleware/auth.ts',
     'composables/useAuth.ts',
     'composables/useTheme.ts',
+    // JS Nuxt apps (Phase 93, V-8): all JS/TS extensions are claimed
+    'server/api/users.js',
+    'server/api/users.get.mjs',
+    'plugins/analytics.js',
+    'middleware/auth.cjs',
+    'composables/useAuth.mts',
   ])('matches %s', (filePath) => {
     expect(nuxtAdapter.fileFilter(filePath)).toBe(true);
   });
@@ -125,7 +131,7 @@ describe('nuxtAdapter.fileFilter', () => {
     'pages/index.vue',        // .vue handled by Vue adapter
     'src/utils.ts',           // generic TS
     'components/Button.vue',  // generic Vue component
-    'server/api/users.js',    // .js not .ts
+    'server/api/users.json',  // not a script extension
     'server/plugins/foo.ts',  // wrong directory (server/plugins ≠ plugins)
   ])('does not match %s', (filePath) => {
     expect(nuxtAdapter.fileFilter(filePath)).toBe(false);
@@ -158,6 +164,46 @@ describe('toNuxtRelative', () => {
 
   it('matches the server boundary before a deeper pages segment', () => {
     expect(toNuxtRelative('apps/web/server/api/pages/list.ts')).toBe('server/api/pages/list.ts');
+  });
+});
+
+// ─── toNuxtRelative anchoring (Phase 93, Task 576 — V-1 phantom symbols) ──────
+
+describe('toNuxtRelative — anchoring', () => {
+  // Nuxt 4 `app/` layout keeps resolving (regression protection for the
+  // accident that previously worked via first-segment matching).
+  it.each<[string, string]>([
+    ['app/pages/index.vue',              'pages/index.vue'],
+    ['app/middleware/auth.ts',           'middleware/auth.ts'],
+    ['app/composables/useAuth.ts',       'composables/useAuth.ts'],
+    // Nuxt 4 layout inside a monorepo sub-app (app/ grants one extra depth)
+    ['apps/web/app/pages/index.vue',     'pages/index.vue'],
+  ])('Nuxt 4 layout: %s → %s', (filePath, expected) => {
+    expect(toNuxtRelative(filePath)).toBe(expected);
+  });
+
+  // Deeply nested or library/fixture/output trees are NOT app roots.
+  it.each<string>([
+    // rejected leading segments
+    'src/pages/runtime/page.vue',
+    'src/runtime/components/nuxt-link.ts',
+    'test/fixtures/basic/pages/index.vue',
+    'tests/pages/index.vue',
+    '__tests__/middleware/auth.ts',
+    'packages/nuxt/src/pages/runtime/router.ts',
+    'fixtures/app/pages/index.vue',
+    'templates/plugins/foo.ts',
+    'node_modules/lib/plugins/x.ts',
+    // too deep (boundary beyond depth 2 without app/ parent)
+    'packages/site/deep/nested/pages/index.vue',
+    'a/b/c/middleware/auth.ts',
+  ])('rejects %s', (filePath) => {
+    expect(toNuxtRelative(filePath)).toBe(null);
+  });
+
+  it('still allows one or two neutral leading segments', () => {
+    expect(toNuxtRelative('frontend/middleware/auth.ts')).toBe('middleware/auth.ts');
+    expect(toNuxtRelative('apps/web/plugins/analytics.ts')).toBe('plugins/analytics.ts');
   });
 });
 
@@ -201,7 +247,8 @@ describe('derivePageRoutePath', () => {
     ['pages/blog/post.vue',          '/blog/post'],
     ['pages/blog/[slug].vue',        '/blog/:slug'],
     ['pages/[id]/edit.vue',          '/:id/edit'],
-    ['pages/[...catch].vue',         '/*catch'],
+    ['pages/[...catch].vue',         '/**:catch'],       // catch-all, as Nuxt renders it
+    ['pages/[[id]].vue',             '/:id?'],           // optional param
     ['pages/users/[id]/profile.vue', '/users/:id/profile'],
   ])('%s → %s', (filePath, expected) => {
     expect(derivePageRoutePath(filePath)).toBe(expected);
@@ -326,6 +373,44 @@ describe('nuxtAdapter.extractFrameworkSymbols — middleware', () => {
   });
 });
 
+describe('nuxtAdapter — JS apps + naming conventions (Phase 93, Task 579)', () => {
+  it('emits a route symbol for a JS server route (kurirfe class)', () => {
+    const [s] = nuxtAdapter.extractFrameworkSymbols(null, buf(''), 'server/api/users.js');
+    expect(s!.kind).toBe('route');
+    expect(s!.name).toBe('/api/users');
+  });
+
+  it('strips the extension AND method suffix from a .js server route', () => {
+    const [s] = nuxtAdapter.extractFrameworkSymbols(null, buf(''), 'server/api/users.post.js');
+    expect(s!.name).toBe('/api/users');
+    expect(s!.frameworkMeta?.['http_method']).toBe('POST');
+  });
+
+  it('strips the mode suffix from plugin names and records nuxt_mode', () => {
+    const [s] = nuxtAdapter.extractFrameworkSymbols(null, buf(''), 'plugins/auth.client.ts');
+    expect(s!.name).toBe('auth');
+    expect(s!.frameworkMeta?.['nuxt_mode']).toBe('client');
+  });
+
+  it('strips .global from middleware names and records nuxt_mode', () => {
+    const [s] = nuxtAdapter.extractFrameworkSymbols(null, buf(''), 'middleware/auth.global.ts');
+    expect(s!.name).toBe('auth');
+    expect(s!.frameworkMeta?.['nuxt_mode']).toBe('global');
+  });
+
+  it('plain plugin names carry no nuxt_mode key', () => {
+    const [s] = nuxtAdapter.extractFrameworkSymbols(null, buf(''), 'plugins/analytics.ts');
+    expect(s!.name).toBe('analytics');
+    expect(s!.frameworkMeta).not.toHaveProperty('nuxt_mode');
+  });
+
+  it('JS plugin gets its symbol too', () => {
+    const [s] = nuxtAdapter.extractFrameworkSymbols(null, buf(''), 'plugins/analytics.js');
+    expect(s!.kind).toBe('middleware');
+    expect(s!.name).toBe('analytics');
+  });
+});
+
 describe('nuxtAdapter.extractFrameworkSymbols — composables', () => {
   it('returns [] for composable files (enrichMetadata handles them)', () => {
     const syms = nuxtAdapter.extractFrameworkSymbols(null, buf(''), 'composables/useAuth.ts');
@@ -361,6 +446,11 @@ describe('nuxtAdapter.enrichMetadata — page components', () => {
     const s = sym({ filePath: 'components/Button.vue', kind: 'component' });
     const result = nuxtAdapter.enrichMetadata!(s);
     expect(result.frameworkMeta?.['nuxt_page']).toBeUndefined();
+  });
+
+  it('overwrites the summary with the page route (V-2)', () => {
+    const result = nuxtAdapter.enrichMetadata!(sym({ filePath: 'pages/blog/[slug].vue', kind: 'component' }));
+    expect(result.summary).toBe('Page route /blog/:slug');
   });
 
   it('preserves existing frameworkMeta when adding route info', () => {

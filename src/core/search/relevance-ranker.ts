@@ -62,6 +62,7 @@ export interface DebugScore {
   kindBoost: number;
   kindHintBoost: number;
   libraryPenalty: number;
+  testFixturePenalty: number;
   unexportedPenalty: number;
   corePathBoost: number;
   frontendPathBoost: number;
@@ -74,6 +75,7 @@ export interface DebugScore {
   packageContextBoost: number;
   trpcPrefixBoost: number;
   pathProximityBoost: number;
+  memberShadowTransfer: number;
   recencyBoost: number;
   ftsBm25Bonus: number;
 }
@@ -543,6 +545,36 @@ export function rankSymbols(
   }
   const queryWordsSet = new Set(queryWords);
 
+  // ── Member-shadow transfer (Phase 93, Task 581 correction) ─────────────────
+  // Vue Options-API / Pinia member symbols (Parent.member) carry every name
+  // word of their parent, so on parent-concept queries every member outscores
+  // the parent itself on word overlap AND BM25 (each adds one more matching
+  // token). When a framework member and its parent symbol are BOTH in the
+  // pool, shift the weight: each such member −15, the parent +15 (once) —
+  // the members are treated as evidence that the PARENT matches. A member
+  // whose own segment is the query's real target typically leads by more
+  // than the 30-point swing and still wins. Pool-aware by necessity, so it
+  // lives here, not in score() (the pathProximity precedent).
+  const parentIndexByName = new Map<string, number>();
+  symbols.forEach((s, i) => {
+    if (!s.name.includes('.')) parentIndexByName.set(s.name.toLowerCase(), i);
+  });
+  const memberShadow: number[] = symbols.map(() => 0);
+  const shadowBoostedParents = new Set<number>();
+  symbols.forEach((s, i) => {
+    const fm = s.frameworkMeta as Record<string, unknown> | undefined;
+    if (!fm || (!fm['vue_options'] && !fm['pinia_entry'])) return;
+    const dot = s.name.lastIndexOf('.');
+    if (dot <= 0) return;
+    const parentIdx = parentIndexByName.get(s.name.slice(0, dot).toLowerCase());
+    if (parentIdx === undefined) return;
+    memberShadow[i]! -= 15;
+    if (!shadowBoostedParents.has(parentIdx)) {
+      shadowBoostedParents.add(parentIdx);
+      memberShadow[parentIdx]! += 15;
+    }
+  });
+
   const scored = symbols.map((symbol, originalIndex) => {
     const baseScore = baseResults[originalIndex]!;
     const ftsBm25Bonus = Math.round(bm25Bonuses[originalIndex]! * bm25Scale);
@@ -552,12 +584,14 @@ export function rankSymbols(
       pathProximity = computePathProximityBoost(symbol.filePath, queryWordsSet);
     }
 
+    const shadow = memberShadow[originalIndex]!;
     baseScore.debugScore.pathProximityBoost = pathProximity;
     baseScore.debugScore.ftsBm25Bonus = ftsBm25Bonus;
-    baseScore.debugScore.total += ftsBm25Bonus + pathProximity;
+    baseScore.debugScore.memberShadowTransfer = shadow;
+    baseScore.debugScore.total += ftsBm25Bonus + pathProximity + shadow;
     return {
       ...baseScore,
-      score: baseScore.score + ftsBm25Bonus + pathProximity,
+      score: baseScore.score + ftsBm25Bonus + pathProximity + shadow,
       symbol,
       originalIndex,
     };
@@ -786,6 +820,28 @@ function score(
     for (const w of queryWords) {
       if (partStrict(w)) wordOverlap += 10;
       else if (partLoose(w)) wordOverlap += 8;
+    }
+
+    // ── Qualifier-word damp for framework member symbols (Phase 93, 581) ────
+    // Vue Options-API / Pinia members are named Parent.member, so their split
+    // parts contain ALL the parent's name words — for any query naming the
+    // parent concept every member outscored the parent symbol itself, and the
+    // members displaced their own component/store at rank 1 (origamicms P@1
+    // 28→12, measured). Query words matched only via the QUALIFIER segment
+    // count half here, so a member wins only when its own member segment adds
+    // real query signal. Gated by frameworkMeta — plain class methods are
+    // untouched.
+    {
+      const fm = symbol.frameworkMeta as Record<string, unknown> | undefined;
+      const dotIdx = symbol.name.lastIndexOf('.');
+      if (wordOverlap > 0 && dotIdx > 0 && fm && (fm['vue_options'] || fm['pinia_entry'])) {
+        const memberParts = new Set(splitNameParts(symbol.name.slice(dotIdx + 1)));
+        for (const p of [...memberParts]) addStemsOf(p, memberParts);
+        for (const w of queryWords) {
+          if (!memberParts.has(w) && namePartsSet.has(w)) wordOverlap -= 5;
+        }
+        if (wordOverlap < 0) wordOverlap = 0;
+      }
     }
 
     if (wordOverlap > 0) {
@@ -1041,6 +1097,38 @@ function score(
     }
   }
 
+  // ── Test-fixture path penalty (Phase 93, Task 580) ──────────────────────────
+  // Language-agnostic: symbols under test/fixture/playground DIRECTORY segments
+  // are almost never the answer to a production-code query (the nuxt benchmark:
+  // 342 of 349 .vue files are test fixtures — top-5 was `App` ×5, V-3). −25 is
+  // a rank nudge, not a filter, and STACKS with the library-path penalty.
+  // Exemption: when the query itself asks for tests ("test"/"spec"/"fixture"),
+  // fixture symbols must still surface. Go `_test.go` files are untouched by
+  // construction (filename, not a directory segment).
+  let testFixturePenalty = 0;
+  {
+    const wantsTests = queryWords.some(
+      (w) =>
+        w === 'test' || w === 'tests' || w === 'spec' || w === 'specs' ||
+        w === 'fixture' || w === 'fixtures',
+    );
+    if (!wantsTests) {
+      const segs = symbol.filePath.replace(/\\/g, '/').toLowerCase().split('/');
+      // Directory segments only — the basename (last element) is excluded.
+      for (let i = 0; i < segs.length - 1; i++) {
+        const seg = segs[i]!;
+        if (
+          seg === 'test' || seg === 'tests' || seg === '__tests__' ||
+          seg === 'fixtures' || seg === '__fixtures__' || seg === 'playground'
+        ) {
+          testFixturePenalty = -25;
+          total += testFixturePenalty;
+          break;
+        }
+      }
+    }
+  }
+
   // ── Unexported-visibility penalty (Phase 84, Task 520) ──────────────────────
   //
   // Go unexported names (lowercase first letter) are indexed since Phase 84 so
@@ -1143,6 +1231,7 @@ function score(
     kindBoost,
     kindHintBoost,
     libraryPenalty,
+    testFixturePenalty,
     unexportedPenalty,
     corePathBoost,
     frontendPathBoost,
@@ -1155,6 +1244,7 @@ function score(
     packageContextBoost: p73PackageContext,
     trpcPrefixBoost: p73TrpcPrefix,
     pathProximityBoost: 0, // filled in by rankSymbols after the name-frequency pass
+    memberShadowTransfer: 0, // filled in by rankSymbols (pool-aware pass)
     recencyBoost: 0,
     ftsBm25Bonus: 0,
   };

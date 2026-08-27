@@ -157,7 +157,7 @@ async function processWithAdapter(
     const blocks = adapter.preProcess(content, relPath);
 
     for (const block of blocks) {
-      if (block.language !== 'typescript' && block.language !== 'javascript') continue;
+      if (block.language !== 'typescript' && block.language !== 'javascript' && block.language !== 'tsx') continue;
 
       const handler = getHandlerByLanguage(block.language);
       if (!handler) continue;

@@ -14,23 +14,31 @@
 
 import type { ProcessedBlock } from '../core/types.js';
 import { ParseError } from '../core/errors.js';
+import { logger } from '../core/logger.js';
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
  * Split a Vue SFC buffer into its typed script blocks.
  *
- * Returns one ProcessedBlock per <script> / <script setup> block found,
- * with language set to 'typescript' when lang="ts" or lang="tsx" is present,
- * and 'javascript' otherwise.
+ * Returns one ProcessedBlock per <script> / <script setup> block found, with
+ * language 'typescript' for lang="ts", 'tsx' for lang="tsx" (JSX-capable
+ * grammar), and 'javascript' otherwise.
  *
  * Returns [] for files with no script block (template/style-only SFCs).
- * Throws ParseError for files with mismatched <script> open/close tags.
+ *
+ * Resilience (Phase 93, Task 578 — P2 "never lose a whole file"): an
+ * open/close COUNT mismatch no longer throws — a plain `</script>` inside
+ * `<template>` (e.g. a JSON-LD `<script type="application/ld+json">` block, a
+ * real pattern) previously killed the entire file to zero symbols. The
+ * column-0-anchored blocks that DO match are extracted and a warning is
+ * logged. Only a truly unterminated column-0 `<script>` open (no matching
+ * close at all) still throws ParseError — that file would break Vue's own
+ * compiler too (Phase-75 contract).
  */
 export function splitVueSFC(source: Buffer, filePath: string): ProcessedBlock[] {
   const str = source.toString('utf8');
 
-  // ── Validate tag balance ──────────────────────────────────────────────────
   // A real SFC top-level <script> block always starts at column 0. Anchoring
   // the OPEN match to the start of a line (multiline ^) ignores the many ways
   // "<script" legitimately appears *inside* a block without being a tag:
@@ -42,14 +50,10 @@ export function splitVueSFC(source: Buffer, filePath: string): ProcessedBlock[] 
   // (`<script>…</script>`) still balance and parse correctly.
   const openCount = countMatches(str, /^<script\b/gim);
   const closeCount = countMatches(str, /<\/script>/gi);
-  if (openCount !== closeCount) {
-    throw new ParseError(
-      `Malformed Vue SFC: ${openCount} <script> open tags but ${closeCount} </script> close tags`,
-      filePath,
-    );
-  }
 
   if (openCount === 0) {
+    // No column-0 open — template/style-only SFC. Stray closes inside the
+    // template are template content, not script boundaries.
     return [];
   }
 
@@ -57,8 +61,10 @@ export function splitVueSFC(source: Buffer, filePath: string): ProcessedBlock[] 
   // Captures: group 1 = attributes (everything between <script and >)
   //           group 2 = inner content
   // Open anchored to column 0 (see above); non-greedy content stops at the
-  // first plain </script>.
-  const SCRIPT_RE = /^<script\b([^>]*)>([\s\S]*?)<\/script>/gim;
+  // first plain </script>. The attribute run is quote-aware so a `>` inside a
+  // quoted attribute value — `generic="T extends Record<string, any>"` — does
+  // not terminate the tag early (V-6).
+  const SCRIPT_RE = /^<script\b((?:[^>"']|"[^"]*"|'[^']*')*)>([\s\S]*?)<\/script>/gim;
   const blocks: ProcessedBlock[] = [];
   let match: RegExpExecArray | null;
 
@@ -87,6 +93,22 @@ export function splitVueSFC(source: Buffer, filePath: string): ProcessedBlock[] 
     });
   }
 
+  if (blocks.length < openCount) {
+    // A column-0 <script> open never found a close — genuinely malformed.
+    throw new ParseError(
+      `Malformed Vue SFC: unterminated <script> open tag (${openCount} column-0 opens, ${blocks.length} complete blocks)`,
+      filePath,
+    );
+  }
+
+  if (openCount !== closeCount) {
+    // Count mismatch but every column-0 open matched — the extra close lives
+    // inside <template> (JSON-LD script etc.). Degrade to the blocks we have.
+    logger.warn(
+      `Vue SFC ${filePath}: ${openCount} column-0 <script> open tag(s) but ${closeCount} </script> close tag(s); extracted ${blocks.length} matching block(s)`,
+    );
+  }
+
   return blocks;
 }
 
@@ -94,14 +116,17 @@ export function splitVueSFC(source: Buffer, filePath: string): ProcessedBlock[] 
 
 /**
  * Determine the block language from the <script> tag attributes string.
- *   lang="ts" | lang="tsx"  → 'typescript'
- *   lang="js" | (no lang)   → 'javascript'
+ *   lang="ts"              → 'typescript'
+ *   lang="tsx"             → 'tsx'   (JSX-capable grammar; the plain TS
+ *                                     grammar fails on literal JSX)
+ *   lang="js" | (no lang)  → 'javascript' (the JS grammar handles JSX natively)
  */
 function detectLanguage(attrs: string): string {
   const langMatch = attrs.match(/\blang=["']([^"']+)["']/i);
   if (!langMatch) return 'javascript';
   const lang = langMatch[1]!.toLowerCase();
-  return lang === 'ts' || lang === 'tsx' ? 'typescript' : 'javascript';
+  if (lang === 'tsx') return 'tsx';
+  return lang === 'ts' ? 'typescript' : 'javascript';
 }
 
 function countMatches(str: string, re: RegExp): number {

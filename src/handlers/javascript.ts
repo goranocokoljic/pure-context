@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { decodeCached } from '../core/offsets.js';
+import { extractVueExtras } from './vue-options-extractor.js';
 import type { LanguageHandler, SymbolRecord, SymbolKind, ImportRecord, SyntaxNode, Tree } from '../core/types.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -252,6 +253,9 @@ function processDeclarationRoot(tree: Tree, source: Buffer, filePath: string): S
     } else {
       processDeclaration(node, node, source, sourceStr, filePath, symbols);
     }
+    // Vue Options API / script-setup macros (.vue blocks only) + Pinia stores
+    // (any file). No-op for plain JS files without defineStore (Phase 93).
+    extractVueExtras(node, sourceStr, filePath, symbols);
   }
   return symbols;
 }

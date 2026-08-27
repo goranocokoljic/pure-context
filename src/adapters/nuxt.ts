@@ -21,7 +21,8 @@
 
 import { createHash } from 'crypto';
 import { basename } from 'path';
-import { existsSync, readdirSync, type Dirent } from 'fs';
+import { existsSync } from 'fs';
+import { scanForFramework } from './detect-utils.js';
 import type { FrameworkAdapter, SymbolRecord, Tree } from '../core/types.js';
 import { registerAdapter } from './adapter-registry.js';
 import { logger } from '../core/logger.js';
@@ -29,6 +30,35 @@ import { logger } from '../core/logger.js';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options']);
+
+/**
+ * Extensions a Nuxt app's script files may use (Phase 93, V-8). Nuxt apps are
+ * frequently plain JavaScript — requiring `.ts` made every JS Nuxt app index
+ * to zero route/plugin/middleware symbols (kurirfe).
+ */
+const NUXT_SCRIPT_EXT = /\.(ts|js|mts|mjs|cts|cjs)$/;
+
+/**
+ * Nuxt mode suffixes on plugin/middleware filenames (Phase 93, V-9):
+ * `auth.client.ts` registers as plugin `auth` running only on the client.
+ */
+const NUXT_MODE_SUFFIX = /\.(client|server|global|dev)$/;
+
+/**
+ * Derive the symbol name + optional mode from a plugin/middleware file path.
+ *   'plugins/auth.client.ts'   → { name: 'auth', mode: 'client' }
+ *   'middleware/auth.global.ts'→ { name: 'auth', mode: 'global' }
+ *   'plugins/analytics.ts'     → { name: 'analytics', mode: null }
+ */
+function nuxtScriptName(filePath: string): { name: string; mode: string | null } {
+  let stem = basename(filePath).replace(NUXT_SCRIPT_EXT, '');
+  const m = stem.match(NUXT_MODE_SUFFIX);
+  if (m) {
+    stem = stem.slice(0, -m[0]!.length);
+    return { name: stem, mode: m[1]! };
+  }
+  return { name: stem, mode: null };
+}
 
 const NUXT_CONFIG_NAMES = [
   'nuxt.config.ts',
@@ -39,79 +69,28 @@ const NUXT_CONFIG_NAMES = [
 
 // ─── Detection helpers ──────────────────────────────────────────────────────
 
-/**
- * Directory names that never contain a first-party Nuxt app root — skipped
- * during the recursive detection scan to keep it fast and avoid false positives
- * from bundled dependencies.
- */
-const DETECT_IGNORE_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'build',
-  'out',
-  '.nuxt',
-  '.output',
-  '.next',
-  'coverage',
-  'vendor',
-  'target',
-  '.cache',
-  '.turbo',
-  '.svelte-kit',
-]);
-
-/** Max directory depth and total directories visited by the detection scan. */
-const DETECT_MAX_DEPTH = 6;
-const DETECT_MAX_DIRS = 2000;
-
 const NUXT_CONFIG_SET = new Set(NUXT_CONFIG_NAMES);
 
 /**
- * Bounded recursive scan: returns true on the first `nuxt.config.{ts,mts,js,mjs}`
- * found anywhere in the tree. Handles monorepos where the Nuxt app lives in a
- * subdirectory (apps/web/, frontend/, …) rather than the indexed root. Skips
- * heavy/irrelevant directories and caps depth + total directories so the scan
- * stays cheap. Symlinked directories are not followed (Dirent.isDirectory() is
- * false for symlinks), avoiding cycles.
+ * Fixture/test directories excluded from Nuxt detection (Phase 93, V-7): a
+ * nuxt.config.* inside a test fixture tree must not activate the adapter for
+ * the whole repo.
  */
-function scanForNuxtConfig(dir: string, depth: number, budget: { dirs: number }): boolean {
-  if (depth > DETECT_MAX_DEPTH || budget.dirs >= DETECT_MAX_DIRS) return false;
-  budget.dirs++;
-
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return false; // unreadable directory — skip
-  }
-
-  const subDirs: string[] = [];
-  for (const e of entries) {
-    if (e.isFile()) {
-      if (NUXT_CONFIG_SET.has(e.name)) return true;
-    } else if (e.isDirectory() && !DETECT_IGNORE_DIRS.has(e.name)) {
-      subDirs.push(e.name);
-    }
-  }
-
-  for (const name of subDirs) {
-    if (scanForNuxtConfig(`${dir}/${name}`, depth + 1, budget)) return true;
-  }
-
-  return false;
-}
+const FIXTURE_IGNORE_DIRS = new Set(['test', 'tests', 'fixtures', '__fixtures__', 'examples', 'e2e']);
 
 // ─── Route path helpers ───────────────────────────────────────────────────────
 
 /**
- * Convert a single path segment with Nuxt dynamic syntax to a URL parameter.
+ * Convert a single path segment with Nuxt dynamic syntax to a URL parameter
+ * (matching what Nuxt itself renders):
  *   '[id]'      → ':id'
- *   '[...slug]' → '*slug'
+ *   '[[id]]'    → ':id?'   (optional param)
+ *   '[...slug]' → '**:slug' (catch-all)
  *   'index'     → kept as-is (caller removes trailing index)
  */
 function convertSegment(seg: string): string {
-  if (seg.startsWith('[...') && seg.endsWith(']')) return '*' + seg.slice(4, -1);
+  if (seg.startsWith('[[') && seg.endsWith(']]')) return ':' + seg.slice(2, -2) + '?';
+  if (seg.startsWith('[...') && seg.endsWith(']')) return '**:' + seg.slice(4, -1);
   if (seg.startsWith('[') && seg.endsWith(']')) return ':' + seg.slice(1, -1);
   return seg;
 }
@@ -145,9 +124,9 @@ export function deriveServerRoute(filePath: string): { routePath: string; method
   // server/routes/ maps to root (/), server/api/ keeps the api/ prefix
   let pathStr: string;
   if (filePath.startsWith('server/routes/')) {
-    pathStr = filePath.slice('server/routes/'.length).replace(/\.ts$/, '');
+    pathStr = filePath.slice('server/routes/'.length).replace(NUXT_SCRIPT_EXT, '');
   } else {
-    pathStr = filePath.slice('server/'.length).replace(/\.ts$/, '');
+    pathStr = filePath.slice('server/'.length).replace(NUXT_SCRIPT_EXT, '');
   }
 
   // Detect HTTP method suffix: `users.get` → method GET, pathStr → `users`
@@ -188,6 +167,25 @@ function makeId(filePath: string, name: string, kind: string): string {
 const NUXT_ROOT_SEGMENTS = new Set(['server', 'plugins', 'middleware', 'composables', 'pages']);
 
 /**
+ * Leading path segments that mark a directory tree as NOT a Nuxt app root.
+ * A `pages/` or `plugins/` directory nested under one of these belongs to a
+ * library, a test fixture, or generated output — treating it as an app root
+ * fabricated 111 phantom `middleware` + 24 phantom `route` symbols in the nuxt
+ * benchmark repo (V-1). Checked case-insensitively.
+ */
+const NUXT_REJECT_PRECEDING = new Set([
+  'src',
+  'dist',
+  'test',
+  'tests',
+  '__tests__',
+  'fixtures',
+  'runtime',
+  'templates',
+  'node_modules',
+]);
+
+/**
  * Resolve the path of a file relative to its Nuxt app root.
  *
  * When indexing a monorepo, file paths are relative to the indexed repo root
@@ -196,22 +194,37 @@ const NUXT_ROOT_SEGMENTS = new Set(['server', 'plugins', 'middleware', 'composab
  * This finds the first recognized Nuxt convention-directory boundary and returns
  * the path from there. Returns null when no boundary is found.
  *
+ * Anchoring (Phase 93, Task 576): the boundary segment must sit near the repo
+ * root — at most 2 leading segments (monorepo sub-app: `apps/web/pages/…`), or
+ * 3 when the segment directly above it is Nuxt 4's `app/` directory
+ * (`apps/web/app/pages/…`). Additionally no leading segment may be in
+ * NUXT_REJECT_PRECEDING — a `pages/` dir under `src/`, `test/`, `runtime/` etc.
+ * is a library/fixture/output tree, not a Nuxt app root.
+ *
  * Stateless by design: the parallel worker pool resolves adapters from its own
  * registry, so the app root cannot be cached during detect() — it must be
  * derivable from the file path alone.
  *
  *   'server/api/users.ts'             → 'server/api/users.ts'   (no-op, non-monorepo)
  *   'apps/web/server/api/users.ts'    → 'server/api/users.ts'
+ *   'app/pages/index.vue'             → 'pages/index.vue'       (Nuxt 4 layout)
  *   'packages/site/pages/index.vue'   → 'pages/index.vue'
  *   'server/plugins/foo.ts'           → 'server/plugins/foo.ts' (categoryOf → null)
+ *   'src/pages/runtime/x.vue'         → null                    (rejected: src/)
  *   'src/utils/helpers.ts'            → null
  */
 export function toNuxtRelative(filePath: string): string | null {
   const segments = filePath.replace(/\\/g, '/').split('/');
   for (let i = 0; i < segments.length; i++) {
-    if (NUXT_ROOT_SEGMENTS.has(segments[i]!)) {
-      return segments.slice(i).join('/');
+    if (!NUXT_ROOT_SEGMENTS.has(segments[i]!)) continue;
+    // Boundary must be near the repo root (depth ≤ 2; ≤ 3 under Nuxt 4 `app/`).
+    const maxDepth = segments[i - 1] === 'app' ? 3 : 2;
+    if (i > maxDepth) return null;
+    // No leading segment may be a known non-app-root directory.
+    for (let j = 0; j < i; j++) {
+      if (NUXT_REJECT_PRECEDING.has(segments[j]!.toLowerCase())) return null;
     }
+    return segments.slice(i).join('/');
   }
   return null;
 }
@@ -228,11 +241,12 @@ type FileCategory =
 
 /** Classify an already-Nuxt-relative path into a file category. */
 function categoryOf(rel: string): FileCategory {
-  if (rel.startsWith('server/api/') && rel.endsWith('.ts')) return 'server-api';
-  if (rel.startsWith('server/routes/') && rel.endsWith('.ts')) return 'server-route';
-  if (rel.startsWith('plugins/') && rel.endsWith('.ts')) return 'plugin';
-  if (rel.startsWith('middleware/') && rel.endsWith('.ts')) return 'middleware';
-  if (rel.startsWith('composables/') && rel.endsWith('.ts')) return 'composable';
+  if (!NUXT_SCRIPT_EXT.test(rel)) return null;
+  if (rel.startsWith('server/api/')) return 'server-api';
+  if (rel.startsWith('server/routes/')) return 'server-route';
+  if (rel.startsWith('plugins/')) return 'plugin';
+  if (rel.startsWith('middleware/')) return 'middleware';
+  if (rel.startsWith('composables/')) return 'composable';
   return null;
 }
 
@@ -260,10 +274,14 @@ export const nuxtAdapter: FrameworkAdapter = {
       return true;
     }
 
-    // Monorepo / sub-app fallback: bounded recursive scan for a nuxt.config.*
-    // anywhere in the tree (e.g. apps/web/, frontend/). Skips heavy dirs and
-    // caps depth + total directories.
-    return scanForNuxtConfig(projectRoot, 0, { dirs: 0 });
+    // Monorepo / sub-app fallback (shared scanner, Phase 93 consolidation):
+    // bounded recursive scan for a nuxt.config.* anywhere in the tree
+    // (e.g. apps/web/, frontend/). Fixture/test dirs are ignored (V-7).
+    return scanForFramework(projectRoot, {
+      matchesFile: (name) => NUXT_CONFIG_SET.has(name),
+      pkgDeclares: () => false, // detection keys on the config file only
+      extraIgnoreDirs: FIXTURE_IGNORE_DIRS,
+    });
   },
 
   // ── File routing ─────────────────────────────────────────────────────────────
@@ -310,7 +328,7 @@ export const nuxtAdapter: FrameworkAdapter = {
       }
 
       case 'plugin': {
-        const name = basename(filePath, '.ts');
+        const { name, mode } = nuxtScriptName(filePath);
         return [
           {
             id: makeId(filePath, name, 'middleware'),
@@ -321,13 +339,13 @@ export const nuxtAdapter: FrameworkAdapter = {
             endByte: source.length,
             signature: `plugin: ${name}`,
             summary: `Nuxt plugin ${name}`,
-            frameworkMeta: { nuxt_plugin: true },
+            frameworkMeta: { nuxt_plugin: true, ...(mode ? { nuxt_mode: mode } : {}) },
           },
         ];
       }
 
       case 'middleware': {
-        const name = basename(filePath, '.ts');
+        const { name, mode } = nuxtScriptName(filePath);
         return [
           {
             id: makeId(filePath, name, 'middleware'),
@@ -338,7 +356,7 @@ export const nuxtAdapter: FrameworkAdapter = {
             endByte: source.length,
             signature: `middleware: ${name}`,
             summary: `Nuxt middleware ${name}`,
-            frameworkMeta: { nuxt_middleware: true },
+            frameworkMeta: { nuxt_middleware: true, ...(mode ? { nuxt_mode: mode } : {}) },
           },
         ];
       }
@@ -368,11 +386,15 @@ export const nuxtAdapter: FrameworkAdapter = {
     // (e.g. apps/web/pages/index.vue) are enriched the same as root-level ones.
     const rel = toNuxtRelative(symbol.filePath);
 
-    // Page component: add route metadata
+    // Page component: add route metadata. The summary is overwritten with the
+    // route so users see it in search results and FTS carries its words — the
+    // Vue adapter's "Vue component X" summary otherwise made the summarizer's
+    // nuxt_page branch unreachable (Phase 93, V-2).
     if (symbol.kind === 'component' && rel && rel.startsWith('pages/')) {
       const routePath = derivePageRoutePath(rel);
       return {
         ...symbol,
+        summary: `Page route ${routePath}`,
         frameworkMeta: {
           ...symbol.frameworkMeta,
           route_path: routePath,

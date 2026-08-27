@@ -11,6 +11,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.26.0] - 2026-08-27 — Phase 93: Vue/Nuxt Integrity
+
+From the Vue/Nuxt deep-dive audit (V-1…V-13): phantom Nuxt symbols, dead
+route metadata, splitter file loss, zero Options-API/Pinia extraction.
+
+> **Re-index note:** Vue/Nuxt repos should be re-indexed once on this version
+> to heal names/kinds (phantom `middleware`/`route` rows removed, `index.vue`
+> components renamed, mode suffixes stripped) and to gain the new Options-API,
+> Pinia, and `defineProps`/`defineEmits` symbols. FTS content changed
+> (route paths + Pinia store ids indexed) — retrieval improvements need the
+> re-index too. No schema change.
+
+### Fixed (correctness)
+
+- **Phantom Nuxt symbols killed** (V-1): `toNuxtRelative` treated ANY
+  `plugins/`/`middleware/`/`server/`/`pages/`/`composables/` directory
+  anywhere in a repo as a Nuxt app root — the nuxt benchmark repo carried 111
+  fabricated `middleware` + 24 fabricated `route` symbols (~5% of its index).
+  Convention dirs now count only near the repo root (≤ 2 leading segments, or
+  3 under Nuxt 4's `app/`), and never under `src/`, `dist/`, `test/`,
+  `tests/`, `__tests__/`, `fixtures/`, `runtime/`, `templates/`,
+  `node_modules/`. Re-index verified: 135 phantoms → 1 real playground route.
+- **SFC splitter never drops a whole file** (V-6): a `generic="T extends
+  Record<string, any>"` attribute no longer breaks the script-tag regex
+  (quote-aware attribute matching); `lang="tsx"` blocks now parse with the
+  JSX-capable tsx grammar (previously the plain TS grammar failed on literal
+  JSX → zero symbols); an unmatched `</script>` inside `<template>` (JSON-LD
+  scripts) degrades to extracting the matching blocks with a warning instead
+  of throwing the whole file away. A truly unterminated column-0 `<script>`
+  still throws.
+- **Vue detection is fixture-blind** (V-7): `test/`, `tests/`, `fixtures/`,
+  `__fixtures__/`, `examples/`, `e2e/` are ignored by the vue/nuxt detection
+  scans — PureContext's own repo no longer activates Vue and self-indexes its
+  Zustand stores as `composable` (self-index guard test).
+
+### Added
+
+- **Options API / defineComponent / Pinia extraction** (V-4/V-5, the recall
+  win): `.vue` script blocks with `export default { … }`,
+  `defineComponent({ … })`, `defineNuxtComponent({ … })`, or Vue 2's
+  `Vue.extend({ … })` now emit `method` symbols for `methods:`/`computed:`/
+  `watch:`/lifecycle entries (`UserCard.fetchItems`) and `property` symbols
+  for `props:` keys and `data()` return keys — with real spans and signatures.
+  Pinia `defineStore('id', { actions, getters })` emits `method` symbols per
+  action/getter (`useAuthStore.logout`) in ANY JS/TS file, and the store id
+  becomes an FTS token. `defineProps`/`defineEmits` (script setup) emit
+  `property` symbols per prop/emit name. Plain `.ts`/`.js` files without
+  `defineStore` are byte-identical (regression-guarded).
+- **Route paths are searchable** (V-2): `buildFtsContent` indexes
+  `frameworkMeta.route_path` (raw + segment-split) for `route`/`component`
+  kinds — framework-agnostic (Nuxt pages, Next.js, Flask, Django, Laravel,
+  Rails-style adapters all store `route_path`). Nuxt page summaries are
+  rewritten to `Page route /blog/:slug`.
+- **JS Nuxt apps finally index** (V-8): `server/`/`plugins/`/`middleware/`/
+  `composables/` accept all JS/TS extensions (`.js`, `.mjs`, `.mts`, `.cjs`),
+  not just `.ts`.
+- **Nuxt naming conventions** (V-9): mode suffixes (`auth.client.ts` → `auth`
+  + `frameworkMeta.nuxt_mode: 'client'`); `index.vue` named after its parent
+  directory (`components/user/index.vue` → `User`); optional params
+  `[[id]]` → `:id?`; catch-all `[...slug]` → `**:slug` (as Nuxt renders it).
+- **Test-fixture ranking penalty** (V-3): symbols under `test/`, `tests/`,
+  `__tests__/`, `fixtures/`, `__fixtures__/`, `playground/` directory segments
+  take −25 at rank time — unless the query itself asks for tests
+  ("test"/"spec"/"fixture"). Stacks with the library-path penalty.
+
+### Changed
+
+- `.nuxt/` and `.output/` are built-in discovery excludes.
+- Vue/Nuxt detection ported to the shared `detect-utils.ts` scanner
+  (behavior-preserving; ~110 duplicated lines deleted); `toPascalCase` has a
+  single implementation shared by adapters and the Options-API extractor.
+- `resolveComponentName` also honours `defineComponent({name})` and
+  Options-API `export default {name}` — as the docs already claimed.
+
+---
+
 ## [1.25.0] - 2026-08-27 — Phase 92: React Adapter Integrity
 
 From the React framework-support audit: the React adapter was a bare name

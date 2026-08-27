@@ -44,6 +44,7 @@ export function getSupportedExtensions(): string[] {
 export function getHandlerByLanguage(language: string): LanguageHandler | null {
   const langToExt: Record<string, string> = {
     typescript: '.ts',
+    tsx: '.tsx',
     javascript: '.js',
     python: '.py',
     go: '.go',

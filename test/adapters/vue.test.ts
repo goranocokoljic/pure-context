@@ -209,6 +209,30 @@ describe('vueAdapter.extractFrameworkSymbols', () => {
     }
   });
 
+  it('names index.vue after its parent directory (Phase 93, V-9)', () => {
+    const source = buf('<template></template>');
+    const cases: [string, string][] = [
+      ['components/user/index.vue',      'User'],
+      ['components/data-table/index.vue', 'DataTable'],
+      ['pages/blog/index.vue',           'Blog'],
+      // generic container parents keep the Index name
+      ['pages/index.vue',                'Index'],
+      ['components/index.vue',           'Index'],
+    ];
+    for (const [filePath, expectedName] of cases) {
+      const [sym] = vueAdapter.extractFrameworkSymbols(null, source, filePath);
+      expect(sym!.name).toBe(expectedName);
+    }
+  });
+
+  it('strips Nuxt mode suffixes from component names (Phase 93, V-9)', () => {
+    const source = buf('<template></template>');
+    const [client] = vueAdapter.extractFrameworkSymbols(null, source, 'components/MyWidget.client.vue');
+    expect(client!.name).toBe('MyWidget');
+    const [server] = vueAdapter.extractFrameworkSymbols(null, source, 'components/Chart.server.vue');
+    expect(server!.name).toBe('Chart');
+  });
+
   it('uses explicit name from defineOptions({ name: ... })', () => {
     const source = buf(`
       <script setup>

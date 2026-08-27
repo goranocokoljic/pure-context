@@ -10,9 +10,14 @@
  */
 
 import { createHash } from 'crypto';
-import { basename } from 'path';
-import { readFileSync, readdirSync, type Dirent } from 'fs';
+import { readFileSync } from 'fs';
+import { scanForFramework, pkgDepMatches } from './detect-utils.js';
 import type { FrameworkAdapter, SymbolRecord, Tree } from '../core/types.js';
+// Naming is shared with the TS/JS handlers' Options-API extraction (Phase 93,
+// vue-options-extractor.ts) so `ComponentName.methodName` symbols and the
+// component symbol always agree. Mode-suffix stripping + index.vue parent-dir
+// naming (V-9) live there. (Adapter → handler import: allowed direction.)
+import { componentNameFromVuePath } from '../handlers/vue-options-extractor.js';
 import { splitVueSFC } from './vue-preprocessor.js';
 import { registerAdapter } from './adapter-registry.js';
 import { logger } from '../core/logger.js';
@@ -34,112 +39,38 @@ function makeId(filePath: string, name: string, kind: string): string {
  */
 const COMPOSABLE_FILES = /\.(vue|ts|js|mts|mjs|cts|cjs)$/;
 
-/**
- * Convert kebab-case or camelCase filename stems to PascalCase.
- * 'my-component' → 'MyComponent'
- * 'userCard'     → 'UserCard'
- */
-function toPascalCase(str: string): string {
-  return str
-    .replace(/[-_](.)/g, (_, c: string) => c.toUpperCase())
-    .replace(/^(.)/, (_, c: string) => c.toUpperCase());
-}
-
 function componentNameFromPath(filePath: string): string {
-  return toPascalCase(basename(filePath, '.vue'));
+  return componentNameFromVuePath(filePath);
 }
 
 // ─── Detection helpers ──────────────────────────────────────────────────────
 
 /**
- * Directory names that never contain first-party Vue source — skipped during
- * the recursive detection scan to keep it fast and avoid false positives from
- * bundled dependencies.
+ * Fixture/test directories excluded from Vue detection (Phase 93, V-7): a repo
+ * whose ONLY `.vue` files are test fixtures (PureContext itself) must not
+ * activate the adapter — it was self-indexing its Zustand stores as
+ * `composable`.
  */
-const DETECT_IGNORE_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'build',
-  'out',
-  '.nuxt',
-  '.output',
-  '.next',
-  'coverage',
-  'vendor',
-  'target',
-  '.cache',
-  '.turbo',
-  '.svelte-kit',
-]);
-
-/** Max directory depth and total directories visited by the detection scan. */
-const DETECT_MAX_DEPTH = 6;
-const DETECT_MAX_DIRS = 2000;
+const FIXTURE_IGNORE_DIRS = new Set(['test', 'tests', 'fixtures', '__fixtures__', 'examples', 'e2e']);
 
 /** Returns true if a parsed package.json declares a vue / @vue/* dependency. */
 function pkgDeclaresVue(raw: string): boolean {
-  try {
-    const pkg = JSON.parse(raw) as Record<string, unknown>;
-    const deps = Object.assign(
-      {},
-      pkg['dependencies'] as Record<string, string> | undefined,
-      pkg['devDependencies'] as Record<string, string> | undefined,
-    );
-    return Object.keys(deps).some((k) => k === 'vue' || k.startsWith('@vue/'));
-  } catch {
-    return false;
-  }
+  return pkgDepMatches(raw, (k) => k === 'vue' || k.startsWith('@vue/'));
 }
 
 /**
- * Bounded recursive scan: returns true on the first sign of a Vue project —
- * either a `.vue` file or a (possibly nested) package.json declaring vue.
- * Skips heavy/irrelevant directories and caps depth + total directories so the
- * scan stays cheap even on large monorepos. Symlinked directories are not
- * followed (Dirent.isDirectory() is false for symlinks), avoiding cycles.
- */
-function scanForVue(dir: string, depth: number, budget: { dirs: number }): boolean {
-  if (depth > DETECT_MAX_DEPTH || budget.dirs >= DETECT_MAX_DIRS) return false;
-  budget.dirs++;
-
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return false; // unreadable directory — skip
-  }
-
-  const subDirs: string[] = [];
-  for (const e of entries) {
-    if (e.isFile()) {
-      if (e.name.endsWith('.vue')) return true;
-      if (e.name === 'package.json') {
-        try {
-          if (pkgDeclaresVue(readFileSync(`${dir}/${e.name}`, 'utf8'))) return true;
-        } catch {
-          // unreadable package.json — ignore
-        }
-      }
-    } else if (e.isDirectory() && !DETECT_IGNORE_DIRS.has(e.name)) {
-      subDirs.push(e.name);
-    }
-  }
-
-  for (const name of subDirs) {
-    if (scanForVue(`${dir}/${name}`, depth + 1, budget)) return true;
-  }
-
-  return false;
-}
-
-/**
- * Try to find an explicit component name from `defineOptions({ name: '...' })`.
- * Falls back to the filename-derived PascalCase name.
+ * Try to find an explicit component name from `defineOptions({ name: '...' })`,
+ * `defineComponent({ name: '...' })`, or an Options-API
+ * `export default { name: '...' }` (Phase 93, V-12 — the docs claimed the
+ * latter two for years; now true). Falls back to the filename-derived
+ * PascalCase name.
  */
 function resolveComponentName(source: Buffer, filePath: string): string {
   const str = source.toString('utf8');
-  const m = str.match(/defineOptions\s*\(\s*\{[^}]*\bname\s*:\s*['"]([^'"]+)['"]/);
+  const m =
+    str.match(/defineOptions\s*\(\s*\{[^}]*\bname\s*:\s*['"]([^'"]+)['"]/) ??
+    str.match(/defineComponent\s*\(\s*\{[^}]*\bname\s*:\s*['"]([^'"]+)['"]/) ??
+    str.match(/export\s+default\s*\{[^}]*\bname\s*:\s*['"]([^'"]+)['"]/);
   if (m) return m[1]!;
   return componentNameFromPath(filePath);
 }
@@ -163,11 +94,14 @@ export const vueAdapter: FrameworkAdapter = {
       // No package.json or parse error — fall through to the recursive scan
     }
 
-    // Monorepo / sub-app fallback: bounded recursive scan for a `.vue` file or
-    // a nested package.json declaring vue. Handles projects where the Vue app
-    // lives in a subdirectory (frontend/, web/, apps/web/, …) rather than the
-    // indexed root. Skips heavy dirs and caps depth + total directories.
-    return scanForVue(projectRoot, 0, { dirs: 0 });
+    // Monorepo / sub-app fallback (shared scanner, Phase 93 consolidation):
+    // bounded recursive scan for a `.vue` file or a nested package.json
+    // declaring vue. Fixture/test dirs are ignored (V-7).
+    return scanForFramework(projectRoot, {
+      matchesFile: (name) => name.endsWith('.vue'),
+      pkgDeclares: pkgDeclaresVue,
+      extraIgnoreDirs: FIXTURE_IGNORE_DIRS,
+    });
   },
 
   // ── File routing ─────────────────────────────────────────────────────────────

@@ -36,23 +36,49 @@ Multiple adapters can be active simultaneously. Adapters compose — a Vue + Nux
 
 ### Vue 3
 
-**Detected by:** `vue` in `package.json`, or any `.vue` file present.
+**Detected by:** `vue` in `package.json`, or any `.vue` file present outside
+test/fixture/example directories (bounded monorepo scan).
 
 Extracts from `.vue` Single File Components:
-- `component` — the component itself (from filename or `defineComponent`)
+- `component` — the component itself. Name from `defineOptions`/
+  `defineComponent`/Options-API `name:`, else the PascalCase filename
+  (`index.vue` is named after its parent directory; Nuxt `.client`/`.server`
+  mode suffixes are stripped)
 - `composable` — exported `use*` functions
+- Options API (`export default { … }`, `defineComponent({ … })`,
+  `Vue.extend({ … })`): `method` symbols for `methods:`/`computed:`/`watch:`/
+  lifecycle entries (`MyComp.fetchItems`), `property` symbols for `props:`
+  keys and `data()` return keys
+- Script setup: `property` symbols per `defineProps`/`defineEmits` name
+- Pinia: `defineStore` option stores emit `method` symbols per action/getter
+  (`useAuthStore.logout`) in ANY JS/TS file; the store id is an FTS token
 
-`frameworkMeta` includes: `vue_component: true`, `vue_composable: true`.
+NOT extracted: `provide`/`inject` pairs, template bindings/expressions,
+`<style module>` classes.
+
+`frameworkMeta` includes: `vue_component: true`, `vue_composable: true`,
+`vue_options`, `pinia_store_id`.
 
 ### Nuxt
 
-**Detected by:** `nuxt.config.ts` (or `.js`, `.mts`, `.mjs`) in project root.
+**Detected by:** `nuxt.config.ts` (or `.js`, `.mts`, `.mjs`) in the project
+root or a monorepo sub-app (test/fixture trees ignored).
 
-Extracts:
-- `route` from `pages/**/*.vue` (derives route path: `pages/blog/[slug].vue` → `/blog/:slug`)
-- `route` from `server/api/**/*.ts` (HTTP method from filename suffix)
-- `middleware` from `plugins/**` and `middleware/**`
+Extracts (all JS/TS extensions — `.ts`, `.js`, `.mts`, `.mjs`, `.cts`, `.cjs`):
+- `route` from `server/api/**` and `server/routes/**` (HTTP method from the
+  filename suffix; `[id]` → `:id`, `[[id]]` → `:id?`, `[...slug]` → `**:slug`)
+- `middleware` from `plugins/**` and `middleware/**` (mode suffixes
+  `.client`/`.server`/`.global`/`.dev` are stripped into
+  `frameworkMeta.nuxt_mode`)
+- Pages (`pages/**/*.vue`) stay `component` symbols (emitted by the Vue
+  adapter) — Nuxt enriches them with `frameworkMeta.route_path` +
+  `nuxt_page: true` and rewrites the summary to `Page route /blog/:slug`;
+  the route path is indexed in FTS, so route queries retrieve them
 - Enriches composables in `composables/**` with `nuxt_auto_import: true`
+
+Convention directories are only recognized near the repo root (depth ≤ 2, or
+under Nuxt 4's `app/`); `pages/` etc. under `src/`, `test/`, `runtime/`,
+`templates/` are never treated as a Nuxt app root.
 
 ### React
 

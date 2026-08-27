@@ -143,6 +143,12 @@ function buildFtsContent(s: SymbolRecord): string {
   if (s.frameworkMeta?.['luaApiAlias'] && typeof s.frameworkMeta['luaApiAlias'] === 'string') {
     parts.push(s.frameworkMeta['luaApiAlias'] as string);
   }
+  // Pinia: the store id string ('auth' for useAuthStore) as an FTS token —
+  // queries say "auth store logout", never "useAuthStore" (serviceName
+  // precedent; Phase 93).
+  if (s.frameworkMeta?.['pinia_store_id'] && typeof s.frameworkMeta['pinia_store_id'] === 'string') {
+    parts.push(s.frameworkMeta['pinia_store_id'] as string);
+  }
   // UI-framework kinds: add the kind as an FTS token. Hook/component names
   // never contain the words "hook"/"component", so vocabulary queries
   // ("hook to create a workflow") could not retrieve them into the candidate
@@ -154,6 +160,23 @@ function buildFtsContent(s: SymbolRecord): string {
     parts.push('hook composable');
   } else if (s.kind === 'component') {
     parts.push('component');
+  }
+  // Routes and page components: index the URL path so route-vocabulary queries
+  // ("/blog/:slug", "blog slug page") can retrieve the symbol (Phase 93, V-2).
+  // Framework-agnostic — every route-emitting adapter stores `route_path`.
+  // Kind-gated (route/component only) so stray meta on other kinds can't flood
+  // FTS with path tokens.
+  if (
+    (s.kind === 'route' || s.kind === 'component') &&
+    typeof s.frameworkMeta?.['route_path'] === 'string'
+  ) {
+    const routePath = s.frameworkMeta['route_path'] as string;
+    parts.push(routePath);
+    const segments = routePath
+      .split('/')
+      .map((seg) => seg.replace(/^[:*[\]]+/, '').replace(/[\]?]+$/, ''))
+      .filter((seg) => seg.length >= 2);
+    if (segments.length > 0) parts.push(segments.join(' '));
   }
   return parts.filter(Boolean).join(' ');
 }

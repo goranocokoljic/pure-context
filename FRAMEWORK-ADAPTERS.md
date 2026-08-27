@@ -49,11 +49,23 @@ Multiple adapters run side by side. A Vue + Nuxt project activates both. A Nest 
 
 ### Vue 3
 
-Detected by `vue` in `package.json` or any `.vue` file present.
+Detected by `vue` in `package.json` or any `.vue` file present outside
+test/fixture/example directories.
 
 Extracts from Single File Components:
-- The component itself (named from `defineComponent` or filename) → `component`
+- The component itself (named from `defineOptions`/`defineComponent`/
+  Options-API `name:` or filename; `index.vue` is named after its parent dir)
+  → `component`
 - Exported `useFoo` functions → `composable`
+- Options-API bodies (`export default { … }`, `defineComponent({ … })`,
+  `Vue.extend({ … })`): `methods:`/`computed:`/`watch:`/lifecycle entries →
+  `method` (`MyComp.fetchItems`); `props:` keys and `data()` return keys →
+  `property`
+- Script setup: `defineProps`/`defineEmits` names → `property`
+- Pinia `defineStore` option stores (any JS/TS file): actions/getters →
+  `method` (`useAuthStore.logout`), store id indexed for search
+
+Not extracted: `provide`/`inject`, template bindings, `<style module>` classes.
 
 Useful for: jumping to a `<MyButton>` mentioned in a template, or finding every composable that touches the auth store.
 
@@ -76,13 +88,20 @@ Extracts from Astro components:
 
 ### Nuxt
 
-Detected by `nuxt.config.ts` / `.js` / `.mts` / `.mjs`.
+Detected by `nuxt.config.ts` / `.js` / `.mts` / `.mjs` (root or monorepo
+sub-app; test/fixture trees ignored).
 
-Layers Nuxt's conventional routing on top of the Vue adapter:
-- `pages/blog/[slug].vue` → `route /blog/:slug`
+Layers Nuxt's conventional routing on top of the Vue adapter (all JS/TS
+extensions accepted):
+- `pages/blog/[slug].vue` → `component` with `frameworkMeta.route_path
+  "/blog/:slug"` and summary `Page route /blog/:slug` (route path is
+  FTS-searchable)
 - `server/api/users.get.ts` → `route GET /api/users`
-- `middleware/auth.ts` and `plugins/*` → `middleware`
+- `middleware/auth.ts` and `plugins/*` → `middleware` (mode suffixes like
+  `.client` stripped into `frameworkMeta.nuxt_mode`)
 - Composables in `composables/` are flagged with `nuxt_auto_import: true`
+- Convention dirs count only near the repo root (depth ≤ 2, or under Nuxt 4's
+  `app/`) — a `pages/` dir under `src/`/`test/`/`runtime/` is not an app root
 
 ### React
 

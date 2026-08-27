@@ -22,6 +22,9 @@ const BUILT_IN_EXCLUDES = [
   // JVM / Android standards
   '.gradle',
   '.idea',
+  // Nuxt build output (Phase 93) — generated code, never first-party source
+  '.nuxt',
+  '.output',
 ];
 
 /** Higher number = higher priority (indexed first). */

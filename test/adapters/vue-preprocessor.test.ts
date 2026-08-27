@@ -42,10 +42,12 @@ describe('splitVueSFC', () => {
     expect(blocks[0]!.language).toBe('typescript');
   });
 
-  it('detects lang="tsx" as typescript', () => {
+  it('detects lang="tsx" as tsx (JSX-capable grammar, not plain typescript)', () => {
+    // The fixture contains literal JSX — the plain TS grammar cannot parse it,
+    // so the block must route to the tsx handler (Phase 93, V-6).
     const sfc = buf('<script lang="tsx">\nconst x = <div />\n</script>');
     const blocks = splitVueSFC(sfc, 'Foo.vue');
-    expect(blocks[0]!.language).toBe('typescript');
+    expect(blocks[0]!.language).toBe('tsx');
   });
 
   it('detects lang with single quotes', () => {
@@ -184,13 +186,54 @@ describe('splitVueSFC', () => {
     expect(() => splitVueSFC(sfc, 'Bad.vue')).toThrow(ParseError);
   });
 
-  it('throws ParseError for extra </script> close tag', () => {
+  it('extra </script> close tag no longer kills the file — matching block extracted', () => {
     const sfc = buf('<script lang="ts">const x = 1</script></script>');
-    expect(() => splitVueSFC(sfc, 'Bad.vue')).toThrow(ParseError);
+    const blocks = splitVueSFC(sfc, 'Odd.vue');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.content.toString('utf8')).toBe('const x = 1');
   });
 
   it('ParseError message includes the file path', () => {
     const sfc = buf('<script lang="ts">const x = 1');
     expect(() => splitVueSFC(sfc, 'src/Bad.vue')).toThrow(/src\/Bad\.vue/);
+  });
+
+  // ── Splitter resilience (Phase 93, Task 578) ───────────────────────────────
+
+  it('parses a generic="..." attribute containing > (quote-aware attrs)', () => {
+    const sfc = buf(
+      '<script setup lang="ts" generic="T extends Record<string, any>">\n' +
+      'const props = defineProps<{ items: T[] }>()\n' +
+      'export function pick(t: T) { return t }\n' +
+      '</script>',
+    );
+    const blocks = splitVueSFC(sfc, 'Generic.vue');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.language).toBe('typescript');
+    expect(blocks[0]!.content.toString('utf8')).toContain('defineProps');
+    // Offset still points exactly at the content start
+    const slice = sfc.slice(blocks[0]!.offsetInOriginal);
+    expect(slice.toString('utf8').startsWith('\nconst props')).toBe(true);
+  });
+
+  it('a JSON-LD <script> inside <template> does not kill the real script block', () => {
+    const sfc = buf(
+      '<template>\n' +
+      '  <div>\n' +
+      '    <script type="application/ld+json">{"@type":"Article"}</script>\n' +
+      '  </div>\n' +
+      '</template>\n' +
+      '<script setup lang="ts">\n' +
+      'const title = "hello"\n' +
+      '</script>',
+    );
+    const blocks = splitVueSFC(sfc, 'Article.vue');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.content.toString('utf8')).toContain('const title');
+  });
+
+  it('still throws for a truly unterminated column-0 <script> open', () => {
+    const sfc = buf('<template><p>x</p></template>\n<script setup>\nconst x = 1\n');
+    expect(() => splitVueSFC(sfc, 'Bad.vue')).toThrow(ParseError);
   });
 });
