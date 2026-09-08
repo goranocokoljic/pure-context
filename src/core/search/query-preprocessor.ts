@@ -135,7 +135,12 @@ const VERB_SYNONYMS: Readonly<Record<string, ReadonlyArray<string>>> = {
   'emit':           ['send', 'dispatch', 'fire'],    // event/particle emission
   'dispatch':       ['emit', 'send', 'route'],       // event dispatching (also Go channels)
   // Symfony / Doctrine / event-driven PHP synonyms
-  'register':       ['subscribe', 'listen'],         // "register event handler" → finds EventSubscriber.onKernelRequest
+  // Phase 96 (Task 597): + 'add' — registration APIs are predominantly named
+  // add*: addEventListener (DOM), addServerHandler/addPlugin/addTemplate
+  // (nuxt/kit), addHandler (Go/Java logging), add_action/add_filter
+  // (WordPress). One direction only: `add` is a Phase-95 generic word and
+  // must NOT expand into register-vocabulary pools.
+  'register':       ['subscribe', 'listen', 'add'],  // "register event handler" → finds EventSubscriber.onKernelRequest, addServerHandler
   'subscribe':      ['register', 'listen'],          // bidirectional with register
   'listen':         ['subscribe', 'handle'],         // "listen for events" → subscriber methods
   'validate':       ['check', 'verify', 'assert'],   // form validation queries

@@ -11,6 +11,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.29.0] - 2026-09-08 — Phase 96: Query-Vocabulary Follow-ups
+
+The two retrieval-side items Phase 95 carried (its scope was pure ranking).
+One lever kept, one measured and reverted. Query-side only — no index or
+schema change, no re-index needed.
+
+### Changed
+
+- **`register` now also expands to `add`** in the verb-synonym table (one
+  direction only — `add` stays a plain generic word). Registration APIs are
+  predominantly named `add*` (addEventListener, addServerHandler/addPlugin/
+  addTemplate, addHandler, add_action). Measured on 18 benchmark repos:
+  nuxt 32/52/64 → 40/64/76 (addServerHandler, addPlugin → rank 1;
+  addTypeTemplate → rank 3), listmonk R@5 +4 (AddMessenger → rank 5); the
+  other 16 repos byte-identical.
+
+### Evaluated and not shipped
+
+- **-tion nominalisation → verb-family stems** ("navigation" → navigate,
+  "configuration" → configure, "notification" → notify, "registration" →
+  register). Built twice (the first design double-counted a noun-bearing
+  name; the second was surgical), unit-precise, but the sweep showed zero
+  gains and two −4pp costs: in natural-language queries a -tion noun is a
+  context descriptor ("with cursor navigation", "with rotation"), so the verb
+  forms lift verb-named siblings over the asked-for symbol. Recorded in
+  `dev-docs/in-progress/phase96-findings.md`.
+
+### Tooling
+
+- Sweep driver gained `-Prefix`; the sweep comparer accepts full labels.
+
+---
+
 ## [1.28.0] - 2026-08-27 — Phase 95: Generic-Verb Identity, Global
 
 The deferred global ranking fix (Phase-88 boundary: per-language gates only),
