@@ -126,7 +126,10 @@ beforeAll(async () => {
   registerHandler(typescriptHandler);
   await initParser();
 
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'pc-xidx-')));
+  // realpathSync.native: on Windows CI the temp dir is an 8.3 short path
+  // (C:/Users/RUNNER~1/...) while git reports the long form; the JS realpath
+  // does not expand short names, the native one does.
+  base = realpathSync.native(mkdtempSync(join(tmpdir(), 'pc-xidx-')));
   initRepo(base);
   libsRoot = join(base, 'libs');
   appRoot = join(base, 'app');

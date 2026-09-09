@@ -78,7 +78,10 @@ let mainRepoId: string;
 
 beforeAll(async () => {
   await initParser();
-  base = realpathSync(mkdtempSync(join(tmpdir(), 'pc-wtclone-')));
+  // realpathSync.native: on Windows CI the temp dir is an 8.3 short path
+  // (C:/Users/RUNNER~1/...) while git reports the long form; the JS realpath
+  // does not expand short names, the native one does.
+  base = realpathSync.native(mkdtempSync(join(tmpdir(), 'pc-wtclone-')));
   main = join(base, 'main');
   mkdirSync(join(main, 'src'), { recursive: true });
   git(main, 'init', '-q', '-b', 'main');

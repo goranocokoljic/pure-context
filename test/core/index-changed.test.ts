@@ -35,7 +35,10 @@ function git(cwd: string, ...args: string[]): string {
 
 function initRepo(prefix: string): string {
   // realpath: on Windows tmpdir may be a short (8.3) path; git reports the long one.
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  // realpathSync.native: on Windows CI the temp dir is an 8.3 short path
+  // (C:/Users/RUNNER~1/...) while git reports the long form; the JS realpath
+  // does not expand short names, the native one does.
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), prefix)));
   git(dir, 'init', '-q', '-b', 'main');
   // Byte-stable checkouts: the parity comparison is over byte offsets, so a
   // machine-wide core.autocrlf=true must not rewrite line endings on checkout.
