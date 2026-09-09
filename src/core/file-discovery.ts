@@ -25,6 +25,14 @@ const BUILT_IN_EXCLUDES = [
   // Nuxt build output (Phase 93) — generated code, never first-party source
   '.nuxt',
   '.output',
+  // Phase 98 (Task 611): never first-party source — virtualenvs, installed
+  // packages, CocoaPods checkouts, Elixir/Erlang build output, bytecode.
+  '.venv',
+  'venv',
+  'site-packages',
+  'Pods',
+  '_build',
+  '__pycache__',
 ];
 
 /** Higher number = higher priority (indexed first). */
@@ -69,6 +77,33 @@ export interface DiscoveryResult {
    * silently drop a whole nested repo and nobody notices).
    */
   excludedDirs: Array<{ dir: string; source: 'builtin' | 'gitignore' | 'config' }>;
+  /**
+   * Phase 98 (Task 612): what the walk silently dropped, by reason. Ignore-rule
+   * exclusions are NOT counted here (they are expected and reported via
+   * excludedDirs); these are the gates nobody could see before.
+   */
+  dropped: DiscoveryDropped;
+}
+
+export interface DiscoveryDropped {
+  /** extension not handled by any registered handler */
+  unsupportedExt: number;
+  /** credential / secret file-name pattern */
+  secret: number;
+  /** stat/read failure */
+  unreadable: number;
+  /** over maxFileSizeBytes */
+  oversized: number;
+  /** NUL byte in the first 8 KB */
+  binary: number;
+  /** neither a regular file nor a directory (symlinks, sockets, â€¦) */
+  special: number;
+  /** directories whose listing failed â€” their WHOLE subtree is missing */
+  unreadableDirs: number;
+}
+
+export function emptyDropped(): DiscoveryDropped {
+  return { unsupportedExt: 0, secret: 0, unreadable: 0, oversized: 0, binary: 0, special: 0, unreadableDirs: 0 };
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -109,7 +144,8 @@ export function discoverFiles(
     // Root unreadable — the walk will surface that on its own.
   }
 
-  walk(rootPath, rootPath, ig, extensions, maxFileSizeBytes, results, extensionlessSet);
+  const dropped = emptyDropped();
+  walk(rootPath, rootPath, ig, extensions, maxFileSizeBytes, results, extensionlessSet, dropped);
 
   results.sort((a, b) => {
     if (b.priority !== a.priority) return b.priority - a.priority;
@@ -118,7 +154,7 @@ export function discoverFiles(
 
   const totalBeforeLimit = results.length;
   const files = fileLimit > 0 ? results.slice(0, fileLimit) : results;
-  return { files, totalBeforeLimit, excludedDirs };
+  return { files, totalBeforeLimit, excludedDirs, dropped };
 }
 
 /**
@@ -180,12 +216,14 @@ function walk(
   extensions: string[] | undefined,
   maxFileSizeBytes: number,
   results: DiscoveredFile[],
-  extensionlessFilenames?: Set<string>,
+  extensionlessFilenames: Set<string> | undefined,
+  dropped: DiscoveryDropped,
 ): void {
   let entries;
   try {
     entries = readdirSync(currentPath, { withFileTypes: true });
   } catch {
+    dropped.unreadableDirs++;
     return;
   }
 
@@ -200,18 +238,23 @@ function walk(
     if (ig.ignores(checkPath)) continue;
 
     if (entry.isDirectory()) {
-      walk(rootPath, absPath, ig, extensions, maxFileSizeBytes, results, extensionlessFilenames);
+      walk(rootPath, absPath, ig, extensions, maxFileSizeBytes, results, extensionlessFilenames, dropped);
       continue;
     }
-
-    if (!entry.isFile()) continue;
-
-    const size = fileGuardSize(absPath, entry.name, relPath, {
+    if (!entry.isFile()) {
+      dropped.special++;
+      continue;
+    }
+    const guard = fileGuard(absPath, entry.name, relPath, {
       extensions,
       maxFileSizeBytes,
       extensionlessFilenames,
     });
-    if (size === null) continue;
+    if (guard.size === null) {
+      dropped[guard.reason]++;
+      continue;
+    }
+    const size = guard.size;
 
     results.push({
       path: relPath,
@@ -240,30 +283,44 @@ export function fileGuardSize(
   relPath: string,
   opts: FileGuardOptions,
 ): number | null {
+  return fileGuard(absPath, fileName, relPath, opts).size;
+}
+
+export type FileGuardResult =
+  | { size: number }
+  | { size: null; reason: 'unsupportedExt' | 'secret' | 'unreadable' | 'oversized' | 'binary' };
+
+/** fileGuardSize with the drop REASON (Phase 98, Task 612 â€” discovery honesty). */
+export function fileGuard(
+  absPath: string,
+  fileName: string,
+  relPath: string,
+  opts: FileGuardOptions,
+): FileGuardResult {
   const { extensions, maxFileSizeBytes = DEFAULT_MAX_FILE_BYTES, extensionlessFilenames } = opts;
   if (extensions) {
     const dot = fileName.lastIndexOf('.');
     if (dot === -1) {
       // No extension: include if name is in the allowlist OR no allowlist is set
       // (shebang detection in file-processor.ts routes the file or returns 0 symbols)
-      if (extensionlessFilenames && !extensionlessFilenames.has(fileName)) return null;
+      if (extensionlessFilenames && !extensionlessFilenames.has(fileName)) return { size: null, reason: 'unsupportedExt' };
     } else {
       const ext = fileName.slice(dot);
-      if (!extensions.includes(ext.toLowerCase())) return null;
+      if (!extensions.includes(ext.toLowerCase())) return { size: null, reason: 'unsupportedExt' };
     }
   }
 
   // Skip files matching credential/secret patterns
   if (isSecretFile(fileName)) {
     logger.debug('Skipping secret file', { path: relPath });
-    return null;
+    return { size: null, reason: 'secret' };
   }
 
   let size = 0;
   try {
     size = statSync(absPath).size;
   } catch {
-    return null; // unreadable
+    return { size: null, reason: 'unreadable' };
   }
 
   // Skip files exceeding the size limit
@@ -271,16 +328,16 @@ export function fileGuardSize(
     checkFileSize(size, maxFileSizeBytes);
   } catch {
     logger.warn('Skipping oversized file', { path: relPath, size, maxFileSizeBytes });
-    return null;
+    return { size: null, reason: 'oversized' };
   }
 
   // Skip binary files (detect via null-byte scan of first 8 KB)
   const peek = peekFileContent(absPath);
   if (isBinaryFile(peek)) {
     logger.debug('Skipping binary file', { path: relPath });
-    return null;
+    return { size: null, reason: 'binary' };
   }
-  return size;
+  return { size };
 }
 
 function getPriority(relPath: string): number {

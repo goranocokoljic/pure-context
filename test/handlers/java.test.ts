@@ -36,11 +36,21 @@ describe('Java handler — extractSymbols', () => {
     expect(sym2.id).toBe(sym.id);
   });
 
-  it('does NOT extract package-private class', async () => {
-    const src = `class PackagePrivate {}\n`;
+  it('extracts a package-private class WITH its members, tagged visibility package (Phase 98)', async () => {
+    const src = `class PackagePrivate {\n    void helper() {}\n    PackagePrivate() {}\n    int count;\n    private void hidden() {}\n}\n`;
     const { tree, buf } = await parse(src);
     const syms = javaHandler.extractSymbols(tree, buf, 'Foo.java');
-    expect(syms).toHaveLength(0);
+    const cls = syms.find((s) => s.kind === 'class');
+    expect(cls?.name).toBe('PackagePrivate');
+    expect(cls?.frameworkMeta?.['visibility']).toBe('package');
+    expect(syms.map((s) => s.name)).toEqual(expect.arrayContaining(['helper', 'PackagePrivate']));
+    expect(syms.find((s) => s.name === 'hidden')).toBeUndefined();
+  });
+
+  it('a public class carries no visibility meta (Phase 98)', async () => {
+    const { tree, buf } = await parse(`public class P {}\n`);
+    const sym = javaHandler.extractSymbols(tree, buf, 'P.java')[0];
+    expect(sym?.frameworkMeta?.['visibility']).toBeUndefined();
   });
 
   it('extracts a public interface', async () => {

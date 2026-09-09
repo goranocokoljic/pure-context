@@ -36,16 +36,19 @@ describe('Swift handler — class', () => {
     expect(cls!.signature).toContain('AuthService');
   });
 
-  it('skips a private class', async () => {
-    const { tree, buf } = await parse(`private class InternalHelper {}\n`);
+  it('indexes a private class tagged visibility file, members included (Phase 98)', async () => {
+    const { tree, buf } = await parse(`private class InternalHelper {\n  func run() {}\n}\n`);
     const syms = swiftHandler.extractSymbols(tree, buf, 'helper.swift');
-    expect(syms.find((s) => s.name === 'InternalHelper')).toBeUndefined();
+    expect(syms.find((s) => s.name === 'InternalHelper')?.frameworkMeta?.['visibility']).toBe('file');
+    expect(syms.find((s) => s.name === 'InternalHelper.run')?.frameworkMeta?.['visibility']).toBe('file');
   });
 
-  it('skips a fileprivate class', async () => {
-    const { tree, buf } = await parse(`fileprivate class FileScopedHelper {}\n`);
+  it('indexes a fileprivate class and a private extension tagged file; a public class carries no meta (Phase 98)', async () => {
+    const { tree, buf } = await parse(`fileprivate class FileScopedHelper {}\nprivate extension String { func shout() -> String { self } }\npublic class Pub {}\n`);
     const syms = swiftHandler.extractSymbols(tree, buf, 'helper.swift');
-    expect(syms.find((s) => s.name === 'FileScopedHelper')).toBeUndefined();
+    expect(syms.find((s) => s.name === 'FileScopedHelper')?.frameworkMeta?.['visibility']).toBe('file');
+    expect(syms.find((s) => s.name === 'String.shout')?.frameworkMeta?.['visibility']).toBe('file');
+    expect(syms.find((s) => s.name === 'Pub')?.frameworkMeta?.['visibility']).toBeUndefined();
   });
 });
 

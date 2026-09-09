@@ -11,6 +11,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.31.0] - 2026-09-09 — Phase 98: Resolver Hygiene Wave 2
+
+The dependency graph stops lying. Gap-analysis follow-up (CRITICAL 2 +
+H1/H2/H4): phantom edges, resolver shadowing and visibility over-filtering.
+Measured on 33 language repos: zero P@1 losses, seven repos up, dangling
+edges 0 on 32 of 33 repos, and the graph recovered where it had silently
+collapsed (flutter 1,012 → 27,342 real edges, folly 5 → 8,705, neovim 677 →
+7,113, libs-base/love/home-manager 0 → 4,734/2,682/198).
+
+**Re-index note:** every repo needs one FULL `index_folder` after upgrading —
+edge sets and symbol sets both changed; `index-changed` cannot heal it.
+
+### Fixed
+
+- **Phantom edges.** Handler-prefilled import targets (C/C++/ObjC includes,
+  Lua `require`, SCSS/LESS/CSS `@use`, Terraform module sources, Nix, Bash, R,
+  XML, Gleam) were stored verbatim even when no indexed file matched. They
+  are now validated against the index (sibling / include-root / unique-suffix
+  / stylesheet-partial / Lua-module / Terraform-directory probes) and dropped
+  otherwise; namespaced angle includes (`<folly/Foo.h>`) are candidates too.
+  `graphCoverage` counts only resolvable rows and reports `'partial'` with
+  `danglingEdges`/`resolvableEdges` on an older index; six more tools attach
+  it (`analyze_diff`, `prepare_change`, `get_symbol_risk`,
+  `render_import_graph`, `check_move_safe`, `get_architecture_snapshot`).
+  Gleam's inverted local-import test fixed.
+- **Python shadowing.** Source roots are a strict allowlist (`src/`, `lib/`,
+  `graph.pythonSourceRoots`, plus `pyproject.toml` package-dir / poetry
+  `from`) — `tests/logging.py` is `tests.logging`, never `logging`. CPython
+  stdlib names are reserved (`graph.reservedPythonModules`, `[]` to disable).
+  Production files never resolve to test files.
+- **Resolver hygiene, five languages.** Elixir, Haskell, PHP, Erlang and
+  Fortran now share two rules with Go and the JVM: a first-party importer
+  never resolves into `node_modules/`, `vendor/`, `third_party/`, `deps/`,
+  `_build/`, `.venv/`, `site-packages/`, `Pods/`, `testdata/` (an importer
+  living there keeps its siblings — rabbitmq-server's layout), and a non-test
+  importer never resolves to a test file. Haskell drops one-segment path
+  suffixes; PHP ignores vendor `composer.json` and serves `autoload-dev` to
+  test importers only; Erlang prefers the closest header; Fortran treats
+  intrinsic modules as external; Go includes `_test.go` for same-directory
+  importers only. One shared predicate (`src/core/library-paths.ts`) now
+  feeds the ranker, the resolvers and discovery.
+
+### Changed
+
+- **Visibility, five languages — index everything visible inside the unit,
+  tag it, never skip it.** Java package-private types (previously dropped WITH
+  all their members), constructors, fields and `protected` declarations;
+  Scala `protected` and `private[pkg]`; C++ anonymous-namespace members; Dart
+  `_` library-private names (the Flutter idiom); Swift `private`/`fileprivate`
+  types and extensions with their members. All carry `frameworkMeta.visibility`
+  (`package` / `protected` / `file` / `library`); the ranker's −20 applies to
+  `package`, `file` and `library`.
+- **Dart `package:` imports resolve** (`pubspec.yaml` name → `lib/`, nested
+  packages in monorepos).
+- Built-in excludes gain `.venv/`, `venv/`, `site-packages/`, `Pods/`,
+  `_build/`, `__pycache__/`.
+
+### Added
+
+- Honesty riders: `find_cycles.totalFound` is the pre-cap count;
+  `find_implementations.truncated`; `search_symbols.totalMatched`;
+  `index_folder` reports `dropped{unsupportedExt, secret, unreadable,
+  oversized, binary, special, unreadableDirs}` and splits `filesSkipped` into
+  `filesUnchanged` / `filesFailed`.
+
+---
+
 ## [1.30.0] - 2026-09-09 — Phase 97: Freshness, Worktrees and Adoption
 
 Triggered by a reporter's session on a 26k-file automotive tree: the agent

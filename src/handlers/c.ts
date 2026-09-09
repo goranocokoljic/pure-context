@@ -523,11 +523,13 @@ function extractImports(tree: Tree, source: Buffer): ImportRecord[] {
     // Strip the surrounding delimiters
     const specifier = raw.slice(1, -1);
 
-    let resolvedPath: string | null = null;
-    if (!isSystem) {
-      // Local include — keep as-is (relative resolution happens in graph-builder)
-      resolvedPath = specifier;
-    }
+    // Local include — kept as written; the graph builder resolves it
+    // (sibling, include root, suffix) and validates it against the index.
+    // Phase 98 (Task 608): a namespaced angle include (`<folly/Foo.h>`,
+    // `<Foundation/NSObject.h>`) may be intra-repo — emit it as a candidate;
+    // the graph builder validates every prefilled target against the indexed
+    // files and drops what does not exist. Bare `<vector>` stays external.
+    const resolvedPath: string | null = !isSystem || specifier.includes('/') ? specifier : null;
 
     imports.push({
       sourceFile: '',

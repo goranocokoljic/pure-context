@@ -9,7 +9,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   createPythonResolver,
   isPythonSourceFile,
+  pyprojectSourceRoots,
 } from '../../src/graph/python-resolver.js';
+import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { openInMemoryDatabase, upsertRepo, SCHEMA_VERSION } from '../../src/core/db/schema.js';
 import { upsertFile } from '../../src/core/db/file-store.js';
 import { insertSymbols } from '../../src/core/db/symbol-store.js';
@@ -192,5 +196,91 @@ describe('createPythonResolver', () => {
     addFile(db, 'main.py');
     const r = createPythonResolver(db, REPO);
     expect(r.resolve('pkg.util', 'main.py', ['*'])).toEqual(['pkg/util.py']);
+  });
+});
+
+// ─── Phase 98, Task 607 — source-root allowlist, reserved modules, test drop ──
+
+describe('Phase 98 Task 607 — Python resolver hygiene', () => {
+  let db: ReturnType<typeof seedDb>;
+  beforeEach(() => { db = seedDb(); });
+  afterEach(() => { db.close(); });
+
+  it('CRITICAL 2: tests/logging.py no longer captures `import logging` (allowlist alone)', () => {
+    addFile(db, 'tests/logging.py');
+    addFile(db, 'app/main.py');
+    // reservedModules disabled on purpose — this proves the ALLOWLIST rule
+    const r = createPythonResolver(db, REPO, { reservedModules: [] });
+    expect(r.resolve('logging', 'app/main.py', [])).toEqual([]);
+    // the file is still reachable under its real module path (from a test importer)
+    expect(r.resolve('tests.logging', 'tests/test_x.py', [])).toEqual(['tests/logging.py']);
+  });
+
+  it('a non-root first-level dir is never stripped (scripts/, tools/, examples/)', () => {
+    addFile(db, 'scripts/helper.py');
+    addFile(db, 'tools/json.py');
+    addFile(db, 'main.py');
+    const r = createPythonResolver(db, REPO, { reservedModules: [] });
+    expect(r.resolve('helper', 'main.py', [])).toEqual([]);
+    expect(r.resolve('json', 'main.py', [])).toEqual([]);
+    expect(r.resolve('scripts.helper', 'main.py', [])).toEqual(['scripts/helper.py']);
+  });
+
+  it('lib/ is a default source root alongside src/', () => {
+    addFile(db, 'lib/pkg/__init__.py');
+    addFile(db, 'lib/pkg/x.py');
+    addFile(db, 'main.py');
+    const r = createPythonResolver(db, REPO);
+    expect(r.resolve('pkg.x', 'main.py', [])).toEqual(['lib/pkg/x.py']);
+  });
+
+  it('reserved stdlib names resolve to nothing even when a root-level file shadows them', () => {
+    addFile(db, 'logging.py');
+    addFile(db, 'main.py');
+    expect(createPythonResolver(db, REPO).resolve('logging', 'main.py', [])).toEqual([]);
+    expect(createPythonResolver(db, REPO).resolve('logging.handlers', 'main.py', ['X'])).toEqual([]);
+    // opt-out: [] restores the Phase-84 behavior for repos that own the name
+    expect(createPythonResolver(db, REPO, { reservedModules: [] }).resolve('logging', 'main.py', [])).toEqual(['logging.py']);
+  });
+
+  it('a production importer never resolves to a test file; a test importer still can', () => {
+    addFile(db, 'tests/__init__.py');
+    addFile(db, 'tests/helpers.py');
+    addFile(db, 'app/main.py');
+    addFile(db, 'tests/test_main.py');
+    const r = createPythonResolver(db, REPO);
+    expect(r.resolve('tests.helpers', 'app/main.py', [])).toEqual([]);
+    expect(r.resolve('tests.helpers', 'tests/test_main.py', [])).toEqual(['tests/helpers.py']);
+  });
+
+  describe('pyproject.toml source roots', () => {
+    let root: string;
+    beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'pc-pyproj-')); });
+    afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+    it('parses setuptools section, inline table, and poetry from', () => {
+      writeFileSync(join(root, 'pyproject.toml'), [
+        '[tool.setuptools.package-dir]',
+        '"" = "python"',
+        '"other" = "vendored/other"',
+        '',
+        '[tool.poetry]',
+        'packages = [{ include = "mypkg", from = "pysrc" }]',
+      ].join('\n'));
+      expect(pyprojectSourceRoots(root).sort()).toEqual(['pysrc', 'python', 'vendored']);
+      writeFileSync(join(root, 'pyproject.toml'), '[tool.setuptools]\npackage-dir = {"" = "src2"}\n');
+      expect(pyprojectSourceRoots(root)).toEqual(['src2']);
+    });
+
+    it('returns [] without a pyproject (fail-soft) and strips a declared root', () => {
+      expect(pyprojectSourceRoots(root)).toEqual([]);
+      expect(pyprojectSourceRoots(undefined)).toEqual([]);
+      writeFileSync(join(root, 'pyproject.toml'), '[tool.setuptools.package-dir]\n"" = "python"\n');
+      addFile(db, 'python/mypkg/__init__.py');
+      addFile(db, 'python/mypkg/core.py');
+      addFile(db, 'main.py');
+      const r = createPythonResolver(db, REPO, { projectRoot: root });
+      expect(r.resolve('mypkg.core', 'main.py', [])).toEqual(['python/mypkg/core.py']);
+    });
   });
 });

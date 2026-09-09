@@ -82,23 +82,42 @@ export function extractDocstring(node: SyntaxNode): string | null {
 // ─── Modifier helpers ─────────────────────────────────────────────────────────
 
 /**
- * Returns true if the node has a `private` or `protected` access modifier
- * without a package qualifier (i.e. `private[pkg]` still qualifies as visible).
+ * Scala access of a declaration: 'private' / 'protected' (unqualified),
+ * 'package' for a qualified modifier (`private[pkg]`, `protected[pkg]` —
+ * visible inside the package), 'public' otherwise.
  */
-function isPrivateOrProtected(node: SyntaxNode): boolean {
+function scalaVisibility(node: SyntaxNode): 'public' | 'protected' | 'package' | 'private' {
   const modifiers = node.children.find((c) => c.type === 'modifiers');
-  if (!modifiers) return false;
+  if (!modifiers) return 'public';
   for (const child of modifiers.children) {
-    if (child.type === 'access_modifier') {
-      const kw = child.children.find(
-        (c) => c.type !== 'access_qualifier',
-      );
-      // If there's an access_qualifier like [pkg] — not fully private, skip
-      const hasQualifier = child.children.some((c) => c.type === 'access_qualifier');
-      if (!hasQualifier) return true;
-    }
+    if (child.type !== 'access_modifier') continue;
+    const hasQualifier = child.children.some((c) => c.type === 'access_qualifier');
+    if (hasQualifier) return 'package';
+    const text = child.text;
+    if (text.startsWith('protected')) return 'protected';
+    if (text.startsWith('private')) return 'private';
   }
-  return false;
+  return 'public';
+}
+
+/**
+ * Phase 98 (Task 609): only an UNQUALIFIED `private` is skipped. `protected`
+ * is inheritance API and `private[pkg]` is package-visible — both were dropped
+ * before (across seven declaration kinds, whole class/trait/object bodies
+ * included — gap-analysis-v2 H2). Non-public symbols carry
+ * `frameworkMeta.visibility` (tagVisibility).
+ */
+function isPrivateUnqualified(node: SyntaxNode): boolean {
+  return scalaVisibility(node) === 'private';
+}
+
+/** Record non-public visibility on the symbol just pushed (merges existing meta). */
+function tagVisibility(symbols: SymbolRecord[], node: SyntaxNode): void {
+  const vis = scalaVisibility(node);
+  if (vis === 'public') return;
+  const last = symbols[symbols.length - 1];
+  if (!last) return;
+  last.frameworkMeta = { ...(last.frameworkMeta ?? {}), visibility: vis };
 }
 
 /**
@@ -204,7 +223,7 @@ function walkNodes(
 
     switch (node.type) {
       case 'class_definition': {
-        if (isPrivateOrProtected(node)) continue;
+        if (isPrivateUnqualified(node)) continue;
         const name = getName(node);
         if (!name) continue;
         const caseClass = isCaseNode(node);
@@ -220,6 +239,7 @@ function walkNodes(
           summary: extractDocstring(node) ?? '',
           ...(caseClass ? { frameworkMeta: { scala_case_class: true } } : {}),
         });
+        tagVisibility(symbols, node);
         // Recurse into body
         const body = node.children.find((c) => c.type === 'template_body');
         if (body) walkNodes(body.children, filePath, symbols, depth + 1);
@@ -227,7 +247,7 @@ function walkNodes(
       }
 
       case 'trait_definition': {
-        if (isPrivateOrProtected(node)) continue;
+        if (isPrivateUnqualified(node)) continue;
         const name = getName(node);
         if (!name) continue;
         symbols.push({
@@ -240,13 +260,14 @@ function walkNodes(
           signature: classSignature(node, 'trait'),
           summary: extractDocstring(node) ?? '',
         });
+        tagVisibility(symbols, node);
         const body = node.children.find((c) => c.type === 'template_body');
         if (body) walkNodes(body.children, filePath, symbols, depth + 1);
         break;
       }
 
       case 'object_definition': {
-        if (isPrivateOrProtected(node)) continue;
+        if (isPrivateUnqualified(node)) continue;
         const name = getName(node);
         if (!name) continue;
         const caseObj = isCaseNode(node);
@@ -261,6 +282,7 @@ function walkNodes(
           summary: extractDocstring(node) ?? '',
           frameworkMeta: { scala_object: true, ...(caseObj ? { scala_case_object: true } : {}) },
         });
+        tagVisibility(symbols, node);
         const body = node.children.find((c) => c.type === 'template_body');
         if (body) walkNodes(body.children, filePath, symbols, depth + 1);
         break;
@@ -268,7 +290,7 @@ function walkNodes(
 
       case 'function_definition':
       case 'function_declaration': {
-        if (isPrivateOrProtected(node)) continue;
+        if (isPrivateUnqualified(node)) continue;
         const name = getName(node);
         if (!name) continue;
         const enclosing = getEnclosingKind(node);
@@ -287,11 +309,12 @@ function walkNodes(
           signature: functionSignature(node),
           summary: extractDocstring(node) ?? '',
         });
+        tagVisibility(symbols, node);
         break;
       }
 
       case 'val_definition': {
-        if (isPrivateOrProtected(node)) continue;
+        if (isPrivateUnqualified(node)) continue;
         // Only top-level or object-level vals
         const enclosing = getEnclosingKind(node);
         if (enclosing === 'class_definition' || enclosing === 'trait_definition') continue;
@@ -311,11 +334,12 @@ function walkNodes(
           signature: trunc(sig),
           summary: extractDocstring(node) ?? '',
         });
+        tagVisibility(symbols, node);
         break;
       }
 
       case 'type_definition': {
-        if (isPrivateOrProtected(node)) continue;
+        if (isPrivateUnqualified(node)) continue;
         const name = getName(node);
         if (!name) continue;
         symbols.push({
@@ -328,11 +352,12 @@ function walkNodes(
           signature: trunc(node.text.split('\n')[0]),
           summary: extractDocstring(node) ?? '',
         });
+        tagVisibility(symbols, node);
         break;
       }
 
       case 'enum_definition': {
-        if (isPrivateOrProtected(node)) continue;
+        if (isPrivateUnqualified(node)) continue;
         const name = getName(node);
         if (!name) continue;
         symbols.push({
@@ -345,6 +370,7 @@ function walkNodes(
           signature: trunc(`enum ${name}`),
           summary: extractDocstring(node) ?? '',
         });
+        tagVisibility(symbols, node);
         break;
       }
 

@@ -26,6 +26,7 @@ import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { getFileContent } from '../../core/db/file-store.js';
 import { getImportersOf, getAllDepEdges } from '../../core/db/dep-store.js';
 import { buildMeta } from './_meta.js';
+import { graphCoverageWarning } from './graph-coverage.js';
 import type { DepEdge } from '../../core/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type Database from 'better-sqlite3';
@@ -338,6 +339,7 @@ export async function handler(args: {
       newCycles,
       wouldIntroduceCycles,
       _tokenEstimate: Math.ceil(responseText.length / 4),
+      ...(graphCoverageWarning(db, repoId) ?? {}), // Phase 98 (Task 608)
       _meta: buildMeta({ timingMs: Date.now() - t0 }),
     };
 

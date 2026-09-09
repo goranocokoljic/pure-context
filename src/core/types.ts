@@ -1,3 +1,4 @@
+import type { DiscoveryDropped } from './file-discovery.js';
 import type Database from 'better-sqlite3';
 import type Parser from 'web-tree-sitter';
 
@@ -204,7 +205,14 @@ export interface IndexOptions {
 export interface IndexResult {
   repoId: string;
   filesIndexed: number;
+  /** unchanged + failed (kept for compatibility â€” see the split below) */
   filesSkipped: number;
+  /** Phase 98 (Task 612): hash-unchanged files (the healthy no-op case). */
+  filesUnchanged?: number;
+  /** Phase 98 (Task 612): files that could not be read. */
+  filesFailed?: number;
+  /** Phase 98 (Task 612): what discovery silently dropped, by reason. */
+  dropped?: DiscoveryDropped;
   symbolsFound: number;       // Symbols found in this run (incremental)
   totalSymbolsInDb: number;   // COUNT(*) from DB after indexing (authoritative total)
   totalFilesInDb: number;     // COUNT(*) from DB after indexing

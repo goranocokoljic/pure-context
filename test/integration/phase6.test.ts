@@ -233,7 +233,7 @@ describe('9. Lua: top-level function trim() → kind "function"', () => {
 
 // ─── 10. Dart: public vs private method ──────────────────────────────────────
 
-describe('10. Dart: public methods extracted; _private method skipped', () => {
+describe('10. Dart: public and library-private methods extracted', () => {
   it('AuthService.login is extracted', () => {
     const db = openDatabase(dartRepoId);
     const results = searchSymbols(db, dartRepoId, 'login');
@@ -241,11 +241,12 @@ describe('10. Dart: public methods extracted; _private method skipped', () => {
     expect(results.some((s) => s.name === 'AuthService.login')).toBe(true);
   });
 
-  it('private method _validateToken is NOT extracted', () => {
+  it('library-private method _validateToken IS extracted, tagged visibility library (Phase 98)', () => {
     const db = openDatabase(dartRepoId);
     const results = searchSymbols(db, dartRepoId, '_validateToken');
     db.close();
-    expect(results).toHaveLength(0);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.frameworkMeta?.['visibility']).toBe('library');
   });
 });
 

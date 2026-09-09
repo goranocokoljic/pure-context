@@ -15,6 +15,8 @@
  */
 
 import type Database from 'better-sqlite3';
+import { isTestFilePath } from '../core/test-paths.js';
+import { dropForeignCandidates } from '../core/library-paths.js';
 import { getDeclaredPackages } from '../core/db/file-store.js';
 
 // ─── Public surface ───────────────────────────────────────────────────────────
@@ -72,7 +74,9 @@ export function createHaskellResolver(
     const dot = norm.lastIndexOf('.');
     const stem = dot > 0 ? norm.slice(0, dot) : norm;
     const segs = stem.split('/').filter((s) => s.length > 0);
-    for (let i = 0; i < segs.length; i++) {
+    // Phase 98 (Task 611): never register a ONE-segment suffix — every
+    // `**/Types.hs` used to answer `import Types` from anywhere in the repo.
+    for (let i = 0; i < segs.length - 1; i++) {
       register(suffixFiles, segs.slice(i).join('.'), f);
     }
   }
@@ -82,7 +86,21 @@ export function createHaskellResolver(
       const spec = specifier.trim();
       if (spec.length === 0) return [];
       const hits = moduleFiles.get(spec) ?? suffixFiles.get(spec) ?? [];
-      return hits.filter((f) => f !== sourceFile);
+      return hygiene(hits.filter((f) => f !== sourceFile), sourceFile);
     },
   };
+}
+
+/**
+ * Phase 98 (Task 611) resolver hygiene, applied to every candidate list:
+ *   - a first-party importer never resolves into a foreign directory
+ *     (deps/, vendor/, _build/, node_modules/ …) — the Go vendor rule;
+ *   - a non-test importer never resolves to a test file (Phase-89 rule).
+ * Test importers and importers that themselves live in a foreign directory
+ * are left alone (rabbitmq-server keeps its components under deps/).
+ */
+function hygiene(candidates: string[], sourceFile: string): string[] {
+  const foreignFiltered = dropForeignCandidates(candidates, sourceFile);
+  if (isTestFilePath(sourceFile)) return foreignFiltered;
+  return foreignFiltered.filter((f) => !isTestFilePath(f));
 }

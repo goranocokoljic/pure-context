@@ -14,6 +14,8 @@
  */
 
 import type Database from 'better-sqlite3';
+import { isTestFilePath } from '../core/test-paths.js';
+import { dropForeignCandidates } from '../core/library-paths.js';
 
 // ─── Public surface ───────────────────────────────────────────────────────────
 
@@ -71,9 +73,28 @@ export function createElixirResolver(
       for (let i = parts.length; i >= 1; i--) {
         const name = parts.slice(0, i).join('.');
         const hits = moduleFiles.get(name);
-        if (hits) return hits.filter((f) => f !== sourceFile);
+        if (!hits) continue;
+        // Phase 98: a hit that hygiene removes (deps/ module, test/support
+        // double) must not stop the prefix walk — a shorter first-party
+        // prefix may still answer.
+        const clean = hygiene(hits.filter((f) => f !== sourceFile), sourceFile);
+        if (clean.length > 0) return clean;
       }
       return [];
     },
   };
+}
+
+/**
+ * Phase 98 (Task 611) resolver hygiene, applied to every candidate list:
+ *   - a first-party importer never resolves into a foreign directory
+ *     (deps/, vendor/, _build/, node_modules/ …) — the Go vendor rule;
+ *   - a non-test importer never resolves to a test file (Phase-89 rule).
+ * Test importers and importers that themselves live in a foreign directory
+ * are left alone (rabbitmq-server keeps its components under deps/).
+ */
+function hygiene(candidates: string[], sourceFile: string): string[] {
+  const foreignFiltered = dropForeignCandidates(candidates, sourceFile);
+  if (isTestFilePath(sourceFile)) return foreignFiltered;
+  return foreignFiltered.filter((f) => !isTestFilePath(f));
 }

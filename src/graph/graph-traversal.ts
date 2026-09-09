@@ -285,7 +285,9 @@ export function findImportCycles(
   const truncated = filtered.length > maxCycles;
   const cycles = filtered.slice(0, maxCycles);
 
-  return { cycles, totalFound: cycles.length, truncated };
+  // Phase 98 (Task 612): totalFound is the PRE-cap count — it used to equal
+  // cycles.length and read as "exactly N exist".
+  return { cycles, totalFound: filtered.length, truncated };
 }
 
 // ─── Class hierarchy ──────────────────────────────────────────────────────────

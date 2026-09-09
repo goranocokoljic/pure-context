@@ -58,11 +58,13 @@ namespace App {
     expect(user?.kind).toBe('class');
   });
 
-  it('skips anonymous namespaces', async () => {
+  it('walks anonymous namespaces: no namespace symbol, members tagged file-visible (Phase 98)', async () => {
     const { tree, buf } = await parse(`namespace { void internal() {} }\n`);
     const syms = cppHandler.extractSymbols(tree, buf, 'util.cpp');
     expect(syms.filter((s) => s.kind === 'namespace')).toHaveLength(0);
-    expect(syms.filter((s) => s.kind === 'function')).toHaveLength(0);
+    const fn = syms.find((s) => s.kind === 'function');
+    expect(fn?.name).toBe('internal');
+    expect(fn?.frameworkMeta?.['visibility']).toBe('file');
   });
 
   // ── Top-level function ──────────────────────────────────────────────────────

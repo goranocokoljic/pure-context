@@ -114,17 +114,21 @@ describe('createPhpResolver', () => {
     ]);
   });
 
-  it('reads autoload-dev PSR-4 entries and nested composer.json files', () => {
+  it('reads nested composer.json files; autoload-dev entries serve TEST importers only (Phase 98)', () => {
     write(
       'packages/billing/composer.json',
       JSON.stringify({ 'autoload-dev': { 'psr-4': { 'Billing\\Tests\\': 'tests/' } } }),
     );
     addFile(db, 'packages/billing/tests/InvoiceTest.php', null);
+    addFile(db, 'packages/billing/tests/Support/Factory.php', null);
     addFile(db, 'packages/billing/src/Invoice.php', null);
     const r = createPhpResolver(db, REPO, root);
+    // production code never edges into the dev autoload (a test file)
+    expect(r.resolve('Billing\\Tests\\InvoiceTest', 'packages/billing/src/Invoice.php')).toEqual([]);
+    // a test importer still resolves through autoload-dev
     expect(
-      r.resolve('Billing\\Tests\\InvoiceTest', 'packages/billing/src/Invoice.php'),
-    ).toEqual(['packages/billing/tests/InvoiceTest.php']);
+      r.resolve('Billing\\Tests\\Support\\Factory', 'packages/billing/tests/InvoiceTest.php'),
+    ).toEqual(['packages/billing/tests/Support/Factory.php']);
   });
 
   it('resolves a whole-namespace use to all namespace files', () => {

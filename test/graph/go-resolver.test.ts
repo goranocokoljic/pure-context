@@ -77,13 +77,20 @@ describe('createGoResolver', () => {
     ]);
   });
 
-  it('includes _test.go files of the target package', () => {
+  it('_test.go files of the target package: same-dir importers only (Phase 98)', () => {
     write('go.mod', 'module github.com/acme/app\n');
     addFile(db, 'main.go');
     addFile(db, 'util/util.go');
     addFile(db, 'util/util_test.go');
+    addFile(db, 'util/helper.go');
     const r = createGoResolver(db, REPO, root);
+    // cross-package: the importer cannot see util's tests
     expect(r.resolve('github.com/acme/app/util', 'main.go').sort()).toEqual([
+      'util/helper.go',
+      'util/util.go',
+    ]);
+    // same directory (a util file importing its own package path): tests included
+    expect(r.resolve('github.com/acme/app/util', 'util/helper.go').sort()).toEqual([
       'util/util.go',
       'util/util_test.go',
     ]);

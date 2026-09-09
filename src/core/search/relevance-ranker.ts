@@ -132,47 +132,10 @@ export interface ScoredSymbol {
  *   erts/                         Erlang/OTP BEAM VM C++ (pollutes Erlang stdlib)
  *   contrib/                      Scientific computing legacy code
  */
-const LIBRARY_PATH_SEGMENTS = new Set([
-  'system',
-  'vendor',
-  'third_party',
-  'node_modules',
-  'bower_components',
-  // Phase 71 additions:
-  'engine',
-  'erts',
-  'contrib',
-]);
-
-/**
- * Multi-segment path substrings that identify library/low-priority code.
- * Checked case-insensitively against the full lowercased path.
- *
- *   /lib/wx/    Erlang/OTP wxWidgets C++ bindings
- *   /blas/      BLAS numerical library wrappers
- *   /lapack/    LAPACK numerical library wrappers
- */
-const LIBRARY_PATH_SUBSTRINGS = [
-  '/lib/wx/',
-  '/blas/',
-  '/lapack/',
-];
-
-/**
- * Return true when the symbol's file path contains a well-known library
- * directory segment or multi-segment substring, indicating third-party /
- * framework code.
- *
- * Uses forward-slash normalisation so paths work correctly on Windows and Unix.
- * Checks are case-insensitive to handle /BLAS/, /Engine/, etc.
- */
-export function isLibraryPath(filePath: string): boolean {
-  const normalized = filePath.replace(/\\/g, '/').toLowerCase();
-  if (normalized.split('/').some((seg) => LIBRARY_PATH_SEGMENTS.has(seg))) return true;
-  // Prepend '/' so that repo-relative paths like 'lib/wx/...' match '/lib/wx/'
-  const withLeadingSlash = '/' + normalized;
-  return LIBRARY_PATH_SUBSTRINGS.some((sub) => withLeadingSlash.includes(sub));
-}
+// Phase 98 (Task 611): the library-path vocabulary is shared with the
+// resolvers and file discovery — single-sourced in core/library-paths.ts.
+import { isLibraryPath } from '../library-paths.js';
+export { isLibraryPath };
 
 /**
  * For methods stored with bare names (Java post-Task 258, Rust post-Task 255),
@@ -1221,10 +1184,14 @@ function score(
   // exact unexported name still surfaces it at the top.
   // Phase 87 extends the same rule to Rust: no-modifier items are indexed with
   // visibility 'module' (module-private) — same "findable but not first" call.
+  // Phase 98 (Tasks 609/610) adds 'package' (Java package-private, Scala
+  // private[pkg]), 'file' (C++ anonymous namespace, Swift private/fileprivate
+  // type members) and 'library' (Dart `_` names). 'protected', 'internal' and
+  // 'crate' stay unpenalized — they are legitimate API surface.
   let unexportedPenalty = 0;
   {
     const vis = (symbol.frameworkMeta as Record<string, unknown> | undefined)?.['visibility'];
-    if (vis === 'unexported' || vis === 'module') {
+    if (vis === 'unexported' || vis === 'module' || vis === 'package' || vis === 'file' || vis === 'library') {
       unexportedPenalty = -20;
       total += unexportedPenalty;
     }

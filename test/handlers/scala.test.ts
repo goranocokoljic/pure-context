@@ -98,12 +98,14 @@ describe('Scala handler — extractSymbols', () => {
     expect(syms.find((s) => s.name === 'visible')).toBeDefined();
   });
 
-  it('skips protected methods', async () => {
-    const src = `class Foo {\n  protected def internal(): Unit = ()\n  def pub(): Unit = ()\n}`;
+  it('indexes protected and private[pkg] members with visibility meta; unqualified private stays out (Phase 98)', async () => {
+    const src = `class Foo {\n  protected def internal(): Unit = ()\n  private[foo] def pkgOnly(): Unit = ()\n  private def secret(): Unit = ()\n  def pub(): Unit = ()\n}`;
     const { tree, buf } = await parse(src);
     const syms = scalaHandler.extractSymbols(tree, buf, 'src/Foo.scala');
-    expect(syms.find((s) => s.name === 'internal')).toBeUndefined();
-    expect(syms.find((s) => s.name === 'pub')).toBeDefined();
+    expect(syms.find((s) => s.name === 'internal')?.frameworkMeta?.['visibility']).toBe('protected');
+    expect(syms.find((s) => s.name === 'pkgOnly')?.frameworkMeta?.['visibility']).toBe('package');
+    expect(syms.find((s) => s.name === 'secret')).toBeUndefined();
+    expect(syms.find((s) => s.name === 'pub')?.frameworkMeta?.['visibility']).toBeUndefined();
   });
 
   it('extracts top-level val_definition as kind const', async () => {

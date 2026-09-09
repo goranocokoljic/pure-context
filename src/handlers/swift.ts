@@ -404,7 +404,11 @@ function emitProtocol(
   filePath: string,
   symbols: SymbolRecord[],
 ): void {
-  if (isPrivateAccess(node, src)) return;
+  // Phase 98 (Task 610): a private/fileprivate TYPE or EXTENSION is
+  // file-visible — its members are exactly the .swift-local helpers agents
+  // search for. Index it and everything inside it, tagged visibility 'file'.
+  const filePrivate = isPrivateAccess(node, src);
+  const firstIdx = symbols.length;
 
   const nameNode = node.childForFieldName('name');
   if (!nameNode) return;
@@ -429,6 +433,12 @@ function emitProtocol(
   if (body) {
     const ctx: WalkContext = { typeName: name };
     walkBody(body, src, filePath, ctx, symbols);
+  }
+  if (filePrivate) {
+    for (let i = firstIdx; i < symbols.length; i++) {
+      const sym = symbols[i]!;
+      sym.frameworkMeta = { ...(sym.frameworkMeta ?? {}), visibility: 'file' };
+    }
   }
 }
 
@@ -503,7 +513,11 @@ function emitClassDecl(
   ctx: WalkContext,
   symbols: SymbolRecord[],
 ): void {
-  if (isPrivateAccess(node, src)) return;
+  // Phase 98 (Task 610): a private/fileprivate TYPE or EXTENSION is
+  // file-visible — its members are exactly the .swift-local helpers agents
+  // search for. Index it and everything inside it, tagged visibility 'file'.
+  const filePrivate = isPrivateAccess(node, src);
+  const firstIdx = symbols.length;
 
   const kindNode = node.childForFieldName('declaration_kind');
   if (!kindNode) return;
@@ -576,6 +590,12 @@ function emitClassDecl(
   if (bodyNode) {
     const innerCtx: WalkContext = { typeName: displayName };
     walkBody(bodyNode, src, filePath, innerCtx, symbols);
+  }
+  if (filePrivate) {
+    for (let i = firstIdx; i < symbols.length; i++) {
+      const sym = symbols[i]!;
+      sym.frameworkMeta = { ...(sym.frameworkMeta ?? {}), visibility: 'file' };
+    }
   }
 }
 

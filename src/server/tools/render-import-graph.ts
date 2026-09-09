@@ -32,6 +32,7 @@ import {
   type GraphEdge,
 } from '../../graph/diagram-renderer.js';
 import { buildMeta } from './_meta.js';
+import { graphCoverageWarning } from './graph-coverage.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'render_import_graph';
@@ -205,6 +206,7 @@ export async function handler(args: {
       edgeCount: prunedEdges.length,
       truncated,
       _tokenEstimate: Math.ceil(diagram.length / 4),
+      ...(graphCoverageWarning(db, repoId) ?? {}), // Phase 98 (Task 608)
       _meta: buildMeta({ timingMs: Date.now() - t0 }),
     };
 

@@ -22,6 +22,7 @@ import {
   parseDeletedSymbolNames,
 } from '../../core/diff-parser.js';
 import { buildMeta } from './_meta.js';
+import { graphCoverageWarning } from './graph-coverage.js';
 import { byteOffsetToLine } from './symbol-lines.js';
 import { synthesizeChange, type ChangeSynthesis } from './change-synthesis.js';
 import type { SymbolRecord, SymbolKind } from '../../core/types.js';
@@ -434,6 +435,7 @@ export async function handler(args: {
     });
   }
 
+  const coverage = graphCoverageWarning(db, repoId); // Phase 98 (Task 608)
   db.close();
 
   // ── 5. Build summary ───────────────────────────────────────────────────────
@@ -478,5 +480,5 @@ export async function handler(args: {
     output.signalQuality = synthesis.signalQuality;
   }
 
-  return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+  return { content: [{ type: 'text', text: JSON.stringify({ ...output, ...(coverage ?? {}) }, null, 2) }] };
 }

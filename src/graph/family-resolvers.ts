@@ -20,6 +20,7 @@ import { createElixirResolver, isElixirSourceFile } from './elixir-resolver.js';
 import { createErlangResolver, isErlangSourceFile } from './erlang-resolver.js';
 import { createFortranResolver, isFortranSourceFile } from './fortran-resolver.js';
 import { createRustResolver, isRustSourceFile } from './rust-resolver.js';
+import { createDartResolver, isDartSourceFile } from './dart-resolver.js';
 
 interface FamilyDef {
   key: keyof FamilyResolvers;
@@ -33,7 +34,7 @@ interface FamilyDef {
 
 const FAMILY_DEFS: FamilyDef[] = [
   { key: 'jvm', isFile: isDeclaredModuleSourceFile, build: (db, id, root) => createJvmResolver(db, id, root) },
-  { key: 'python', isFile: isPythonSourceFile, build: (db, id) => createPythonResolver(db, id) },
+  { key: 'python', isFile: isPythonSourceFile, build: (db, id, root) => createPythonResolver(db, id, { projectRoot: root }) },
   { key: 'go', isFile: isGoSourceFile, build: (db, id, root) => createGoResolver(db, id, root) },
   { key: 'php', isFile: isPhpSourceFile, build: (db, id, root) => createPhpResolver(db, id, root) },
   { key: 'haskell', isFile: isHaskellSourceFile, build: (db, id) => createHaskellResolver(db, id) },
@@ -41,6 +42,7 @@ const FAMILY_DEFS: FamilyDef[] = [
   { key: 'erlang', isFile: isErlangSourceFile, build: (db, id) => createErlangResolver(db, id) },
   { key: 'fortran', isFile: isFortranSourceFile, build: (db, id) => createFortranResolver(db, id) },
   { key: 'rust', isFile: isRustSourceFile, build: (db, id, root) => createRustResolver(db, id, root) },
+  { key: 'dart', isFile: isDartSourceFile, build: (db, id, root) => createDartResolver(db, id, root) },
 ];
 
 export function buildFamilyResolvers(

@@ -29,6 +29,7 @@ import { getSymbolById } from '../../core/db/symbol-store.js';
 import { getImportersOf } from '../../core/db/dep-store.js';
 import { getConfig } from '../../config/config-loader.js';
 import { buildMeta } from './_meta.js';
+import { graphCoverageWarning, type GraphCoverageWarning } from './graph-coverage.js';
 import { gatePrepareChange } from './gate-envelope.js';
 import { synthesizeChange, type ChangeSynthesis } from './change-synthesis.js';
 import { handler as searchSymbolsHandler } from './search-symbols.js';
@@ -119,9 +120,9 @@ interface FindReferencesShape {
 }
 
 /** Attach the normalized gate envelope (Task 486) and serialize. */
-function emit(out: PrepareChangeOutput): CallToolResult {
+function emit(out: PrepareChangeOutput, coverage?: GraphCoverageWarning | null): CallToolResult {
   const env = gatePrepareChange({ verdict: out.verdict, risk: out.risk });
-  return { content: [{ type: 'text', text: JSON.stringify({ ...out, ...env }, null, 2) }] };
+  return { content: [{ type: 'text', text: JSON.stringify({ ...out, ...env, ...(coverage ?? {}) }, null, 2) }] };
 }
 
 function parseJsonResult<T>(result: CallToolResult): T | null {
@@ -262,7 +263,7 @@ export async function handler(args: {
           reasons: [`Symbol "${targetSymbolId}" not found in repo "${repoId}".`],
           _meta: buildMeta({ timingMs: Date.now() - t0 }),
         };
-        return emit(out);
+        return emit(out, graphCoverageWarning(db, repoId)); // Phase 98 (Task 608)
       }
       target = { symbolId: sym.id, name: sym.name, kind: sym.kind, filePath: sym.filePath };
     } else {
@@ -287,7 +288,7 @@ export async function handler(args: {
           ],
           _meta: buildMeta({ timingMs: Date.now() - t0 }),
         };
-        return emit(out);
+        return emit(out, graphCoverageWarning(db, repoId)); // Phase 98 (Task 608)
       }
 
       if (!isClearWinner(candidates)) {
@@ -301,7 +302,7 @@ export async function handler(args: {
           ],
           _meta: buildMeta({ timingMs: Date.now() - t0 }),
         };
-        return emit(out);
+        return emit(out, graphCoverageWarning(db, repoId)); // Phase 98 (Task 608)
       }
 
       const top = candidates[0]!;
@@ -356,7 +357,7 @@ export async function handler(args: {
     if (includeArchitectureFlags) out.architecturalFlags = syn.architecturalFlags;
     out.signalQuality = syn.signalQuality;
 
-    return emit(out);
+    return emit(out, graphCoverageWarning(db, repoId)); // Phase 98 (Task 608)
   } finally {
     db.close();
   }

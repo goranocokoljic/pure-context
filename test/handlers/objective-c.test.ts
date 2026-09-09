@@ -277,12 +277,18 @@ typedef struct { int x; int y; } Point;
 
 describe('Objective-C handler — extractImports', () => {
 
-  it('extracts #import with angle brackets as external', () => {
-    const { tree, buf } = parse(`#import <Foundation/Foundation.h>\n`);
+  it('namespaced angle #import is a validated candidate (Phase 98); a bare one stays external', () => {
+    // GNUstep libs-base imports its own headers as <Foundation/NSObject.h> —
+    // the graph builder validates the candidate against the index and drops
+    // it when the file is not there (Apple SDK on a plain app).
+    const { tree, buf } = parse(`#import <Foundation/Foundation.h>
+#import <stdio.h>
+`);
     const imports = objectiveCHandler.extractImports(tree, buf);
-    expect(imports).toHaveLength(1);
+    expect(imports).toHaveLength(2);
     expect(imports[0]!.specifier).toBe('Foundation/Foundation.h');
-    expect(imports[0]!.resolvedPath).toBeNull();
+    expect(imports[0]!.resolvedPath).toBe('Foundation/Foundation.h');
+    expect(imports[1]!.resolvedPath).toBeNull();
   });
 
   it('extracts #import with quotes as local', () => {

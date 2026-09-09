@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { computeSymbolRisk } from './symbol-risk.js';
 import { buildMeta } from './_meta.js';
+import { graphCoverageWarning } from './graph-coverage.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'get_symbol_risk';
@@ -59,7 +60,11 @@ export async function handler(args: { repoId: string; symbolId: string }): Promi
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify({ ...risk, _meta: buildMeta({ timingMs: Date.now() - t0 }) }, null, 2),
+        text: JSON.stringify(
+          { ...risk, ...(graphCoverageWarning(db, repoId) ?? {}), _meta: buildMeta({ timingMs: Date.now() - t0 }) },
+          null,
+          2,
+        ),
       }],
     };
   } finally {

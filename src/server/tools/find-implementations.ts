@@ -78,7 +78,10 @@ interface FindImplementationsOutput {
   interfaceName: string;
   interfaceFilePath: string;
   implementations: ImplementationRecord[];
+  /** Implementations returned (≤ limit). */
   totalFound: number;
+  /** Phase 98 (Task 612): true when more implementors exist than `limit` returned. */
+  truncated: boolean;
   _tokenEstimate: number;
   _meta: ReturnType<typeof buildMeta>;
 }
@@ -167,14 +170,18 @@ export async function handler(args: {
     }
 
     // Find all classes/interfaces that implement or extend this target
-    const implementors = findClassImplementations(
+    // Phase 98 (Task 612): fetch one past the cap so the response can say
+    // whether the list was cut, instead of `totalFound` reading as the total.
+    const implementorsPlus = findClassImplementations(
       db,
       repoId,
       target.name,
       target.filePath,
       includeAbstract,
-      limit,
+      limit + 1,
     );
+    const truncated = implementorsPlus.length > limit;
+    const implementors = truncated ? implementorsPlus.slice(0, limit) : implementorsPlus;
 
     // Build ImplementationRecord for each implementor
     const implementations: ImplementationRecord[] = [];
@@ -213,6 +220,7 @@ export async function handler(args: {
       interfaceFilePath: target.filePath,
       implementations,
       totalFound: implementations.length,
+      truncated,
       _tokenEstimate: Math.ceil(responseText.length / 4),
       _meta: buildMeta({ timingMs: Date.now() - t0 }),
     };

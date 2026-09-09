@@ -1,3 +1,4 @@
+import { PYTHON_STDLIB_MODULES } from '../core/python-stdlib.js';
 import { homedir, cpus } from 'os';
 import { join } from 'path';
 
@@ -292,6 +293,23 @@ export interface PureContextConfig {
      * `android.*`. Defaults cover the JVM/Android platform namespaces.
      */
     reservedNamespaces: string[];
+    /**
+     * Python source roots (Phase 98, Task 607): first-level directories whose
+     * name is NOT part of the module path (`src/mypkg/x.py` → `mypkg.x`).
+     * Strict allowlist — every other first-level directory keeps its name
+     * (`tests/logging.py` is `tests.logging`, never `logging`). Package
+     * directories declared in `pyproject.toml` (`[tool.setuptools]
+     * package-dir`, poetry `packages[].from`) are added automatically.
+     */
+    pythonSourceRoots: string[];
+    /**
+     * Python reserved (stdlib) module names (Phase 98, Task 607): an absolute
+     * import whose first segment is listed resolves to nothing — external —
+     * so no repo file can shadow it. Defaults to CPython's
+     * `sys.stdlib_module_names`. Set to [] to disable, or remove a name for
+     * a repo that genuinely owns a stdlib-named package.
+     */
+    reservedPythonModules: string[];
   };
   /**
    * Which transport(s) to start.
@@ -536,6 +554,8 @@ export const DEFAULT_CONFIG: PureContextConfig = {
       'sun',
       'jdk',
     ],
+    pythonSourceRoots: ['src', 'lib'],
+    reservedPythonModules: [...PYTHON_STDLIB_MODULES],
   },
   transport: 'stdio',
   http: {
@@ -946,6 +966,14 @@ export function validateConfig(raw: unknown): ValidationResult {
           errors.push(
             'graph.reservedNamespaces must be an array of non-empty strings ([] = disabled)',
           );
+        }
+      }
+      for (const key of ['pythonSourceRoots', 'reservedPythonModules'] as const) {
+        if (key in gr) {
+          const v = gr[key];
+          if (!Array.isArray(v) || v.some((n) => typeof n !== 'string' || n.length === 0)) {
+            errors.push(`graph.${key} must be an array of non-empty strings ([] = disabled)`);
+          }
         }
       }
     }

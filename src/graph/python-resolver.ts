@@ -11,10 +11,23 @@
  *   a/b.py            → a.b
  *   a/b/__init__.py   → a.b
  * Each file registers under the repo root and, when the file's first-level
- * directory is a source root rather than a package (`src/`, or any first-level
- * dir with no `__init__.py`), under that root stripped too. One file may
+ * directory is a SOURCE ROOT, under that root stripped too. One file may
  * register under multiple names — over-approximation is the correct failure
  * mode for blast radius (Phase 82 principle).
+ *
+ * Source roots are a strict ALLOWLIST (Phase 98, Task 607): config
+ * `graph.pythonSourceRoots` (default `src`, `lib`) plus package directories
+ * declared in `pyproject.toml` (`[tool.setuptools] package-dir`, poetry
+ * `packages[].from`). Phase 84 stripped ANY first-level dir without an
+ * `__init__.py`, so `tests/logging.py` registered as module `logging` and
+ * captured every `import logging` in the repo (gap-analysis-v2 CRITICAL 2 —
+ * the Android-shim bug class, with stdlib-short names making collisions near
+ * certain). Two further hygiene rules from the same audit:
+ *   - reserved modules: an absolute import whose first segment is in
+ *     `graph.reservedPythonModules` (default: CPython stdlib names) is
+ *     external, full stop — no repo file may shadow it (Task-548 analog);
+ *   - test candidates: a non-test importer never resolves to a test file
+ *     (shared `isTestFilePath`, the JVM `dropTestCandidates` rule).
  *
  * Specifier shapes handled (as emitted by the Python handler):
  *   a.b.c                    plain import — module index lookup
@@ -22,11 +35,15 @@
  *                            else the module file itself (symbol-table tiebreak)
  *   .  /  ..pkg              relative — exact directory walk, no index needed
  *
- * v1 limitations (documented): no sys.path manipulation, no editable installs,
- * no pyproject package-dir remapping — layout conventions only.
+ * v1 limitations (documented): no sys.path manipulation, no editable installs;
+ * pyproject remapping covers package-dir / poetry `from` only.
  */
 
 import type Database from 'better-sqlite3';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
+import { getConfig } from '../config/config-loader.js';
+import { isTestFilePath } from '../core/test-paths.js';
 
 // ─── Public surface ───────────────────────────────────────────────────────────
 
@@ -34,6 +51,15 @@ export const PYTHON_FAMILY_EXTENSIONS = new Set(['.py']);
 
 export function isPythonSourceFile(filePath: string): boolean {
   return filePath.toLowerCase().endsWith('.py');
+}
+
+export interface PythonResolverOptions {
+  /** Repo root on disk — enables `pyproject.toml` source-root discovery. */
+  projectRoot?: string;
+  /** Override config `graph.pythonSourceRoots`. */
+  sourceRoots?: string[];
+  /** Override config `graph.reservedPythonModules`; [] disables the check. */
+  reservedModules?: string[];
 }
 
 export interface PythonResolver {
@@ -54,9 +80,59 @@ function segments(filePath: string): string[] {
   return normalize(filePath).split('/').filter((s) => s.length > 0);
 }
 
+/**
+ * Source-root directories declared in `pyproject.toml` (fail-soft: no file,
+ * unreadable, or unknown layout → []). Line-based, no TOML dependency:
+ *   [tool.setuptools.package-dir]  "" = "src"      → src
+ *   package-dir = {"" = "src", "pkg" = "lib/pkg"}   → src, lib
+ *   [[tool.poetry.packages]] include = "x", from = "src" → src
+ * Only the FIRST path segment is a root (`lib/pkg` → `lib`), matching how the
+ * strip rule works on first-level directories.
+ */
+export function pyprojectSourceRoots(projectRoot: string | undefined): string[] {
+  if (!projectRoot) return [];
+  const file = join(projectRoot, 'pyproject.toml');
+  if (!existsSync(file)) return [];
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf-8');
+  } catch {
+    return [];
+  }
+  const roots = new Set<string>();
+  const add = (dir: string): void => {
+    const first = normalize(dir).split('/').filter((x) => x.length > 0 && x !== '.')[0];
+    if (first) roots.add(first);
+  };
+  // inline table form: package-dir = { "" = "src", "pkg" = "lib/pkg" }
+  for (const m of text.matchAll(/package-dir\s*=\s*\{([^}]*)\}/g)) {
+    for (const kv of m[1]!.matchAll(/"[^"]*"\s*=\s*"([^"]+)"/g)) add(kv[1]!);
+  }
+  // section form: [tool.setuptools.package-dir] followed by  key = "dir" lines
+  const section = text.match(/\[tool\.setuptools\.package-dir\]([\s\S]*?)(?=\n\[|$)/);
+  if (section) {
+    for (const kv of section[1]!.matchAll(/^\s*"?[^"=\n]*"?\s*=\s*"([^"]+)"/gm)) add(kv[1]!);
+  }
+  // poetry: from = "src"  (inside [[tool.poetry.packages]] or packages = [{...}])
+  for (const m of text.matchAll(/\bfrom\s*=\s*"([^"]+)"/g)) add(m[1]!);
+  return [...roots];
+}
+
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
-export function createPythonResolver(db: Database.Database, repoId: string): PythonResolver {
+export function createPythonResolver(
+  db: Database.Database,
+  repoId: string,
+  options?: PythonResolverOptions,
+): PythonResolver {
+  const sourceRoots = new Set<string>([
+    ...(options?.sourceRoots ?? getConfig().graph.pythonSourceRoots),
+    ...pyprojectSourceRoots(options?.projectRoot),
+  ]);
+  const reservedModules = new Set<string>(
+    options?.reservedModules ?? getConfig().graph.reservedPythonModules,
+  );
+
   const allPaths = db
     .prepare<[string], { path: string }>('SELECT path FROM files WHERE repo_id = ?')
     .all(repoId)
@@ -95,10 +171,10 @@ export function createPythonResolver(db: Database.Database, repoId: string): Pyt
     const segs = moduleSegs(norm);
     if (segs.length === 0) continue;
     register(segs.join('.'), stored);
-    // Strip a first-level source root: `src/` always; any other first-level dir
-    // only when it is not itself a package (a non-package dir is not importable,
-    // so its children can only be reached with the root stripped).
-    if (segs.length > 1 && (segs[0] === 'src' || !firstLevelPackages.has(segs[0]))) {
+    // Strip a first-level SOURCE ROOT only (allowlist — Phase 98). A root that
+    // is itself a package (`src/__init__.py`) is part of the module path and
+    // is never stripped.
+    if (segs.length > 1 && sourceRoots.has(segs[0]) && !firstLevelPackages.has(segs[0])) {
       register(segs.slice(1).join('.'), stored);
     }
   }
@@ -203,12 +279,17 @@ export function createPythonResolver(db: Database.Database, repoId: string): Pyt
       let hits: string[];
       if (spec.startsWith('.')) {
         hits = resolveRelative(spec, sourceFile, importedNames);
+      } else if (reservedModules.has(spec.split('.')[0]!)) {
+        // Reserved (stdlib) first segment → external, never a repo file.
+        return [];
       } else if (importedNames.length > 0) {
         hits = resolveFromAbsolute(spec, importedNames);
       } else {
         hits = moduleFiles.get(spec) ?? [];
       }
-      return [...new Set(hits)].filter((f) => f !== sourceFile);
+      const unique = [...new Set(hits)].filter((f) => f !== sourceFile);
+      // A production importer never resolves to a test file (Phase 89 rule).
+      return isTestFilePath(sourceFile) ? unique : unique.filter((f) => !isTestFilePath(f));
     },
   };
 }

@@ -40,6 +40,7 @@ import { createWorkerPool } from './worker-pool.js';
 import type { ParseJob } from './worker-pool.js';
 import { createResolver } from '../graph/path-resolver.js';
 import { buildGraph } from '../graph/graph-builder.js';
+import { buildIndexedFileSet } from '../graph/prefilled-targets.js';
 import { buildFamilyResolvers } from '../graph/family-resolvers.js';
 import { buildDiEdges } from '../graph/di-edges.js';
 import { join } from 'path';
@@ -120,7 +121,7 @@ export async function indexFolder(
   const allExtensions = [...getSupportedExtensions(), ...getAdapterExtensions(adapters)];
   const effectiveFileLimit = options.fileLimit ?? DEFAULT_FILE_LIMIT;
 
-  const { files: discovered, totalBeforeLimit, excludedDirs } = discoverFiles(absRoot, {
+  const { files: discovered, totalBeforeLimit, excludedDirs, dropped } = discoverFiles(absRoot, {
     extensions: allExtensions,
     fileLimit: effectiveFileLimit,
     extraExcludePatterns: options.excludePatterns,
@@ -223,6 +224,8 @@ export async function indexFolder(
   interface FileEntry { relPath: string; content: Buffer; hash: string }
   const toProcess: FileEntry[] = [];
   let filesSkipped = limitSkipped;
+  let filesUnchanged = 0;
+  let filesFailed = 0;
 
   for (const df of supportedFiles) {
     let content: Buffer;
@@ -230,11 +233,13 @@ export async function indexFolder(
       content = readFileSync(join(absRoot, df.path));
     } catch {
       filesSkipped++;
+      filesFailed++;
       continue;
     }
     const hash = computeHash(content);
     if (!cache.hasChanged(df.path, hash)) {
       filesSkipped++;
+      filesUnchanged++;
       continue;
     }
     toProcess.push({ relPath: df.path, content, hash });
@@ -398,7 +403,9 @@ export async function indexFolder(
   // file/symbol persistence — so they see the full files + symbol tables.
   // Each family's map build is skipped when the batch has none of its files.
   const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, allImports);
-  const edges = buildGraph(allImports, resolver, repoId, familyResolvers);
+  const edges = buildGraph(allImports, resolver, repoId, familyResolvers, {
+    indexedFiles: buildIndexedFileSet(getAllFileHashes(db, repoId).keys()),
+  });
   if (edges.length > 0) {
     insertEdges(db, edges);
   }
@@ -550,6 +557,9 @@ export async function indexFolder(
       : {}),
     filesIndexed: toProcess.length,
     filesSkipped,
+    filesUnchanged,
+    filesFailed,
+    dropped,
     symbolsFound,
     totalSymbolsInDb: totalSymbols,
     totalFilesInDb: totalFiles,
@@ -698,6 +708,7 @@ export async function reindexFiles(
   const errors: Array<{ file: string; message: string }> = [];
   let symbolsFound = 0;
   let filesSkipped = 0;
+  let filesFailed = 0;
 
   // Files that did not exist in the index before this call — their arrival can
   // satisfy imports that UNCHANGED files wrote earlier, so the edge build below
@@ -713,6 +724,7 @@ export async function reindexFiles(
     } catch (err) {
       errors.push({ file: relPath, message: String(err) });
       filesSkipped++;
+      filesFailed++;
       continue;
     }
 
@@ -769,7 +781,9 @@ export async function reindexFiles(
     deleteEdgesExceptType(db, repoId, 'di');
     const storedImports = getAllImportRecords(db, repoId);
     const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, storedImports);
-    const rebuilt = buildGraph(storedImports, resolver, repoId, familyResolvers);
+    const rebuilt = buildGraph(storedImports, resolver, repoId, familyResolvers, {
+      indexedFiles: buildIndexedFileSet(getAllFileHashes(db, repoId).keys()),
+    });
     if (rebuilt.length > 0) {
       insertEdges(db, rebuilt);
     }
@@ -788,7 +802,9 @@ export async function reindexFiles(
     // the full files/symbols tables (already updated above), so targeted
     // re-index edges match what a full index_folder would produce.
     const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, allImports);
-    const edges = buildGraph(allImports, resolver, repoId, familyResolvers);
+    const edges = buildGraph(allImports, resolver, repoId, familyResolvers, {
+    indexedFiles: buildIndexedFileSet(getAllFileHashes(db, repoId).keys()),
+  });
     if (edges.length > 0) {
       insertEdges(db, edges);
     }
@@ -874,6 +890,8 @@ export async function reindexFiles(
     repoId,
     filesIndexed: changedPaths.length - filesSkipped,
     filesSkipped,
+    filesUnchanged: filesSkipped - filesFailed,
+    filesFailed,
     symbolsFound,
     totalSymbolsInDb: totalSymbols,
     totalFilesInDb: totalFiles,

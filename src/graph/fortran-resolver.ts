@@ -12,6 +12,8 @@
  */
 
 import type Database from 'better-sqlite3';
+import { isTestFilePath } from '../core/test-paths.js';
+import { dropForeignCandidates } from '../core/library-paths.js';
 
 // ─── Public surface ───────────────────────────────────────────────────────────
 
@@ -68,7 +70,31 @@ export function createFortranResolver(
     resolve(specifier: string, sourceFile: string): string[] {
       const spec = specifier.trim().toLowerCase();
       if (spec.length === 0) return [];
-      return (moduleFiles.get(spec) ?? []).filter((f) => f !== sourceFile);
+      if (FORTRAN_INTRINSIC_MODULES.has(spec)) return []; // Phase 98: compiler-provided
+      return hygiene((moduleFiles.get(spec) ?? []).filter((f) => f !== sourceFile), sourceFile);
     },
   };
 }
+
+/**
+ * Phase 98 (Task 611) resolver hygiene, applied to every candidate list:
+ *   - a first-party importer never resolves into a foreign directory
+ *     (deps/, vendor/, _build/, node_modules/ …) — the Go vendor rule;
+ *   - a non-test importer never resolves to a test file (Phase-89 rule).
+ * Test importers and importers that themselves live in a foreign directory
+ * are left alone (rabbitmq-server keeps its components under deps/).
+ */
+function hygiene(candidates: string[], sourceFile: string): string[] {
+  const foreignFiltered = dropForeignCandidates(candidates, sourceFile);
+  if (isTestFilePath(sourceFile)) return foreignFiltered;
+  return foreignFiltered.filter((f) => !isTestFilePath(f));
+}
+
+/**
+ * Intrinsic / compiler-provided modules (Phase 98, Task 611): `USE` of these
+ * is never an intra-repo edge, even when a repo ships a same-named shim.
+ */
+const FORTRAN_INTRINSIC_MODULES: ReadonlySet<string> = new Set([
+  'iso_fortran_env', 'iso_c_binding', 'ieee_arithmetic', 'ieee_exceptions', 'ieee_features',
+  'omp_lib', 'omp_lib_kinds', 'openacc', 'mpi', 'mpi_f08', 'cudafor',
+]);

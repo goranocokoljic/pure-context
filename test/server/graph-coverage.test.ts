@@ -56,3 +56,41 @@ describe('graphCoverageWarning (Task 502)', () => {
     db.close();
   });
 });
+
+// ─── Phase 98, Task 608 — dangling (phantom) rows no longer mask the signal ──
+
+describe('graphCoverageWarning (Phase 98 — resolvable-count)', () => {
+  function addDangling(db: ReturnType<typeof seedDb>, n: number) {
+    const ins = db.prepare(
+      "INSERT INTO dep_edges (repo_id, source_file, target_file, edge_type, specifier) VALUES (?, ?, ?, 'import', 'x')",
+    );
+    for (let i = 0; i < n; i++) ins.run(REPO, 'src/File0.kt', `ghost${i}.h`);
+  }
+
+  it("'empty' when every stored edge dangles (a pre-98 phantom-only graph)", () => {
+    const db = seedDb(30, 0);
+    addDangling(db, 40);
+    const w = graphCoverageWarning(db, REPO);
+    expect(w?.graphCoverage).toBe('empty');
+    expect(w?.graphCoverageNote).toContain('resolvable');
+    db.close();
+  });
+
+  it("'partial' when dangling rows outnumber resolvable ones, with the counts", () => {
+    const db = seedDb(30, 4);
+    addDangling(db, 10);
+    const w = graphCoverageWarning(db, REPO);
+    expect(w?.graphCoverage).toBe('partial');
+    expect(w?.danglingEdges).toBe(10);
+    expect(w?.resolvableEdges).toBe(4);
+    expect(w?.graphCoverageNote).toContain('re-run index_folder');
+    db.close();
+  });
+
+  it('silent when resolvable rows dominate', () => {
+    const db = seedDb(30, 10);
+    addDangling(db, 3);
+    expect(graphCoverageWarning(db, REPO)).toBeNull();
+    db.close();
+  });
+});

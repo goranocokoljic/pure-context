@@ -17,6 +17,8 @@
  */
 
 import type Database from 'better-sqlite3';
+import { isTestFilePath } from '../core/test-paths.js';
+import { dropForeignCandidates } from '../core/library-paths.js';
 
 // ─── Public surface ───────────────────────────────────────────────────────────
 
@@ -74,17 +76,53 @@ export function createErlangResolver(
       // look like a path separator.
       if (spec.includes(':')) {
         const mod = spec.split(':')[0]!.trim();
-        return (modFiles.get(mod) ?? []).filter((f) => f !== sourceFile);
+        return hygiene((modFiles.get(mod) ?? []).filter((f) => f !== sourceFile), sourceFile);
       }
 
       // Header include: path literal from -include / -include_lib
       if (spec.includes('/') || spec.toLowerCase().endsWith('.hrl')) {
         const base = spec.slice(spec.lastIndexOf('/') + 1);
-        return (hrlFiles.get(base) ?? []).filter((f) => f !== sourceFile);
+        const cands = hygiene((hrlFiles.get(base) ?? []).filter((f) => f !== sourceFile), sourceFile);
+        // Phase 98 (Task 611): a repo-wide basename match is deterministic
+        // noise on umbrella apps — prefer the header(s) sharing the most
+        // leading directories with the importer (same app's include/).
+        return closest(cands, sourceFile);
       }
 
       // Bare module name
-      return (modFiles.get(spec) ?? []).filter((f) => f !== sourceFile);
+      return hygiene((modFiles.get(spec) ?? []).filter((f) => f !== sourceFile), sourceFile);
     },
   };
+}
+
+/**
+ * Phase 98 (Task 611) resolver hygiene, applied to every candidate list:
+ *   - a first-party importer never resolves into a foreign directory
+ *     (deps/, vendor/, _build/, node_modules/ …) — the Go vendor rule;
+ *   - a non-test importer never resolves to a test file (Phase-89 rule).
+ * Test importers and importers that themselves live in a foreign directory
+ * are left alone (rabbitmq-server keeps its components under deps/).
+ */
+function hygiene(candidates: string[], sourceFile: string): string[] {
+  const foreignFiltered = dropForeignCandidates(candidates, sourceFile);
+  if (isTestFilePath(sourceFile)) return foreignFiltered;
+  return foreignFiltered.filter((f) => !isTestFilePath(f));
+}
+
+/** Keep the candidates sharing the longest directory prefix with the importer. */
+function closest(candidates: string[], sourceFile: string): string[] {
+  if (candidates.length <= 1) return candidates;
+  const src = sourceFile.replace(/\\/g, '/').split('/');
+  let best = -1;
+  let out: string[] = [];
+  for (const c of candidates) {
+    const segs = c.replace(/\\/g, '/').split('/');
+    let k = 0;
+    while (k < segs.length - 1 && k < src.length - 1 && segs[k] === src[k]) k++;
+    if (k > best) {
+      best = k;
+      out = [c];
+    } else if (k === best) out.push(c);
+  }
+  return out;
 }

@@ -255,9 +255,13 @@ function extractImports(_tree: Tree, source: Buffer): ImportRecord[] {
     const specifier = m[1]!; // e.g. "gleam/io" or "myapp/user"
     const importedNamesRaw = m[2]; // e.g. "concat, length"
 
-    // Resolve local modules (starting with project-relative path): null for external
-    const isLocal = !specifier.includes('/') || specifier.startsWith('.');
-    const resolvedPath = isLocal ? specifier : null;
+    // Phase 98 (Task 608): the old `isLocal` test was INVERTED — a single
+    // segment (`import wisp`) is a dependency package, `gleam/*` is the
+    // stdlib, and a project module is `import app/user` (has a slash). Emit
+    // the src/ candidate for project-shaped specifiers; the graph builder
+    // validates it against the indexed files and drops it when absent.
+    const isLocal = specifier.includes('/') && !specifier.startsWith('gleam/');
+    const resolvedPath = isLocal ? `src/${specifier}.gleam` : null;
 
     const importedNames = importedNamesRaw
       ? importedNamesRaw.split(',').map((s) => s.trim()).filter(Boolean)

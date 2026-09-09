@@ -127,7 +127,13 @@ export function createGoResolver(
         const targetDir =
           remainder.length === 0 ? dir : dir.length === 0 ? remainder : `${dir}/${remainder}`;
         const files = dirFiles.get(targetDir) ?? [];
-        return files.filter((f) => f !== sourceFile);
+        // Phase 98 (Task 611): `_test.go` files are part of the package only
+        // for SAME-directory importers — a cross-package import can never see
+        // the target's tests (the Phase-89 scope note was only same-dir true).
+        const sameDir = dirOf(normalize(sourceFile)) === targetDir;
+        return files.filter(
+          (f) => f !== sourceFile && (sameDir || !normalize(f).toLowerCase().endsWith('_test.go')),
+        );
       }
       return []; // stdlib / third-party — external
     },

@@ -26,6 +26,8 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import type Database from 'better-sqlite3';
+import { isTestFilePath } from '../core/test-paths.js';
+import { dropForeignCandidates, isForeignPath } from '../core/library-paths.js';
 import { getDeclaredPackages } from '../core/db/file-store.js';
 import { getConfig } from '../config/config-loader.js';
 import { logger } from '../core/logger.js';
@@ -67,8 +69,10 @@ function baseNameNoExt(filePath: string): string {
 // ─── Factory ──────────────────────────────────────────────────────────────────
 
 interface Psr4Entry {
-  prefix: string; // namespace prefix as written ("App\\" — trailing backslash)
-  base: string; // repo-relative base dir, forward slashes, no trailing slash
+  prefix: string;
+  base: string;
+  /** from autoload-dev — only test-file importers may use it (Phase 98) */
+  dev: boolean;
 }
 
 export function createPhpResolver(
@@ -138,6 +142,12 @@ export function createPhpResolver(
     const cached = composerRead.get(dir);
     if (cached !== undefined) return cached;
     let entries: Psr4Entry[] | null = null;
+    // Phase 98 (Task 611): a composer.json under vendor/ belongs to a
+    // dependency — its PSR-4 map must never route first-party imports.
+    if (isForeignPath(`${dir}/composer.json`)) {
+      composerRead.set(dir, null);
+      return null;
+    }
     try {
       const content = readFileSync(join(projectRoot, dir, 'composer.json'), 'utf8');
       const json = JSON.parse(content) as {
@@ -145,14 +155,19 @@ export function createPhpResolver(
         'autoload-dev'?: { 'psr-4'?: Record<string, string | string[]> };
       };
       entries = [];
-      for (const map of [json.autoload?.['psr-4'], json['autoload-dev']?.['psr-4']]) {
+      // Phase 98 (Task 611): autoload-dev (the `Tests\\` namespace) is kept
+      // in a SEPARATE map consulted only for test-file importers.
+      for (const [map, dev] of [
+        [json.autoload?.['psr-4'], false],
+        [json['autoload-dev']?.['psr-4'], true],
+      ] as const) {
         if (!map) continue;
         for (const [prefix, dirs] of Object.entries(map)) {
           for (const d of Array.isArray(dirs) ? dirs : [dirs]) {
             if (typeof d !== 'string') continue;
             const rel = normalizePath(d).replace(/^\.\//, '').replace(/\/+$/, '');
             const base = dir.length === 0 ? rel : rel.length === 0 ? dir : `${dir}/${rel}`;
-            entries.push({ prefix, base });
+            entries.push({ prefix, base, dev });
           }
         }
       }
@@ -230,8 +245,10 @@ export function createPhpResolver(
     return candidates;
   }
 
-  function psr4Lookup(spec: string): string[] {
-    for (const { prefix, base } of psr4) {
+  function psr4Lookup(spec: string, sourceFile: string): string[] {
+    const devAllowed = isTestFilePath(sourceFile);
+    for (const { prefix, base, dev } of psr4) {
+      if (dev && !devAllowed) continue;
       if (!spec.startsWith(prefix)) continue;
       const remainder = spec.slice(prefix.length).replace(/^\\/, '');
       if (remainder.length === 0) continue;
@@ -242,7 +259,7 @@ export function createPhpResolver(
     return [];
   }
 
-  return {
+  const raw = {
     resolve(specifier: string, sourceFile: string): string[] {
       const spec = specifier.trim().replace(/^\\+/, '').replace(/;$/, '').trim();
       if (spec.length === 0) return [];
@@ -268,7 +285,22 @@ export function createPhpResolver(
       }
 
       // 4. PSR-4 fallback (files without a namespace row / pre-v9 indexes)
-      return psr4Lookup(spec).filter((f) => f !== sourceFile);
+      return psr4Lookup(spec, sourceFile).filter((f) => f !== sourceFile);
     },
   };
+  return { resolve: (spec, src) => hygiene(raw.resolve(spec, src), src) };
+}
+
+/**
+ * Phase 98 (Task 611) resolver hygiene, applied to every candidate list:
+ *   - a first-party importer never resolves into a foreign directory
+ *     (deps/, vendor/, _build/, node_modules/ …) — the Go vendor rule;
+ *   - a non-test importer never resolves to a test file (Phase-89 rule).
+ * Test importers and importers that themselves live in a foreign directory
+ * are left alone (rabbitmq-server keeps its components under deps/).
+ */
+function hygiene(candidates: string[], sourceFile: string): string[] {
+  const foreignFiltered = dropForeignCandidates(candidates, sourceFile);
+  if (isTestFilePath(sourceFile)) return foreignFiltered;
+  return foreignFiltered.filter((f) => !isTestFilePath(f));
 }

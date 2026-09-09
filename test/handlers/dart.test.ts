@@ -32,10 +32,12 @@ describe('Dart handler — class', () => {
     expect(cls!.signature).toContain('extends User');
   });
 
-  it('skips a private class (name starts with _)', async () => {
+  it('indexes a library-private class (name starts with _) tagged visibility library (Phase 98)', async () => {
     const { tree, buf } = await parse(`class _Internal {\n  _Internal();\n}\n`);
     const syms = dartHandler.extractSymbols(tree, buf, 'impl.dart');
-    expect(syms.find((s) => s.name === '_Internal')).toBeUndefined();
+    const cls = syms.find((s) => s.name === '_Internal');
+    expect(cls?.frameworkMeta?.['visibility']).toBe('library');
+    expect(syms.find((s) => s.name === '_Internal._Internal')?.frameworkMeta?.['visibility']).toBe('library');
   });
 });
 
@@ -124,10 +126,10 @@ describe('Dart handler — top-level functions', () => {
     expect(fn!.signature).toContain('formatName');
   });
 
-  it('skips a private top-level function', async () => {
+  it('indexes a library-private top-level function with visibility meta (Phase 98)', async () => {
     const { tree, buf } = await parse(`String _helper() => 'x';\n`);
     const syms = dartHandler.extractSymbols(tree, buf, 'utils.dart');
-    expect(syms.find((s) => s.name === '_helper')).toBeUndefined();
+    expect(syms.find((s) => s.name === '_helper')?.frameworkMeta?.['visibility']).toBe('library');
   });
 
   it('includes async in signature when function body is async', async () => {
@@ -160,10 +162,10 @@ describe('Dart handler — top-level constants', () => {
     expect(c!.kind).toBe('const');
   });
 
-  it('skips a private top-level const', async () => {
+  it('indexes a library-private top-level const with visibility meta (Phase 98)', async () => {
     const { tree, buf } = await parse(`const String _secret = 'x';\n`);
     const syms = dartHandler.extractSymbols(tree, buf, 'constants.dart');
-    expect(syms.find((s) => s.name === '_secret')).toBeUndefined();
+    expect(syms.find((s) => s.name === '_secret')?.frameworkMeta?.['visibility']).toBe('library');
   });
 });
 
@@ -222,10 +224,11 @@ class Calculator {
     expect(m!.kind).toBe('method');
   });
 
-  it('skips private method', async () => {
+  it('indexes a library-private method with visibility meta; public siblings carry none (Phase 98)', async () => {
     const { tree, buf } = await parse(classCode);
     const syms = dartHandler.extractSymbols(tree, buf, 'calc.dart');
-    expect(syms.find((s) => s.name === 'Calculator._compute')).toBeUndefined();
+    expect(syms.find((s) => s.name === 'Calculator._compute')?.frameworkMeta?.['visibility']).toBe('library');
+    expect(syms.find((s) => s.name === 'Calculator.add')?.frameworkMeta?.['visibility']).toBeUndefined();
   });
 });
 

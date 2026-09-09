@@ -410,7 +410,10 @@ function extractImports(_tree: Tree, source: Buffer): ImportRecord[] {
     imports.push({
       sourceFile: '',
       specifier,
-      resolvedPath: isLocal ? specifier : null,
+      // Phase 98 (Task 608): namespaced angle imports (`<Foundation/NSObject.h>`
+      // — the GNUstep libs-base shape) become validated candidates; the graph
+      // builder drops what the index does not hold.
+      resolvedPath: isLocal || specifier.includes('/') ? specifier : null,
       importedNames: [specifier.split('/').pop()?.replace(/\.h$/, '') ?? specifier],
       isTypeOnly: false,
     });

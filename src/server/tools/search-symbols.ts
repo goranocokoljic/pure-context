@@ -330,6 +330,7 @@ export async function handler(args: {
               text: JSON.stringify(
                 {
                   count: top.length,
+                  totalMatched: allResults.length, // Phase 98 (Task 612): pre-limit count
                   symbols: top.map((r) => ({
                     id: r.symbol.id,
                     name: r.symbol.name,
@@ -573,6 +574,7 @@ export async function handler(args: {
       text: JSON.stringify(
         {
           count: top.length,
+          totalMatched: allKeywordResults.length, // Phase 98 (Task 612): pre-limit count
           ...(negativeEvidence ? { negative_evidence: negativeEvidence } : {}),
           ...(cfgDiagnostic ? { _diagnostics: [cfgDiagnostic] } : {}),
           symbols: top.map((r) => ({

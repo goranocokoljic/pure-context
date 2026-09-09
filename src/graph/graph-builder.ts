@@ -9,6 +9,8 @@ import { ELIXIR_FAMILY_EXTENSIONS, type ElixirResolver } from './elixir-resolver
 import { ERLANG_FAMILY_EXTENSIONS, type ErlangResolver } from './erlang-resolver.js';
 import { FORTRAN_FAMILY_EXTENSIONS, type FortranResolver } from './fortran-resolver.js';
 import { RUST_FAMILY_EXTENSIONS, type RustResolver } from './rust-resolver.js';
+import { DART_FAMILY_EXTENSIONS, type DartResolver } from './dart-resolver.js';
+import { resolvePrefilledTarget, type IndexedFileSet } from './prefilled-targets.js';
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -17,6 +19,17 @@ import { RUST_FAMILY_EXTENSIONS, type RustResolver } from './rust-resolver.js';
  * is optional — the index manager builds a family's resolver only when the
  * batch contains that family's source files, so a pure-TS index pays nothing.
  */
+export interface BuildGraphOptions {
+  /**
+   * Phase 98 (Task 608): the repo's indexed files. When supplied, a
+   * handler-prefilled `resolvedPath` is VALIDATED against this set (exact,
+   * sibling, stylesheet partial, Lua module, Terraform directory, suffix and
+   * disk-resolver probes — see prefilled-targets.ts) and dropped when no
+   * indexed file matches. Omitted → pre-98 verbatim behavior.
+   */
+  indexedFiles?: IndexedFileSet;
+}
+
 export interface FamilyResolvers {
   jvm?: JvmResolver;
   python?: PythonResolver;
@@ -27,6 +40,7 @@ export interface FamilyResolvers {
   erlang?: ErlangResolver;
   fortran?: FortranResolver;
   rust?: RustResolver;
+  dart?: DartResolver;
 }
 
 type FamilyResolveFn = (rec: ImportRecord) => string[];
@@ -77,6 +91,9 @@ function buildDispatch(families: FamilyResolvers): Map<string, FamilyResolveFn> 
       families.rust!.resolve(r.specifier, r.sourceFile, r.importedNames),
     );
   }
+  if (families.dart) {
+    add(DART_FAMILY_EXTENSIONS, (r) => families.dart!.resolve(r.specifier, r.sourceFile));
+  }
   return byExt;
 }
 
@@ -104,6 +121,7 @@ export function buildGraph(
   resolver: PathResolver,
   repoId: string,
   familyResolvers?: JvmResolver | FamilyResolvers,
+  options?: BuildGraphOptions,
 ): DepEdge[] {
   const families: FamilyResolvers =
     familyResolvers === undefined
@@ -124,7 +142,9 @@ export function buildGraph(
     // Resolve the path(s) if the handler left resolvedPath null
     let targetFiles: string[];
     if (rec.resolvedPath !== null) {
-      targetFiles = [rec.resolvedPath];
+      targetFiles = options?.indexedFiles
+        ? resolvePrefilledTarget(rec, options.indexedFiles, resolver)
+        : [rec.resolvedPath];
     } else {
       const familyFn = dispatch.get(extOf(rec.sourceFile));
       if (familyFn) {

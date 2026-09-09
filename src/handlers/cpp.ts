@@ -393,11 +393,25 @@ function walkNode(
 
     // ── namespace_definition ─────────────────────────────────────────────────
     case 'namespace_definition': {
-      // anonymous namespace: no name child → skip
       const nameNode = node.children.find(
         (c) => c.type === 'namespace_identifier' || (c.isNamed && c.type === 'identifier'),
       );
-      if (!nameNode) break;
+      if (!nameNode) {
+        // Anonymous `namespace { … }` (Phase 98, Task 609): its members are
+        // the ubiquitous .cpp-local helpers agents search for. No namespace
+        // symbol (it has no name), but the body IS walked — same scope, and
+        // every symbol it yields is tagged file-visible.
+        const anonBody = node.children.find((c) => c.type === 'declaration_list');
+        if (anonBody) {
+          const before = symbols.length;
+          walkNodes(anonBody.children, ctx, filePath, src, symbols);
+          for (let i = before; i < symbols.length; i++) {
+            const sym = symbols[i]!;
+            sym.frameworkMeta = { ...(sym.frameworkMeta ?? {}), visibility: 'file' };
+          }
+        }
+        break;
+      }
 
       const nsName = nodeText(nameNode, src);
       if (!nsName) break;
@@ -1393,7 +1407,9 @@ function collectImportNodes(
         imports.push({
           sourceFile: '',
           specifier,
-          resolvedPath: isSystem ? null : specifier,
+          // Phase 98 (Task 608): namespaced angle includes (`<folly/Foo.h>`)
+          // become validated candidates; bare `<vector>` stays external.
+          resolvedPath: !isSystem || specifier.includes('/') ? specifier : null,
           importedNames: [],
           isTypeOnly: false,
         });

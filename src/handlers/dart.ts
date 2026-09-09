@@ -31,8 +31,24 @@ function trunc(s: string, max = 120): string {
   return s.length > max ? s.slice(0, max - 3) + '...' : s;
 }
 
-function isPrivate(name: string): boolean {
-  return name.startsWith('_');
+/**
+ * Phase 98 (Task 610): `_` names are LIBRARY-private in Dart — visible to every
+ * file of the library, and exactly what an agent searches for when editing a
+ * Flutter screen (`_MyHomePageState`, `_buildAppBar`). They used to be skipped
+ * outright, whole classes included (gap-analysis-v2 H2 #3). Now every symbol
+ * is extracted and any name with an underscore-led segment is tagged
+ * `frameworkMeta.visibility: 'library'` (one pass at the end of extraction).
+ */
+function isLibraryPrivate(name: string): boolean {
+  return name.split('.').some((seg) => seg.startsWith('_') || seg.startsWith('Extension:_'));
+}
+
+function tagLibraryPrivate(symbols: SymbolRecord[]): void {
+  for (const sym of symbols) {
+    if (isLibraryPrivate(sym.name)) {
+      sym.frameworkMeta = { ...(sym.frameworkMeta ?? {}), visibility: 'library' };
+    }
+  }
 }
 
 // ─── Docstring extraction ─────────────────────────────────────────────────────
@@ -90,7 +106,7 @@ function paramsText(node: SyntaxNode, src: string): string {
 /**
  * Extract the identifier name from a function_signature, getter_signature,
  * setter_signature, or operator_signature node.
- * Returns null if the name starts with '_' or cannot be found.
+ * Returns null if the name cannot be found.
  */
 function nameFromSig(sigNode: SyntaxNode, src: string): string | null {
   switch (sigNode.type) {
@@ -202,7 +218,6 @@ function extractConstructor(
     // Name is in `qualified` child: text could be "ClassName" or "ClassName.named"
     const qualified = ctorNode.children.find((c) => c.isNamed && c.type === 'qualified');
     const nameText = qualified ? nodeText(qualified, src) : className;
-    if (nameText.startsWith('_') || nameText.includes('._')) return;
 
     // For ClassName.namedCtor, symbolName = ClassName.namedCtor
     // For plain ClassName, symbolName = ClassName.ClassName
@@ -217,11 +232,9 @@ function extractConstructor(
     if (identifiers.length === 0) return;
 
     const classIdText = nodeText(identifiers[0]!, src);
-    if (classIdText.startsWith('_')) return;
 
     if (identifiers.length >= 2) {
       const namedPart = nodeText(identifiers[1]!, src);
-      if (namedPart.startsWith('_')) return;
       symbolName = `${className}.${namedPart}`;
     } else {
       symbolName = `${className}.${className}`;
@@ -260,7 +273,7 @@ function extractMethod(
     case 'getter_signature':
     case 'setter_signature': {
       const rawName = nameFromSig(inner, src);
-      if (!rawName || isPrivate(rawName)) return;
+      if (!rawName) return;
       const symbolName = `${className}.${rawName}`;
       const sig = buildMethodSig(methodSigNode, inner, src);
 
@@ -284,12 +297,10 @@ function extractMethod(
       );
       if (identifiers.length === 0) return;
       const classId = nodeText(identifiers[0]!, src);
-      if (classId.startsWith('_')) return;
 
       let symbolName: string;
       if (identifiers.length >= 2) {
         const factoryName = nodeText(identifiers[1]!, src);
-        if (factoryName.startsWith('_')) return;
         symbolName = `${className}.${factoryName}`;
       } else {
         symbolName = `${className}.${className}`;
@@ -347,7 +358,6 @@ function extractClass(
   const nameNode = node.children.find((c) => c.isNamed && c.type === 'identifier');
   if (!nameNode) return;
   const className = nodeText(nameNode, src);
-  if (isPrivate(className)) return;
 
   // Build signature: "class Name [extends Base] [implements I1, I2] [with M1]"
   const classText = nodeText(node, src);
@@ -382,7 +392,6 @@ function extractMixin(
   const nameNode = node.children.find((c) => c.isNamed && c.type === 'identifier');
   if (!nameNode) return;
   const name = nodeText(nameNode, src);
-  if (isPrivate(name)) return;
 
   const declLine = nodeText(node, src).split('{')[0]?.trim() ?? `mixin ${name}`;
 
@@ -418,7 +427,6 @@ function extractExtension(
   const name = nameNode ? nodeText(nameNode, src) : `<anonymous extension>`;
   const symbolName = nameNode ? name : `Extension:${extendedType}`;
 
-  if (nameNode && isPrivate(name)) return;
 
   const declLine = nodeText(node, src).split('{')[0]?.trim() ?? `extension ${symbolName}`;
 
@@ -447,7 +455,6 @@ function extractEnum(
   const nameNode = node.children.find((c) => c.isNamed && c.type === 'identifier');
   if (!nameNode) return;
   const name = nodeText(nameNode, src);
-  if (isPrivate(name)) return;
 
   // Build signature: "enum Name { val1, val2, val3, ... }"
   const body = node.children.find((c) => c.isNamed && c.type === 'enum_body');
@@ -488,7 +495,6 @@ function extractTypeAlias(
   const nameNode = node.children.find((c) => c.isNamed && c.type === 'type_identifier');
   if (!nameNode) return;
   const name = nodeText(nameNode, src);
-  if (isPrivate(name)) return;
 
   const sig = trunc(nodeText(node, src));
 
@@ -541,7 +547,6 @@ function extractTopLevelConst(
     const nameNode = decl.children.find((c) => c.isNamed && c.type === 'identifier');
     if (!nameNode) continue;
     const name = nodeText(nameNode, src);
-    if (isPrivate(name)) continue;
 
     const typePart = typeStr ? ` ${typeStr}` : '';
     const sig = trunc(`${keyword}${typePart} ${name} = ...`);
@@ -582,7 +587,6 @@ function extractTopLevelFunction(
     return;
   }
 
-  if (isPrivate(name)) return;
 
   // Check if function_body is async
   const bodyText = nodeText(next, src);
@@ -648,6 +652,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
     }
   }
 
+  tagLibraryPrivate(symbols);
   return symbols;
 }
 

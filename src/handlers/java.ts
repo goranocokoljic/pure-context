@@ -38,27 +38,38 @@ function childText(node: SyntaxNode, sourceStr: string, ...types: string[]): str
 // ─── Visibility ───────────────────────────────────────────────────────────────
 
 /**
- * Returns true if the node has `public` or `protected` in its modifiers child.
+ * Java visibility of a declaration: the explicit modifier, or 'package' when
+ * none is present (package-private — the Java default).
  */
-function isPublicOrProtected(node: SyntaxNode): boolean {
+function javaVisibility(node: SyntaxNode): 'public' | 'protected' | 'package' | 'private' {
   const modifiers = node.children.find((c) => c.type === 'modifiers');
-  if (!modifiers) return false;
-  return modifiers.children.some(
-    (c) => c.type === 'public' || c.type === 'protected',
-  );
+  if (!modifiers) return 'package';
+  for (const c of modifiers.children) {
+    if (c.type === 'public' || c.type === 'protected' || c.type === 'private') return c.type;
+  }
+  return 'package';
 }
 
 /**
- * Returns true if the method is visible (public, protected, or package-private).
- * Package-private methods have no modifiers at all. Private methods are excluded.
- * Used for method_declaration only — class/field extraction stays stricter.
+ * Phase 98 (Task 609): everything that is NOT `private` is indexed — public,
+ * protected AND package-private types, constructors, fields, methods. Before
+ * this, top-level and nested types required an explicit public/protected
+ * modifier and a package-private type was dropped WITH ALL ITS MEMBERS (the
+ * C# Phase-83 bug class on a bigger ecosystem — gap-analysis-v2 H2). Non-public
+ * symbols carry `frameworkMeta.visibility` (see tagVisibility) so API-surface
+ * tools can filter and the ranker can apply its mild penalty.
  */
-function isVisibleMethod(node: SyntaxNode): boolean {
-  const modifiers = node.children.find((c) => c.type === 'modifiers');
-  if (!modifiers) return true; // no modifiers = package-private = accept
-  return modifiers.children.some(
-    (c) => c.type === 'public' || c.type === 'protected',
-  );
+function isVisible(node: SyntaxNode): boolean {
+  return javaVisibility(node) !== 'private';
+}
+
+/** Record non-public visibility on the symbol just pushed (merges existing meta). */
+function tagVisibility(symbols: SymbolRecord[], node: SyntaxNode): void {
+  const vis = javaVisibility(node);
+  if (vis === 'public') return;
+  const last = symbols[symbols.length - 1];
+  if (!last) return;
+  last.frameworkMeta = { ...(last.frameworkMeta ?? {}), visibility: vis };
 }
 
 /**
@@ -147,7 +158,7 @@ function extractClassMembers(
   for (const member of body.children) {
     // ── method_declaration ────────────────────────────────────────────────
     if (member.type === 'method_declaration') {
-      if (!isVisibleMethod(member)) continue;
+      if (!isVisible(member)) continue;
       const methodName = childText(member, sourceStr, 'identifier');
       if (!methodName) continue;
       // Use qualified name for ID hashing to guarantee uniqueness within a file
@@ -165,12 +176,13 @@ function extractClassMembers(
         signature: `${qualifiedName}: ${rawSig}`.slice(0, 120),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
       });
+      tagVisibility(symbols, member);
       continue;
     }
 
     // ── constructor_declaration ───────────────────────────────────────────
     if (member.type === 'constructor_declaration') {
-      if (!isPublicOrProtected(member)) continue;
+      if (!isVisible(member)) continue;
       const ctorName = childText(member, sourceStr, 'identifier');
       if (!ctorName) continue;
       // Constructors are named after the class — use bare class name for search
@@ -187,12 +199,13 @@ function extractClassMembers(
         signature: `${qualifiedName}: ${rawSig}`.slice(0, 120),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
       });
+      tagVisibility(symbols, member);
       continue;
     }
 
     // ── field_declaration with static final → const ───────────────────────
     if (member.type === 'field_declaration') {
-      if (!isPublicOrProtected(member)) continue;
+      if (!isVisible(member)) continue;
       if (!isStaticFinal(member)) continue;
       const declarator = member.children.find((c) => c.type === 'variable_declarator');
       const name = declarator
@@ -214,12 +227,13 @@ function extractClassMembers(
           .slice(0, 120),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
       });
+      tagVisibility(symbols, member);
       continue;
     }
 
     // ── public inner class (static or non-static) ────────────────────────
     if (member.type === 'class_declaration') {
-      if (!isPublicOrProtected(member)) continue;
+      if (!isVisible(member)) continue;
       // Non-static inner classes are valid navigable symbols (ViewHolder, Builder, etc.)
       const name = childText(member, sourceStr, 'identifier');
       if (!name) continue;
@@ -234,6 +248,7 @@ function extractClassMembers(
         signature: buildSignature(member, sourceStr),
         summary: extractDocstringWithSource(member, sourceStr) ?? '',
       });
+      tagVisibility(symbols, member);
       // Recurse to extract methods of the inner class
       extractClassMembers(member, innerClassName, sourceStr, filePath, symbols);
     }
@@ -249,7 +264,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
   for (const node of tree.rootNode.children) {
     // ── class_declaration ──────────────────────────────────────────────────
     if (node.type === 'class_declaration') {
-      if (!isPublicOrProtected(node)) continue;
+      if (!isVisible(node)) continue;
       const name = childText(node, sourceStr, 'identifier');
       if (!name) continue;
       symbols.push({
@@ -262,13 +277,14 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
       });
+      tagVisibility(symbols, node);
       extractClassMembers(node, name, sourceStr, filePath, symbols);
       continue;
     }
 
     // ── interface_declaration ──────────────────────────────────────────────
     if (node.type === 'interface_declaration') {
-      if (!isPublicOrProtected(node)) continue;
+      if (!isVisible(node)) continue;
       const name = childText(node, sourceStr, 'identifier');
       if (!name) continue;
       symbols.push({
@@ -281,13 +297,14 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
       });
+      tagVisibility(symbols, node);
       extractClassMembers(node, name, sourceStr, filePath, symbols);
       continue;
     }
 
     // ── enum_declaration ───────────────────────────────────────────────────
     if (node.type === 'enum_declaration') {
-      if (!isPublicOrProtected(node)) continue;
+      if (!isVisible(node)) continue;
       const name = childText(node, sourceStr, 'identifier');
       if (!name) continue;
       symbols.push({
@@ -300,13 +317,14 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
       });
+      tagVisibility(symbols, node);
       extractClassMembers(node, name, sourceStr, filePath, symbols);
       continue;
     }
 
     // ── annotation_type_declaration ────────────────────────────────────────
     if (node.type === 'annotation_type_declaration') {
-      if (!isPublicOrProtected(node)) continue;
+      if (!isVisible(node)) continue;
       const name = childText(node, sourceStr, 'identifier');
       if (!name) continue;
       symbols.push({
@@ -319,6 +337,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         signature: buildSignature(node, sourceStr),
         summary: extractDocstringWithSource(node, sourceStr) ?? '',
       });
+      tagVisibility(symbols, node);
       continue;
     }
   }

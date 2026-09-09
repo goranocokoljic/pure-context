@@ -214,6 +214,10 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
         partial.graph?.maxWildcardFanout ?? DEFAULT_CONFIG.graph.maxWildcardFanout,
       reservedNamespaces:
         partial.graph?.reservedNamespaces ?? DEFAULT_CONFIG.graph.reservedNamespaces,
+      pythonSourceRoots:
+        partial.graph?.pythonSourceRoots ?? DEFAULT_CONFIG.graph.pythonSourceRoots,
+      reservedPythonModules:
+        partial.graph?.reservedPythonModules ?? DEFAULT_CONFIG.graph.reservedPythonModules,
     },
     transport: partial.transport ?? DEFAULT_CONFIG.transport,
     http: {

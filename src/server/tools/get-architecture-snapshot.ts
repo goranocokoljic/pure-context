@@ -30,6 +30,7 @@ import {
   type StoredLayerViolation,
 } from './compare-change-impact.js';
 import { buildMeta } from './_meta.js';
+import { graphCoverageWarning } from './graph-coverage.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'get_architecture_snapshot';
@@ -286,6 +287,7 @@ export async function handler(args: {
       const output: GetArchitectureSnapshotOutput = {
         action: 'create',
         snapshot: record,
+        ...(graphCoverageWarning(db, repoId) ?? {}), // Phase 98 (Task 608)
         _meta: buildMeta({ timingMs: Date.now() - t0 }),
       };
 

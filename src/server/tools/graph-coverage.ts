@@ -13,8 +13,18 @@ import type Database from 'better-sqlite3';
 const MIN_FILES_FOR_SIGNAL = 20;
 
 export interface GraphCoverageWarning {
-  graphCoverage: 'empty';
+  /**
+   * 'empty'   — no RESOLVABLE edge at all (Phase 98: rows whose target is
+   *             not an indexed file no longer count; pre-98 they masked this).
+   * 'partial' — more than half of the stored rows are dangling (target not
+   *             indexed) — an index built before v1.31.0 still carries the
+   *             phantom rows Phase 98 stopped emitting; re-index to heal.
+   */
+  graphCoverage: 'empty' | 'partial';
   graphCoverageNote: string;
+  /** Present on 'partial': how many rows dangle vs resolve. */
+  danglingEdges?: number;
+  resolvableEdges?: number;
 }
 
 /**
@@ -30,7 +40,28 @@ export function graphCoverageWarning(
     db
       .prepare<[string], { n: number }>('SELECT COUNT(*) AS n FROM dep_edges WHERE repo_id = ?')
       .get(repoId)?.n ?? 0;
-  if (edges > 0) return null;
+  const resolvable =
+    db
+      .prepare<[string], { n: number }>(
+        'SELECT COUNT(*) AS n FROM dep_edges e WHERE e.repo_id = ? AND EXISTS ' +
+          '(SELECT 1 FROM files f WHERE f.repo_id = e.repo_id AND f.path = e.target_file)',
+      )
+      .get(repoId)?.n ?? 0;
+  if (resolvable > 0) {
+    const dangling = edges - resolvable;
+    if (dangling > resolvable) {
+      return {
+        graphCoverage: 'partial',
+        graphCoverageNote:
+          `${dangling} of ${edges} import edges point at files that are not in the index ` +
+          '(phantom targets from an index built before v1.31.0, or excluded/deleted files). ' +
+          'Graph answers are incomplete for those importers — re-run index_folder to heal.',
+        danglingEdges: dangling,
+        resolvableEdges: resolvable,
+      };
+    }
+    return null;
+  }
 
   const files =
     db
@@ -41,7 +72,7 @@ export function graphCoverageWarning(
   return {
     graphCoverage: 'empty',
     graphCoverageNote:
-      'This repo has ZERO import edges — empty results here mean the dependency graph is missing, ' +
+      'This repo has ZERO resolvable import edges — empty results here mean the dependency graph is missing, ' +
       'NOT that nothing depends on the symbol. Import resolution may not cover this language mix ' +
       '(unresolved: Ruby and the long tail — see LANGUAGE-SUPPORT.md). Use find_references ' +
       '(content scan) and get_co_change (git history) instead, and re-index if the repo was indexed ' +
