@@ -52,32 +52,43 @@ Derivation (so you can predict it):
 
 The index must reflect current state for retrieval to be trustworthy mid-run.
 
-- **At task start:** `index_folder` once (cold). Acceptable amortized over a
-  multi-minute run. Use `check_index_staleness` first to skip if already fresh.
+- **At task start:** `list_repos` — read each repo's `head` / `freshness`
+  line. `fresh` → go. `behind` → `index_folder({ path, onlyChanged: true })`
+  (git delta, no discovery walk; seconds). `unknown` (pre-1.30 index) or
+  `reason: "full"` fallbacks → one `index_folder` (cold; amortized over a
+  multi-minute run). `re-index in progress` → a detached hook run is
+  working; wait or grep for now.
 - **Mid-run, after every write:** **never** call `index_folder` — it is
   discovery-bound (stats every file, ~seconds even on a no-op). Call
   **`index_file`** with just the edited path(s) — O(one file). The PostToolUse
   hook does this automatically if installed.
 - `check_index_staleness({ repoId, filePaths })` → per-file `fresh`/`stale`
-  without a discovery pass; omit `filePaths` for a repo-level summary.
+  without a discovery pass; omit `filePaths` for a repo-level summary with
+  `head`.
 
 ### Branches
 
 The index is keyed on the **absolute path** (`repoId = sha256(path)`) — not on
 branch or commit. Every branch checked out at that path shares one index.
+Since 1.30.0 the index also records the commit it reflects, so drift is
+visible instead of silent.
 
-- **After an in-place branch switch: run `index_folder` before trusting any
-  result.** It re-parses what changed and prunes files the new branch does not
-  have (`filesPruned` in the response), so the index converges to the checked-
-  out state. Before v1.22.0 it did NOT prune — a branch switch produced a
-  hybrid union of both branches; if you see symbols from an abandoned branch,
-  you are on an old version.
-- **One git worktree per branch is the cleanest pattern** — each worktree has
-  its own path, therefore its own fully independent index. This is by design.
-- After a **rebase**, git metadata (churn, co-change) is stale wholesale:
-  `invalidate_cache` then `index_folder`.
-
----
+- **Install the git hooks once per repository:** `purecontext-mcp hooks
+  --install --git`. `post-checkout` / `post-merge` / `post-rewrite` re-index
+  from git's change list in every worktree; a harness that switches branches
+  in place gets a fresh index without a step of its own. The shims never
+  block git (inline ≤ 200 files with a 10 s cap, else detached + job marker).
+- **Without hooks:** after an in-place switch / pull / merge / rebase run
+  `index_folder({ path, onlyChanged: true })` before trusting any result.
+  It prunes what the branch lacks and falls back to a full run visibly
+  (`mode`, `reason`).
+- **One git worktree per branch** stays the cleanest pattern — and is now
+  cheap: a new worktree of an indexed repository clones a sibling's index and
+  applies the delta (`clonedFrom` in the response) instead of re-parsing.
+  Claude Code's `WorktreeCreate` hook does this detached, without a timeout.
+- **Did the harness use the index?** `get_savings_stats.calls` and the
+  TaskCompleted line `PureContext this task: N calls (…)` come from the local
+  usage ledger — read them at the end of a run.
 
 ## 3. Greenfield loop (project built from scratch, issue by issue)
 

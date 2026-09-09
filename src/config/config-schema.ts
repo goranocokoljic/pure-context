@@ -137,6 +137,26 @@ export interface PureContextConfig {
      * Default: 500.
      */
     commitBatchSize: number;
+    /**
+     * Phase 97: `index_folder({ onlyChanged: true })` / `index-changed` ask
+     * git for the changed paths since the stored HEAD instead of walking the
+     * tree. Above this many changed paths a full walk is cheaper (and prunes
+     * too), so the run falls back to a full index. 0 = never fall back on
+     * count. Default: 5000.
+     */
+    changedOnlyMaxFiles: number;
+  };
+  /**
+   * Git-hook behaviour (Phase 97, Task 600).
+   */
+  hooks: {
+    /**
+     * post-checkout / post-merge / post-rewrite re-index INLINE (the git
+     * command waits) when the changed set is at most this many files;
+     * larger sets are re-indexed by a detached process so git never stalls.
+     * Default: 200.
+     */
+    inlineFileLimit: number;
   };
   /**
    * Git / temporal-coupling capture settings (Phase 76).
@@ -367,6 +387,14 @@ export interface PureContextConfig {
     /** Send anonymous usage stats (languages used, file counts, timing). Default: false. */
     enabled: boolean;
     /**
+     * Phase 97: LOCAL append-only ledger of tool calls
+     * (`<dataDir>/usage.jsonl`: tool name, repo id, timestamp, duration — no
+     * queries, paths or results). Feeds `get_savings_stats.calls` and the
+     * TaskCompleted "PureContext this task: N calls" line. Never leaves the
+     * machine. Default: true; false = zero writes.
+     */
+    usageLedger: boolean;
+    /**
      * Endpoint to POST telemetry events to.
      * Default: 'https://telemetry.purecontext.dev/v1/event'.
      */
@@ -454,6 +482,10 @@ export const DEFAULT_CONFIG: PureContextConfig = {
   indexing: {
     cssVariables: false,
     commitBatchSize: 500,
+    changedOnlyMaxFiles: 5000,
+  },
+  hooks: {
+    inlineFileLimit: 200,
   },
   git: {
     coChangeDepth: 300,
@@ -566,6 +598,7 @@ export const DEFAULT_CONFIG: PureContextConfig = {
   telemetry: {
     enabled: false,
     endpoint: 'https://telemetry.purecontext.dev/v1/event',
+    usageLedger: true,
   },
   webhooks: {
     enabled: false,
@@ -747,6 +780,30 @@ export function validateConfig(raw: unknown): ValidationResult {
           (i['commitBatchSize'] as number) < 0)
       ) {
         errors.push('indexing.commitBatchSize must be a non-negative integer');
+      }
+      if (
+        'changedOnlyMaxFiles' in i &&
+        (typeof i['changedOnlyMaxFiles'] !== 'number' ||
+          !Number.isInteger(i['changedOnlyMaxFiles']) ||
+          (i['changedOnlyMaxFiles'] as number) < 0)
+      ) {
+        errors.push('indexing.changedOnlyMaxFiles must be a non-negative integer');
+      }
+    }
+  }
+  if ('hooks' in cfg) {
+    const h = cfg['hooks'];
+    if (typeof h !== 'object' || h === null || Array.isArray(h)) {
+      errors.push('hooks must be an object');
+    } else {
+      const hk = h as Record<string, unknown>;
+      if (
+        'inlineFileLimit' in hk &&
+        (typeof hk['inlineFileLimit'] !== 'number' ||
+          !Number.isInteger(hk['inlineFileLimit']) ||
+          (hk['inlineFileLimit'] as number) < 0)
+      ) {
+        errors.push('hooks.inlineFileLimit must be a non-negative integer');
       }
     }
   }
@@ -1066,6 +1123,9 @@ export function validateConfig(raw: unknown): ValidationResult {
       }
       if ('endpoint' in tel && typeof tel['endpoint'] !== 'string') {
         errors.push('telemetry.endpoint must be a string');
+      }
+      if ('usageLedger' in tel && typeof tel['usageLedger'] !== 'boolean') {
+        errors.push('telemetry.usageLedger must be a boolean');
       }
     }
   }

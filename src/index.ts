@@ -26,7 +26,8 @@ import { getConfig } from './config/config-loader.js';
 // called in bootstrap() below.
 import { registerStandardHandlers } from './core/bootstrap-registry.js';
 import { startServer } from './server/mcp-server.js';
-import { cmdInit, cmdCheck, cmdShow, cmdHealth, cmdExport, cmdImport, cmdFetch, cmdListPublic, cmdIndexFolder, cmdIndexFile, cmdAnalyzeDiff, cmdDetectAntipatterns } from './config/cli.js';
+import { cmdInit, cmdCheck, cmdShow, cmdHealth, cmdExport, cmdImport, cmdFetch, cmdListPublic, cmdIndexFolder, cmdIndexFile, cmdIndexChanged, cmdAnalyzeDiff, cmdDetectAntipatterns } from './config/cli.js';
+import { cmdGitHook } from './cli/git-hooks.js';
 import { runKeysCommand } from './config/keys-cli.js';
 import { runWorkspacesCommand } from './config/workspaces-cli.js';
 import { runHooksCommand, cmdHookPreToolUse, cmdHookPostToolUse, cmdHookPreCompact, cmdHookWorktreeCreate, cmdHookWorktreeRemove, cmdHookTaskCompleted, cmdHookSubagentStart } from './cli/hooks.js';
@@ -74,10 +75,16 @@ Usage:
   purecontext-mcp list-public             List repos available in the public registry
   purecontext-mcp index-folder [--path <dir>]   Index a folder (defaults to cwd)
   purecontext-mcp index-file --repo <dir> <f..> Targeted re-index of specific files (cheap)
+  purecontext-mcp index-changed --repo <dir>    Re-index what git says changed since the stored HEAD
+                                  [--since <sha>] [--verify]   (no discovery walk; full fallback)
+  purecontext-mcp git-hook <name> [args]        Git hook runner (installed by hooks --install --git)
   purecontext-mcp analyze-diff --diff-file <f>  Analyze PR diff, print JSON impact report
   purecontext-mcp detect-antipatterns [--fail-on-critical]  Scan for anti-patterns
+  purecontext-mcp hooks --install --git   Git hooks (post-checkout/merge/rewrite): index stays fresh on
+                                  [--repo <path>]  branch change, in every worktree; never blocks git
+  purecontext-mcp hooks --uninstall --git Remove the git hooks
   purecontext-mcp hooks --install         Register Claude Code hooks in ~/.claude/settings.json
-  purecontext-mcp hooks --list            Show hook registration state
+  purecontext-mcp hooks --list            Show Claude Code + git hook state
   purecontext-mcp hook-pretooluse         PreToolUse hook handler (called by Claude Code)
   purecontext-mcp hook-posttooluse        PostToolUse hook handler (called by Claude Code)
   purecontext-mcp hook-precompact         PreCompact hook handler (called by Claude Code)
@@ -87,6 +94,7 @@ Usage:
   purecontext-mcp hook-subagentstart      SubagentStart hook handler (called by Claude Code)
   purecontext-mcp install <tool>          Install for a specific AI coding IDE
   purecontext-mcp install all             Auto-detect installed IDEs and install each
+  purecontext-mcp install all --with-git-hooks   …and install the git hooks for this repo
   purecontext-mcp install --list          Show detected IDEs and install state
   purecontext-mcp install --dry-run all   Preview what would be installed
   purecontext-mcp delete-index [<path>]   Delete the stored index for a project
@@ -101,6 +109,7 @@ Environment variables:
 
 Claude Code integration:
   purecontext-mcp install claude        Register the server (pinned to your global Node) + add rules
+  purecontext-mcp hooks --install --git Keep the index fresh after checkout / pull / merge / rebase
   claude mcp add purecontext-mcp -- npx purecontext-mcp   (manual alternative)
 `.trimStart());
 }
@@ -258,6 +267,20 @@ async function main(): Promise<void> {
   if (args[0] === 'index-file') {
     await bootstrap();
     await cmdIndexFile(args.slice(1));
+    process.exit(0);
+  }
+
+  // ── index-changed sub-command (git hooks / onlyChanged — Phase 97) ────────
+  if (args[0] === 'index-changed') {
+    await bootstrap();
+    await cmdIndexChanged(args.slice(1));
+    process.exit(0);
+  }
+
+  // ── git-hook runner (post-checkout / post-merge / post-rewrite shims) ─────
+  if (args[0] === 'git-hook') {
+    await initSqliteBackend();
+    cmdGitHook(args.slice(1));
     process.exit(0);
   }
 

@@ -7,7 +7,7 @@
  * Also injects PureContext agent instructions into ~/.claude/CLAUDE.md.
  */
 
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import {
   existsSync,
   mkdirSync,
@@ -17,6 +17,12 @@ import {
 } from 'fs';
 import { getSqliteFactory, type SqliteDatabase } from '../core/db/sqlite-loader.js';
 import { resolveServerLaunch } from './resolve-node.js';
+import { installGitHooks, uninstallGitHooks, gitHooksStatus, GIT_HOOK_NAMES } from './git-hooks.js';
+import { getPureContextInstructions } from './install-writers.js';
+import { readHeadDrift, formatDriftLine } from '../core/git-head.js';
+import { computeRepoId, getJobsDir } from '../core/db/schema.js';
+import { takeTaskCalls, formatCallsLine } from '../core/db/usage-ledger.js';
+import { loadConfig } from '../config/config-loader.js';
 import { join, dirname, resolve } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
@@ -47,77 +53,13 @@ function makeHookCmd(subcommand: string): string {
 }
 
 // ─── CLAUDE.md block ──────────────────────────────────────────────────────────
-
-const CLAUDE_MD_BLOCK = `<!-- purecontext-mcp-start -->
-# PureContext MCP — AI Agent Instructions
-
-Full tool reference, navigation patterns, and known limitations: \`AGENT_REFERENCE.md\` in the project root (added by \`npx purecontext-mcp hooks --install\`).
-
-## Mandatory workflow — always follow this order
-
-**Step 1 — Check if the project is indexed**
-
-\`\`\`
-list_repos()
-\`\`\`
-
-If the project is missing: \`index_folder({ path: "/absolute/path/to/project" })\`. All other tools require a \`repoId\` — never skip this step.
-
-**Step 2 — Navigate by symbol, not by file**
-
-Do not read entire files to find code.
-
-| Goal | Tool |
-|------|------|
-| Find a function/class/method by name | \`search_symbols\` |
-| Find code by what it does | \`search_semantic\` |
-| Find a literal string, comment, or config value | \`search_text\` |
-| See all symbols in one file | \`get_file_outline\` |
-| See the whole project structure | \`get_repo_outline\` |
-| Understand a function's dependencies | \`get_context_bundle\` |
-| Know what breaks if I change a symbol | \`get_blast_radius\` |
-| Find all call sites for a symbol | \`find_references\` |
-| Survey a file before editing | \`get_file_outline\` |
-| Non-symbol file content (imports, config blocks) | \`get_file_content\` with startLine/endLine |
-| All implementations of an interface | \`find_implementations\` |
-| Callers/callees tree | \`get_call_hierarchy\` |
-| Class inheritance structure | \`get_class_hierarchy\` |
-| Circular dependencies | \`find_cycles\` |
-| Rename / delete / move safety check | \`check_rename_safe\` / \`check_delete_safe\` / \`check_move_safe\` |
-| Codebase health score | \`health_radar\` |
-| Detailed debt report | \`get_debt_report\` |
-| All TODOs and FIXMEs | \`get_todos\` |
-| Untested exported symbols | \`find_untested_symbols\` |
-| AST node type occurrences | \`search_ast\` |
-| Symbols by decorator | \`search_by_decorator\` |
-| Most complex functions | \`get_complexity_hotspots\` |
-
-**Step 3 — Read summaries before fetching source**
-
-\`search_symbols\` returns signatures and summaries — no source code. Read the \`summary\` field first. Fetch source only for symbols you will actually work with:
-
-\`\`\`
-get_symbol_source({ repoId, symbolId })
-\`\`\`
-
-Summaries describe intent, not contract. For modification tasks, always read the source after using the summary to navigate.
-
-## Anti-patterns — what NOT to do
-
-Do not read whole files to find a function. Use \`search_symbols\` + \`get_symbol_source\`.
-
-Do not call \`get_symbol_source\` for every search result. Read \`signature\` and \`summary\` first. Fetch source only for symbols you will work with.
-
-Do not skip \`list_repos\` at the start of a session. You need a \`repoId\` for every tool call.
-
-Do not use \`search_text\` for symbol lookups. It greps raw file content — slower and less precise than \`search_symbols\` for named code entities.
-
-Do not use \`get_file_content\` as a fallback for reading whole files. If a symbol exists in the index, use \`get_symbol_source\`.
-
-Do not ignore \`_tokenEstimate\` fields. Use them to decide whether to fetch more context or stop.
-
-Do not re-search when \`search_symbols\` returns \`negative_evidence\`. If the response includes \`verdict: "no_match"\`, the symbol does not exist — report the gap rather than trying five more query variants.
-<!-- purecontext-mcp-end -->`;
+// Single-sourced from assets/agent-rules.md (Phase 97): `hooks --install` used
+// to carry its own, older copy of the rules — the absolutist "Mandatory
+// workflow" text Phase 91 had already replaced for `install` — so the two
+// installers wrote different instructions. One source, one block.
+function claudeMdBlock(): string {
+  return `<!-- purecontext-mcp-start -->\n${getPureContextInstructions('markdown')}\n<!-- purecontext-mcp-end -->`;
+}
 
 // ─── Public install/list commands ─────────────────────────────────────────────
 
@@ -161,6 +103,15 @@ export function cmdHooksInstall(opts: HooksInstallOptions = {}): void {
   console.log('  WorktreeRemove  (hook-worktree-remove):  fires when an agent worktree is removed');
   console.log('  TaskCompleted   (hook-taskcompleted):    post-task diagnostics and repo summary');
   console.log('  SubagentStart   (hook-subagentstart):    injects repo orientation for spawned agents');
+
+  // These are Claude Code hooks (global). Branch changes are a GIT concern —
+  // point at the per-repository git hooks so the two are not confused.
+  const st = gitHooksStatus(process.cwd());
+  if (st.hooksDir && !GIT_HOOK_NAMES.every((h) => st.installed[h])) {
+    console.log('\nNot yet installed for this repository: git hooks (post-checkout / post-merge / post-rewrite).');
+    console.log('They keep the index fresh after checkout, pull, merge and rebase, in every worktree:');
+    console.log('  npx purecontext-mcp hooks --install --git');
+  }
 }
 
 export function cmdHooksList(): void {
@@ -186,6 +137,46 @@ export function cmdHooksList(): void {
     console.log('    TaskCompleted  → hook-taskcompleted');
     console.log('    SubagentStart  → hook-subagentstart');
   }
+
+  // Git hooks (Phase 97) — per repository, so report the current one.
+  const st = gitHooksStatus(process.cwd());
+  console.log('');
+  if (!st.hooksDir) {
+    console.log('  git hooks: (current directory is not a git repository)');
+  } else {
+    const on = GIT_HOOK_NAMES.filter((h) => st.installed[h]);
+    console.log(`  git hooks in ${st.hooksDir}:`);
+    console.log(
+      on.length === GIT_HOOK_NAMES.length
+        ? `    installed (${on.join(', ')}) — checkout/merge/rebase re-index automatically`
+        : on.length === 0
+          ? '    not installed — run: purecontext-mcp hooks --install --git'
+          : `    partial (${on.join(', ')}) — re-run: purecontext-mcp hooks --install --git`,
+    );
+  }
+}
+
+/** `hooks --install --git [--repo <path>]` */
+export function cmdGitHooksInstall(repoPath: string): void {
+  const res = installGitHooks(repoPath);
+  console.log(`\nGit hooks installed in ${res.hooksDir}:`);
+  for (const f of res.written) console.log(`  ${f}${res.chained.includes(f) ? '  (chained into existing hook)' : ''}`);
+  console.log('\nEvery checkout / merge / rebase in this repository (all worktrees) now');
+  console.log('re-indexes what changed. A new `git worktree add` clones the sibling index.');
+  console.log('Remove with: purecontext-mcp hooks --uninstall --git');
+  console.log('Index of a removed worktree: purecontext-mcp delete-index <path>\n');
+}
+
+/** `hooks --uninstall --git [--repo <path>]` */
+export function cmdGitHooksUninstall(repoPath: string): void {
+  const res = uninstallGitHooks(repoPath);
+  if (res.removed.length === 0) {
+    console.log(`\nNo PureContext git hooks found in ${res.hooksDir}.\n`);
+    return;
+  }
+  console.log(`\nGit hooks removed from ${res.hooksDir}:`);
+  for (const f of res.removed) console.log(`  ${f}`);
+  console.log('');
 }
 
 // ─── Settings merge ───────────────────────────────────────────────────────────
@@ -291,6 +282,7 @@ export function injectClaudeMd(): void {
   const START_MARKER = '<!-- purecontext-mcp-start -->';
   const END_MARKER = '<!-- purecontext-mcp-end -->';
 
+  const CLAUDE_MD_BLOCK = claudeMdBlock();
   if (!existsSync(CLAUDE_MD_PATH)) {
     writeFileSync(CLAUDE_MD_PATH, CLAUDE_MD_BLOCK + '\n');
     console.log(`  Created: ${CLAUDE_MD_PATH}`);
@@ -422,6 +414,17 @@ interface RepoRow {
   root_path: string;
   file_count: number | null;
   indexed_at: string | null;
+  git_tree_sha?: string | null;
+}
+
+/** One freshness line per repo (Phase 97): bounded git calls, no status walk. */
+function freshnessLine(repoId: string, rootPath: string, sha: string | null | undefined): string {
+  try {
+    const d = readHeadDrift(rootPath, sha ?? null, { skipDirty: true, jobsDir: getJobsDir(), repoId });
+    return formatDriftLine(d);
+  } catch {
+    return 'freshness unknown';
+  }
 }
 
 function readIndexedRepos(): RepoRow[] {
@@ -448,7 +451,7 @@ function readIndexedRepos(): RepoRow[] {
     let db: SqliteDatabase | undefined;
     try {
       db = factory.open(join(indexDir, file), { readonly: true });
-      const rows = db.prepare('SELECT id, root_path, file_count, indexed_at FROM repos LIMIT 50').all() as RepoRow[];
+      const rows = db.prepare('SELECT id, root_path, file_count, indexed_at, git_tree_sha FROM repos LIMIT 50').all() as RepoRow[];
       repos.push(...rows);
     } catch { /* skip unreadable db */ } finally {
       try { db?.close(); } catch { /* ignore */ }
@@ -472,9 +475,12 @@ function buildSessionSnapshot(repos: RepoRow[]): string {
     const indexed = r.indexed_at
       ? new Date(r.indexed_at).toISOString().slice(0, 19).replace('T', ' ')
       : 'unknown';
-    lines.push(`- ${r.id} at ${r.root_path} (${r.file_count ?? '?'} files, last indexed ${indexed})`);
+    lines.push(
+      `- ${r.id} at ${r.root_path} (${r.file_count ?? '?'} files, last indexed ${indexed}; ` +
+        `${freshnessLine(r.id, r.root_path, r.git_tree_sha)})`,
+    );
   }
-  lines.push('- Use list_repos() to re-orient if needed.');
+  lines.push('- Use list_repos() to re-orient if needed; "behind" → index_folder({ path, onlyChanged: true }).');
   return lines.join('\n');
 }
 
@@ -508,22 +514,45 @@ export async function cmdHookWorktreeCreate(): Promise<void> {
     const targetPath = worktreePath ?? (cwd && name ? join(cwd, '.claude', 'worktrees', name) : null);
     if (!targetPath) process.exit(0);
 
+    // Phase 97: DETACHED, no timeout (the old 120 s cap died on big trees and
+    // left a silent partial index). index-changed clones a sibling worktree's
+    // index when one exists, else falls back to a full index; the job marker
+    // makes list_repos / check_index_staleness say "re-index in progress".
     const selfScript = process.argv[1];
     if (selfScript) {
-      spawnSync(process.execPath, [selfScript, 'index-folder', '--path', targetPath], {
-        stdio: 'ignore',
-        timeout: 120_000,
-      });
+      const child = spawn(
+        process.execPath,
+        [selfScript, 'index-changed', '--repo', targetPath, '--job'],
+        { detached: true, stdio: 'ignore', windowsHide: true },
+      );
+      child.unref();
     }
   } catch { /* never block */ }
 
   process.exit(0);
 }
 
-/** WorktreeRemove: fires when an agent worktree is removed. No-op for now. */
+/**
+ * WorktreeRemove: drop the index of a Claude-managed worktree
+ * (`.claude/worktrees/<name>`) — those are created and removed by Claude
+ * Code, so their indexes are ours to clean up. A manual worktree's index is
+ * the user's (`purecontext-mcp delete-index <path>`).
+ */
 export async function cmdHookWorktreeRemove(): Promise<void> {
-  try { await readStdin(); } catch { /* ignore */ }
+  try {
+    const input = await readStdin();
+    const worktreePath = (input.worktreePath ?? input.worktree_path) as string | undefined;
+    if (worktreePath && isClaudeManagedWorktree(worktreePath)) {
+      const { deleteIndex } = await import('../core/index-manager.js');
+      deleteIndex(computeRepoId(resolve(worktreePath)));
+    }
+  } catch { /* never block */ }
   process.exit(0);
+}
+
+/** `<root>/.claude/worktrees/<name>` (either slash style). */
+export function isClaudeManagedWorktree(p: string): boolean {
+  return /[\\/]\.claude[\\/]worktrees[\\/][^\\/]+[\\/]?$/.test(resolve(p));
 }
 
 // ─── Repo stats (for TaskCompleted / SubagentStart) ───────────────────────────
@@ -536,6 +565,7 @@ interface RepoStats {
   indexedAt: string | null;
   highComplexityCount: number;
   todoCount: number;
+  gitTreeSha: string | null;
 }
 
 function readRepoStats(): RepoStats[] {
@@ -561,8 +591,8 @@ function readRepoStats(): RepoStats[] {
       db = factory.open(join(indexDir, file), { readonly: true });
 
       const repo = db.prepare(
-        'SELECT id, root_path, file_count, indexed_at FROM repos LIMIT 1',
-      ).get() as { id: string; root_path: string; file_count: number | null; indexed_at: string | null } | undefined;
+        'SELECT id, root_path, file_count, indexed_at, git_tree_sha FROM repos LIMIT 1',
+      ).get() as { id: string; root_path: string; file_count: number | null; indexed_at: string | null; git_tree_sha: string | null } | undefined;
       if (!repo) continue;
 
       const symRow = db.prepare(
@@ -586,6 +616,7 @@ function readRepoStats(): RepoStats[] {
         indexedAt: repo.indexed_at,
         highComplexityCount: highRow.cnt,
         todoCount: todoRow.cnt,
+        gitTreeSha: repo.git_tree_sha ?? null,
       });
     } catch { /* skip unreadable db */ } finally {
       try { db?.close(); } catch { /* ignore */ }
@@ -600,12 +631,26 @@ export async function cmdHookTaskCompleted(): Promise<void> {
   try { await readStdin(); } catch { /* ignore */ }
 
   try {
+    // Phase 97 (Task 603): the FIRST line answers "did the agent use
+    // PureContext on this task?" — counted from the local ledger since the
+    // previous TaskCompleted, never asked of the agent.
+    let callsLine: string;
+    try {
+      const ledgerOn = loadConfig().telemetry?.usageLedger ?? true;
+      callsLine = ledgerOn
+        ? formatCallsLine(takeTaskCalls())
+        : 'PureContext this task: (usage ledger off — telemetry.usageLedger)';
+    } catch {
+      callsLine = 'PureContext this task: (ledger unavailable)';
+    }
+
     const repos = readRepoStats();
     if (repos.length === 0) {
+      process.stdout.write(JSON.stringify({ systemMessage: callsLine }) + '\n');
       process.exit(0);
     }
 
-    const lines: string[] = ['## PureContext Post-Task Summary\n'];
+    const lines: string[] = [callsLine, '', '## PureContext Post-Task Summary\n'];
 
     lines.push('**Indexed repos:**');
     for (const r of repos) {
@@ -614,6 +659,7 @@ export async function cmdHookTaskCompleted(): Promise<void> {
         : 'unknown';
       lines.push(`- \`${r.repoId}\` → \`${r.rootPath}\``);
       lines.push(`  ${r.fileCount ?? '?'} files · ${r.symbolCount ?? '?'} symbols · indexed ${indexed}`);
+      lines.push(`  freshness: ${freshnessLine(r.repoId, r.rootPath, r.gitTreeSha)}`);
       if (r.highComplexityCount > 0) {
         lines.push(`  ⚠ ${r.highComplexityCount} high-complexity symbols (cyclomatic > 5)`);
       }
@@ -658,12 +704,13 @@ export async function cmdHookSubagentStart(): Promise<void> {
           : 'unknown';
         lines.push(`- repoId \`${r.repoId}\` → \`${r.rootPath}\``);
         lines.push(`  ${r.fileCount ?? '?'} files · ${r.symbolCount ?? '?'} symbols · indexed ${indexed}`);
+        lines.push(`  freshness: ${freshnessLine(r.repoId, r.rootPath, r.gitTreeSha)}`);
       }
     }
 
     lines.push('');
     lines.push('**Mandatory workflow — follow this order:**');
-    lines.push('1. `list_repos()` — always run first to confirm repoId');
+    lines.push('1. `list_repos()` — always run first to confirm repoId; read its `head`/`freshness` line — "behind" → `index_folder({ path, onlyChanged: true })`');
     lines.push('2. Navigate by symbol, not by file:');
     lines.push('   | Goal | Tool |');
     lines.push('   |------|------|');
@@ -691,12 +738,34 @@ export async function cmdHookSubagentStart(): Promise<void> {
 
 export function runHooksCommand(args: string[]): void {
   const flag = args[0];
-  if (flag === '--install') {
+  const repoIdx = args.indexOf('--repo');
+  const repoPath = repoIdx >= 0 && args[repoIdx + 1] ? resolve(args[repoIdx + 1]) : process.cwd();
+  const isGit = args.includes('--git');
+
+  if (flag === '--install' && isGit) {
+    try {
+      cmdGitHooksInstall(repoPath);
+    } catch (err) {
+      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  } else if (flag === '--uninstall' && isGit) {
+    try {
+      cmdGitHooksUninstall(repoPath);
+    } catch (err) {
+      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      process.exit(1);
+    }
+  } else if (flag === '--install') {
     cmdHooksInstall({ withReminders: args.includes('--with-reminders') });
   } else if (flag === '--list') {
     cmdHooksList();
   } else {
-    process.stderr.write('Usage: purecontext-mcp hooks --install [--with-reminders] | --list\n');
+    process.stderr.write(
+      'Usage: purecontext-mcp hooks --install [--with-reminders] | --list\n' +
+        '       purecontext-mcp hooks --install --git [--repo <path>]     (post-checkout/merge/rewrite)\n' +
+        '       purecontext-mcp hooks --uninstall --git [--repo <path>]\n',
+    );
     process.exit(1);
   }
 }

@@ -164,10 +164,19 @@ export function computeRepoId(absolutePath: string): string {
   return createHash('sha256').update(absolutePath).digest('hex').slice(0, 16);
 }
 
-export function getIndexDir(): string {
+/** Base data directory (`PCTX_DATA_DIR` or `~/.purecontext`). */
+export function getDataDir(): string {
   const dataDir = process.env['PCTX_DATA_DIR'];
-  if (dataDir) return join(dataDir, 'indexes');
-  return join(homedir(), '.purecontext', 'indexes');
+  return dataDir ? dataDir : join(homedir(), '.purecontext');
+}
+
+export function getIndexDir(): string {
+  return join(getDataDir(), 'indexes');
+}
+
+/** Detached re-index job markers (Phase 97, Task 600): `<dataDir>/jobs/<repoId>.json`. */
+export function getJobsDir(): string {
+  return join(getDataDir(), 'jobs');
 }
 
 export function openDatabase(repoId: string, indexDir?: string): InstanceType<DatabaseConstructor> {
@@ -439,6 +448,7 @@ interface DbRepoRow {
   schema_version: number;
   clone_path: string | null;
   tenant_id: string | null;
+  git_tree_sha?: string | null;
 }
 
 function rowToRepo(row: DbRepoRow): RepoMetadata {
@@ -452,6 +462,7 @@ function rowToRepo(row: DbRepoRow): RepoMetadata {
     schemaVersion: row.schema_version,
     clonePath: row.clone_path ?? null,
     tenantId: row.tenant_id ?? 'local',
+    gitTreeSha: row.git_tree_sha ?? null,
   };
 }
 
@@ -464,7 +475,7 @@ function rowToRepo(row: DbRepoRow): RepoMetadata {
 export function setGitTreeSha(
   db: InstanceType<DatabaseConstructor>,
   repoId: string,
-  treeSha: string,
+  treeSha: string | null,
 ): void {
   db.prepare('UPDATE repos SET git_tree_sha = ? WHERE id = ?').run(treeSha, repoId);
 }

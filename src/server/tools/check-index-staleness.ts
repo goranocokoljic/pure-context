@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { existsSync, readFileSync } from 'fs';
 import { relative, resolve, isAbsolute, sep, join } from 'path';
-import { getIndexDir, openDatabase, getRepo } from '../../core/db/schema.js';
+import { getIndexDir, getJobsDir, openDatabase, getRepo } from '../../core/db/schema.js';
+import { readHeadDrift, formatDriftLine } from '../../core/git-head.js';
 import { getFileHash } from '../../core/db/file-store.js';
 import { computeHash } from '../../core/hash-cache.js';
 import { buildMeta } from './_meta.js';
@@ -13,8 +14,9 @@ export const description =
   'Cheaply check whether the index is current for specific files — WITHOUT a full ' +
   'discovery pass. Pass filePaths to get a per-file fresh/stale verdict (compares the ' +
   'stored content hash against the file on disk); omit them for a lightweight repo-level ' +
-  'summary (indexed? + last-indexed time + counts). Use at task start to decide whether to ' +
-  'index_folder (cold) or just index_file the few changed paths, then index_file to refresh.';
+  'summary (indexed? + last-indexed time + counts + `head`: indexed sha vs HEAD, behindBy, ' +
+  'dirtyFiles, inProgress). Use at task start to decide: "behind" → ' +
+  'index_folder({ path, onlyChanged: true }); a few edited paths → index_file.';
 
 export const inputSchema = {
   repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
@@ -79,6 +81,9 @@ export function handler(args: { repoId: string; filePaths?: string[] }): CallToo
 
     // ── Repo-level summary (no paths) ──────────────────────────────────────
     if (!args.filePaths || args.filePaths.length === 0) {
+      const head = repo
+        ? readHeadDrift(absRoot, repo.gitTreeSha ?? null, { jobsDir: getJobsDir(), repoId: args.repoId })
+        : null;
       return {
         content: [
           {
@@ -92,9 +97,13 @@ export function handler(args: { repoId: string; filePaths?: string[] }): CallToo
                 fileCount: repo?.fileCount ?? 0,
                 symbolCount: repo?.symbolCount ?? 0,
                 ...(schemaWarning ? { schemaWarning } : {}),
-                note:
-                  'Pass filePaths for per-file fresh/stale checks. A repo-level "are there ' +
-                  'new files?" check requires a discovery pass (index_folder).',
+                ...(head ? { head, freshness: formatDriftLine(head) } : {}),
+                note: head
+                  ? 'head compares the indexed sha with the checkout. "behind" → ' +
+                    'index_folder({ path, onlyChanged: true }) (git delta, no discovery walk); ' +
+                    'pass filePaths for per-file fresh/stale checks.'
+                  : 'Pass filePaths for per-file fresh/stale checks. A repo-level "are there ' +
+                    'new files?" check requires a discovery pass (index_folder).',
                 _meta: buildMeta({ timingMs: Date.now() - start }),
               },
               null,

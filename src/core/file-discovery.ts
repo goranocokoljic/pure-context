@@ -121,6 +121,27 @@ export function discoverFiles(
   return { files, totalBeforeLimit, excludedDirs };
 }
 
+/**
+ * Phase 97: the discovery ignore rules as a predicate over repo-relative
+ * paths (forward slashes), for callers that get their file list from git
+ * instead of a directory walk (`reindexChanged`). Same precedence as
+ * `discoverFiles`: built-ins → .gitignore → user patterns.
+ */
+export function createIgnorePredicate(
+  rootPath: string,
+  extraExcludePatterns: string[] = [],
+): (relPath: string) => boolean {
+  const { ig } = buildIgnoreFilter(rootPath, extraExcludePatterns);
+  return (relPath: string) => {
+    // A file is ignored when it or any parent directory is ignored.
+    const parts = relPath.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      if (ig.ignores(parts.slice(0, i).join('/') + '/')) return true;
+    }
+    return ig.ignores(relPath);
+  };
+}
+
 // ─── Internals ────────────────────────────────────────────────────────────────
 
 function buildIgnoreFilter(
@@ -185,46 +206,12 @@ function walk(
 
     if (!entry.isFile()) continue;
 
-    if (extensions) {
-      const dot = entry.name.lastIndexOf('.');
-      if (dot === -1) {
-        // No extension: include if name is in the allowlist OR no allowlist is set
-        // (shebang detection in file-processor.ts routes the file or returns 0 symbols)
-        if (extensionlessFilenames && !extensionlessFilenames.has(entry.name)) continue;
-      } else {
-        const ext = entry.name.slice(dot);
-        if (!extensions.includes(ext.toLowerCase())) continue;
-      }
-    }
-
-    // Skip files matching credential/secret patterns
-    if (isSecretFile(entry.name)) {
-      logger.debug('Skipping secret file', { path: relPath });
-      continue;
-    }
-
-    let size = 0;
-    try {
-      size = statSync(absPath).size;
-    } catch {
-      // skip unreadable files
-      continue;
-    }
-
-    // Skip files exceeding the size limit
-    try {
-      checkFileSize(size, maxFileSizeBytes);
-    } catch {
-      logger.warn('Skipping oversized file', { path: relPath, size, maxFileSizeBytes });
-      continue;
-    }
-
-    // Skip binary files (detect via null-byte scan of first 8 KB)
-    const peek = peekFileContent(absPath);
-    if (isBinaryFile(peek)) {
-      logger.debug('Skipping binary file', { path: relPath });
-      continue;
-    }
+    const size = fileGuardSize(absPath, entry.name, relPath, {
+      extensions,
+      maxFileSizeBytes,
+      extensionlessFilenames,
+    });
+    if (size === null) continue;
 
     results.push({
       path: relPath,
@@ -232,6 +219,68 @@ function walk(
       priority: getPriority(relPath),
     });
   }
+}
+
+export interface FileGuardOptions {
+  extensions?: string[];
+  maxFileSizeBytes?: number;
+  extensionlessFilenames?: Set<string>;
+}
+
+/**
+ * The per-FILE admission rules discovery applies (extension allowlist,
+ * secret-name patterns, size cap, binary sniff). Returns the file size when
+ * the file is indexable, null when discovery would skip it. Exported (Phase
+ * 97) so `reindexChanged` — which takes its candidate list from git, not from
+ * a directory walk — admits exactly what `discoverFiles` would.
+ */
+export function fileGuardSize(
+  absPath: string,
+  fileName: string,
+  relPath: string,
+  opts: FileGuardOptions,
+): number | null {
+  const { extensions, maxFileSizeBytes = DEFAULT_MAX_FILE_BYTES, extensionlessFilenames } = opts;
+  if (extensions) {
+    const dot = fileName.lastIndexOf('.');
+    if (dot === -1) {
+      // No extension: include if name is in the allowlist OR no allowlist is set
+      // (shebang detection in file-processor.ts routes the file or returns 0 symbols)
+      if (extensionlessFilenames && !extensionlessFilenames.has(fileName)) return null;
+    } else {
+      const ext = fileName.slice(dot);
+      if (!extensions.includes(ext.toLowerCase())) return null;
+    }
+  }
+
+  // Skip files matching credential/secret patterns
+  if (isSecretFile(fileName)) {
+    logger.debug('Skipping secret file', { path: relPath });
+    return null;
+  }
+
+  let size = 0;
+  try {
+    size = statSync(absPath).size;
+  } catch {
+    return null; // unreadable
+  }
+
+  // Skip files exceeding the size limit
+  try {
+    checkFileSize(size, maxFileSizeBytes);
+  } catch {
+    logger.warn('Skipping oversized file', { path: relPath, size, maxFileSizeBytes });
+    return null;
+  }
+
+  // Skip binary files (detect via null-byte scan of first 8 KB)
+  const peek = peekFileContent(absPath);
+  if (isBinaryFile(peek)) {
+    logger.debug('Skipping binary file', { path: relPath });
+    return null;
+  }
+  return size;
 }
 
 function getPriority(relPath: string): number {

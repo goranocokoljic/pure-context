@@ -1,0 +1,274 @@
+/**
+ * Worktree index cloning (Phase 97, Task 602).
+ *
+ * A new git worktree of an already-indexed repository is 95%+ identical to a
+ * sibling worktree's tree, yet every worktree used to pay a FULL parse (4–12
+ * minutes and gigabytes on the reporter's 26k-file tree). Here a new
+ * worktree's index is seeded by copying a sibling's `.db` and rewriting the
+ * repo id; the caller then applies the delta (`reindexChanged` since the
+ * sibling's stored sha, or an incremental `indexFolder` whose hash cache now
+ * skips everything unchanged).
+ *
+ * Symbol ids are `hash(filePath:name:kind)` over REPO-RELATIVE paths, so they
+ * survive the copy unchanged — only `repo_id` (and `repos.root_path`) differ.
+ *
+ * Safety rules (risk register R3/R4):
+ * - the sibling is checkpointed (`wal_checkpoint(TRUNCATE)`) through an opened
+ *   handle before the copy — a live WAL is never copied;
+ * - a sibling with a running detached re-index (job marker) is skipped;
+ * - the `repo_id` rewrite enumerates columns via `sqlite_master` +
+ *   `PRAGMA table_info` — no hand-kept table list, ever.
+ */
+import { copyFileSync, existsSync, statSync, unlinkSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import type Database from 'better-sqlite3';
+import { logger } from './logger.js';
+import {
+  computeRepoId,
+  getIndexDir,
+  getJobsDir,
+  getRepo,
+  openDatabase,
+  SCHEMA_VERSION,
+} from './db/schema.js';
+import { getSqliteFactory } from './db/sqlite-loader.js';
+import { gitDirtyFiles, gitWorktreeList, isJobInProgress, isLinkedWorktree } from './git-head.js';
+
+export interface CloneSource {
+  repoId: string;
+  rootPath: string;
+  /** The sibling index's stored HEAD — the delta base for the new worktree. */
+  sha: string | null;
+  dbPath: string;
+  isMain: boolean;
+}
+
+export interface CloneResult {
+  source: CloneSource;
+  newRepoId: string;
+  /** Tables whose `repo_id` column was rewritten. */
+  tables: string[];
+  rowsRewritten: number;
+  bytes: number;
+  cloneMs: number;
+  /**
+   * Paths dirty in the SIBLING's working tree right now. The sibling's index
+   * may hold their uncommitted content, which this worktree does not have —
+   * `reindexChanged` re-checks them on top of the committed delta.
+   */
+  sourceDirtyFiles: string[];
+}
+
+/**
+ * Pick the sibling worktree whose index can seed `absRoot`'s. Main worktree
+ * first, then the others in `git worktree list` order. A candidate must have
+ * an index at the CURRENT schema version with a stored sha, and no detached
+ * re-index running. Null when `absRoot` is not a linked worktree or nothing
+ * qualifies (the caller falls back to a full index — P2).
+ */
+export function findCloneSource(absRoot: string): CloneSource | null {
+  const root = resolve(absRoot);
+  const worktrees = gitWorktreeList(root);
+  if (worktrees.length < 2) return null;
+
+  const indexDir = getIndexDir();
+  const jobsDir = getJobsDir();
+  const ordered = [...worktrees].sort((a, b) => Number(b.isMain) - Number(a.isMain));
+
+  for (const wt of ordered) {
+    if (samePath(wt.path, root)) continue;
+    const repoId = computeRepoId(wt.path);
+    const dbPath = join(indexDir, `${repoId}.db`);
+    if (!existsSync(dbPath)) continue;
+    if (isJobInProgress(jobsDir, repoId)) {
+      logger.info(`worktree clone: sibling ${wt.path} has a re-index in progress — skipped`);
+      continue;
+    }
+    try {
+      const db = openDatabase(repoId);
+      const meta = getRepo(db, repoId);
+      db.close();
+      if (!meta) continue;
+      if (meta.schemaVersion !== SCHEMA_VERSION) {
+        logger.info(
+          `worktree clone: sibling ${wt.path} is schema v${meta.schemaVersion} (need v${SCHEMA_VERSION}) — skipped`,
+        );
+        continue;
+      }
+      if (!meta.gitTreeSha) {
+        logger.info(`worktree clone: sibling ${wt.path} has no stored HEAD sha — skipped`);
+        continue;
+      }
+      // The stored root must be the worktree path itself (not a moved/renamed index).
+      if (!samePath(meta.rootPath, wt.path)) continue;
+      return { repoId, rootPath: wt.path, sha: meta.gitTreeSha, dbPath, isMain: wt.isMain };
+    } catch (err) {
+      logger.debug(`worktree clone: cannot read sibling index ${dbPath}: ${String(err)}`);
+    }
+  }
+  return null;
+}
+
+/**
+ * Copy `source`'s database to `<newRepoId>.db` and rewrite every `repo_id`
+ * (plus `repos.id` / `repos.root_path`). The new file must not exist yet.
+ */
+export function cloneIndex(source: CloneSource, newRepoId: string, newRoot: string): CloneResult {
+  const t0 = Date.now();
+  const indexDir = getIndexDir();
+  const dest = join(indexDir, `${newRepoId}.db`);
+  if (existsSync(dest)) {
+    throw new Error(`cloneIndex: destination already exists: ${dest}`);
+  }
+
+  // 1. Checkpoint the sibling through an OPEN handle so the copy sees every
+  //    committed page in the main file (never copy a live WAL).
+  {
+    const src = getSqliteFactory().open(source.dbPath);
+    try {
+      src.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch {
+      /* WASM tier / no WAL — the main file is already complete */
+    } finally {
+      src.close();
+    }
+  }
+
+  // 2. Copy the main file only (after TRUNCATE the WAL is empty).
+  copyFileSync(source.dbPath, dest);
+  const bytes = statSync(dest).size;
+
+  // 3. Rewrite repo ids. FK enforcement is ON in this schema (children
+  //    reference repos.id, ON UPDATE = NO ACTION), so disable it for the
+  //    rewrite — outside any transaction, as SQLite requires.
+  const db = getSqliteFactory().open(dest);
+  const tables: string[] = [];
+  let rowsRewritten = 0;
+  try {
+    db.exec('PRAGMA foreign_keys = OFF');
+    const rewrite = db.transaction(() => {
+      for (const table of tablesWithRepoIdColumn(db)) {
+        const res = db
+          .prepare(`UPDATE "${table}" SET repo_id = ? WHERE repo_id = ?`)
+          .run(newRepoId, source.repoId);
+        tables.push(table);
+        rowsRewritten += res.changes;
+      }
+      db.prepare(
+        'UPDATE repos SET id = ?, root_path = ?, indexed_at = ? WHERE id = ?',
+      ).run(newRepoId, newRoot, Date.now(), source.repoId);
+    });
+    rewrite();
+    db.exec('PRAGMA foreign_keys = ON');
+    // Sanity (R4): nothing anywhere may still carry the old id.
+    const leftovers = countRowsWithRepoId(db, source.repoId);
+    if (leftovers > 0) {
+      throw new Error(`cloneIndex: ${leftovers} row(s) still carry the source repo id`);
+    }
+  } catch (err) {
+    db.close();
+    try { unlinkSync(dest); } catch { /* best effort */ }
+    throw err;
+  }
+  db.close();
+
+  const sourceDirtyFiles = gitDirtyFiles(source.rootPath) ?? [];
+  const cloneMs = Date.now() - t0;
+  logger.info(
+    `Cloned index from worktree ${source.rootPath} (${(bytes / 1_048_576).toFixed(1)} MB, ` +
+      `${tables.length} tables, ${rowsRewritten} rows re-keyed) in ${cloneMs}ms`,
+  );
+  return { source, newRepoId, tables, rowsRewritten, bytes, cloneMs, sourceDirtyFiles };
+}
+
+/**
+ * The one-call entry used by `indexFolder` / `reindexChanged`: when `absRoot`
+ * is a linked worktree WITHOUT an index, seed one from a sibling. Returns the
+ * clone result, or null when nothing was cloned (not linked, index already
+ * present, no qualifying sibling). Never throws — a failed clone leaves no
+ * file behind and the caller proceeds with a full index.
+ */
+export function maybeCloneWorktreeIndex(absRoot: string, repoId: string): CloneResult | null {
+  const dest = join(getIndexDir(), `${repoId}.db`);
+  if (existsSync(dest) && !isEmptyIndexFile(dest, repoId)) return null;
+  let linked = false;
+  try {
+    linked = isLinkedWorktree(absRoot);
+  } catch {
+    return null;
+  }
+  if (!linked) return null;
+  const source = findCloneSource(absRoot);
+  if (!source) {
+    logger.info('Linked worktree without a qualifying sibling index — full index');
+    return null;
+  }
+  try {
+    return cloneIndex(source, repoId, absRoot);
+  } catch (err) {
+    logger.warn(`Worktree index clone failed (falling back to a full index): ${String(err)}`);
+    return null;
+  }
+}
+
+/**
+ * Every table (incl. FTS5 virtual tables) that has a `repo_id` column —
+ * discovered from the live schema, so a future table can never be missed.
+ */
+export function tablesWithRepoIdColumn(db: Database.Database): string[] {
+  const names = (
+    db
+      .prepare<[], { name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+      )
+      .all()
+  ).map((r) => r.name);
+  const out: string[] = [];
+  for (const name of names) {
+    let cols: Array<{ name: string }>;
+    try {
+      cols = db.prepare(`PRAGMA table_info("${name}")`).all() as Array<{ name: string }>;
+    } catch {
+      continue; // shadow tables of virtual tables may refuse PRAGMA — they have no repo_id
+    }
+    if (cols.some((c) => c.name === 'repo_id')) out.push(name);
+  }
+  return out.sort();
+}
+
+/** Rows across all repo_id-bearing tables (and repos.id) that carry `repoId`. */
+export function countRowsWithRepoId(db: Database.Database, repoId: string): number {
+  let n = 0;
+  for (const table of tablesWithRepoIdColumn(db)) {
+    n +=
+      db
+        .prepare<[string], { c: number }>(`SELECT COUNT(*) AS c FROM "${table}" WHERE repo_id = ?`)
+        .get(repoId)?.c ?? 0;
+  }
+  n += db.prepare<[string], { c: number }>('SELECT COUNT(*) AS c FROM repos WHERE id = ?').get(repoId)?.c ?? 0;
+  return n;
+}
+
+/**
+ * `delete-index` / `invalidate_cache` empty the rows but keep the `.db` file.
+ * Such a husk must not block a clone: if it holds no repo row, remove it.
+ */
+function isEmptyIndexFile(dest: string, repoId: string): boolean {
+  try {
+    const db = openDatabase(repoId);
+    const empty = getRepo(db, repoId) === null;
+    db.close();
+    if (!empty) return false;
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { unlinkSync(dest + suffix); } catch { /* absent */ }
+    }
+    return !existsSync(dest);
+  } catch {
+    return false;
+  }
+}
+
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => resolve(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  return norm(a) === norm(b);
+}

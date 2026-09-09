@@ -1,6 +1,7 @@
 import { readdirSync, existsSync } from 'fs';
 import { z } from 'zod';
-import { getIndexDir, openDatabase, getRepo } from '../../core/db/schema.js';
+import { getIndexDir, getJobsDir, openDatabase, getRepo } from '../../core/db/schema.js';
+import { readHeadDrift, formatDriftLine } from '../../core/git-head.js';
 import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
@@ -9,7 +10,10 @@ export const name = 'list_repos';
 export const description =
   'List all indexed repositories. Scans the local index directory and returns ' +
   'metadata (repo ID, root path, symbol count, file count, last indexed time) ' +
-  'for every project that has been indexed.';
+  'for every project that has been indexed. Each git-backed repo also carries `head` — ' +
+  "the sha the index reflects vs the checkout's HEAD (behindBy commits, dirtyFiles, " +
+  'inProgress when a detached re-index is running) and a one-line `freshness` verdict. ' +
+  'Read it before trusting an index: "behind" → index_folder({ path, onlyChanged: true }).';
 
 export const inputSchema = {
   workspaceId: z.string().optional().describe(
@@ -47,7 +51,17 @@ export function handler(args: { workspaceId?: string } = {}): CallToolResult {
       if (meta) {
         // Filter by workspace if specified
         if (args.workspaceId && meta.tenantId !== args.workspaceId) continue;
-        repos.push({ ...meta, workspaceId: meta.tenantId ?? 'local' });
+        // Phase 97: drift vs the working tree (bounded git calls; omitted
+        // when the root is not a git checkout or no longer exists).
+        const head = readHeadDrift(meta.rootPath, meta.gitTreeSha ?? null, {
+          jobsDir: getJobsDir(),
+          repoId,
+        });
+        repos.push({
+          ...meta,
+          workspaceId: meta.tenantId ?? 'local',
+          ...(head ? { head, freshness: formatDriftLine(head) } : {}),
+        });
       }
     } catch {
       // Corrupt or unreadable DB — skip silently

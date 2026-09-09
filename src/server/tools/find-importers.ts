@@ -4,6 +4,7 @@ import { findImporters } from '../../graph/graph-traversal.js';
 import { getFileSizesBatch } from '../../core/db/file-store.js';
 import { buildMeta } from './_meta.js';
 import { graphCoverageWarning } from './graph-coverage.js';
+import { computeExternalImports } from './external-imports.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'find_importers';
@@ -11,7 +12,10 @@ export const name = 'find_importers';
 export const description =
   'Find all files that directly import a given file. ' +
   'Returns each importing file along with its symbols. ' +
-  'Useful for understanding who depends on a module before refactoring it.';
+  'Useful for understanding who depends on a module before refactoring it. ' +
+  '`externalImports` (when present) lists the file\'s own internal-looking imports that resolved ' +
+  'to nothing here — the sign that this file sits on an index boundary and importers outside ' +
+  'the index are invisible.';
 
 export const inputSchema = {
   repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
@@ -27,6 +31,7 @@ export function handler(args: { repoId: string; filePath: string }): CallToolRes
   const allFiles = [args.filePath, ...importers.map((i) => i.file)];
   const fileSizes = getFileSizesBatch(db, args.repoId, allFiles);
   const coverage = graphCoverageWarning(db, args.repoId);
+  const externalImports = computeExternalImports(db, args.repoId, [args.filePath]);
   db.close();
 
   const rawBytes = allFiles.reduce((sum, fp) => sum + (fileSizes.get(fp) ?? 0), 0);
@@ -54,6 +59,7 @@ export function handler(args: { repoId: string; filePath: string }): CallToolRes
               })),
             })),
             ...(coverage ?? {}),
+            ...(externalImports ? { externalImports } : {}),
             _meta: buildMeta({ timingMs: Date.now() - t0, rawBytes, responseBytes }),
           },
           null,

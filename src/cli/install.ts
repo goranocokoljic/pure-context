@@ -1,5 +1,5 @@
 /**
- * `purecontext-mcp install <tool|all>  [--scope=local|global|both]  [--dry-run]  [--list]`
+ * `purecontext-mcp install <tool|all>  [--scope=local|global|both]  [--with-git-hooks]  [--dry-run]  [--list]`
  *
  * Installs PureContext agent instructions into the conventions file of the
  * specified AI coding IDE.  `install all` auto-detects installed tools and
@@ -15,6 +15,7 @@ import { createInterface } from 'readline';
 import { join } from 'path';
 import { detectInstalledIDEs } from './install-detect.js';
 import { INSTALL_WRITERS, type Scope, type InstallWriterOptions } from './install-writers.js';
+import { gitHooksStatus, installGitHooks, GIT_HOOK_NAMES } from './git-hooks.js';
 
 // ─── Scope helpers ────────────────────────────────────────────────────────────
 
@@ -100,6 +101,55 @@ async function runInstall(
   }
 }
 
+// ─── Git hooks (Phase 97) ─────────────────────────────────────────────────────
+
+export type GitHooksInstallOutcome = 'installed' | 'already' | 'not_git' | 'dry_run' | 'error';
+
+/**
+ * `--with-git-hooks`: install the post-checkout / post-merge / post-rewrite
+ * shims for the repository containing `projectRoot`. Without the flag,
+ * `hintGitHooks` prints the one-liner instead — freshness after a branch
+ * change is the most-missed step, so the installer always mentions it.
+ */
+export function maybeInstallGitHooksForProject(
+  projectRoot: string,
+  opts: { dryRun?: boolean; log?: (line: string) => void } = {},
+): GitHooksInstallOutcome {
+  const log = opts.log ?? ((l: string) => console.log(l));
+  const st = gitHooksStatus(projectRoot);
+  if (!st.hooksDir) {
+    log('  git hooks: skipped — this directory is not inside a git repository');
+    return 'not_git';
+  }
+  if (opts.dryRun) {
+    log(`  [dry-run] Would install git hooks (${GIT_HOOK_NAMES.join(', ')}) in ${st.hooksDir}`);
+    return 'dry_run';
+  }
+  const already = GIT_HOOK_NAMES.every((h) => st.installed[h]);
+  try {
+    const res = installGitHooks(projectRoot);
+    log(`  git hooks (${GIT_HOOK_NAMES.join(', ')}): ${already ? 'refreshed' : 'installed'} in ${res.hooksDir}`);
+    for (const f of res.chained) log(`    chained into existing hook: ${f}`);
+    return already ? 'already' : 'installed';
+  } catch (err) {
+    log(`  git hooks: error — ${(err as Error).message}`);
+    return 'error';
+  }
+}
+
+/** The always-printed reminder when git hooks are NOT installed for this repo. */
+export function hintGitHooks(projectRoot: string, log: (line: string) => void = (l) => console.log(l)): void {
+  const st = gitHooksStatus(projectRoot);
+  if (!st.hooksDir) return; // not a git repo — nothing to hook
+  if (GIT_HOOK_NAMES.every((h) => st.installed[h])) {
+    log('\nGit hooks: installed — checkout / merge / rebase keep the index fresh automatically.');
+    return;
+  }
+  log('\nKeep the index fresh after branch changes (recommended — one command, never blocks git):');
+  log('  npx purecontext-mcp hooks --install --git');
+  log('  (or re-run install with --with-git-hooks; remove with hooks --uninstall --git)');
+}
+
 // ─── Sub-commands ─────────────────────────────────────────────────────────────
 
 async function cmdInstallOne(
@@ -179,6 +229,7 @@ export async function runInstallCommand(args: string[]): Promise<void> {
     withHooks: args.includes('--with-hooks'),
     withReminders: args.includes('--with-reminders'),
   };
+  const withGitHooks = args.includes('--with-git-hooks');
   const toolArg = args.find((a) => !a.startsWith('--'));
 
   if (listFlag) {
@@ -189,7 +240,7 @@ export async function runInstallCommand(args: string[]): Promise<void> {
   if (!toolArg) {
     process.stderr.write(
       'Usage: purecontext-mcp install <tool|all>  [--scope=local|global|both]  ' +
-        '[--with-hooks]  [--with-reminders]  [--dry-run]  [--list]\n',
+        '[--with-git-hooks]  [--with-hooks]  [--with-reminders]  [--dry-run]  [--list]\n',
     );
     process.stderr.write(`Supported tools: ${KNOWN_TOOLS.join(', ')}\n`);
     process.exit(1);
@@ -201,5 +252,13 @@ export async function runInstallCommand(args: string[]): Promise<void> {
     await cmdInstallAll(projectRoot, dryRun, scope, opts);
   } else {
     await cmdInstallOne(toolArg, projectRoot, dryRun, scope, opts);
+  }
+
+  // Phase 97: freshness after a branch change is the step people miss, so
+  // the installer either does it (--with-git-hooks) or says how, every time.
+  if (withGitHooks) {
+    maybeInstallGitHooksForProject(projectRoot, { dryRun });
+  } else if (!dryRun) {
+    hintGitHooks(projectRoot);
   }
 }

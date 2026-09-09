@@ -46,7 +46,8 @@ describe('schema', () => {
     };
     upsertRepo(db, meta);
     const result = getRepo(db, 'abc123');
-    expect(result).toEqual(meta);
+    // gitTreeSha (Phase 97) is read back too — null until a whole-tree run records HEAD.
+    expect(result).toEqual({ ...meta, gitTreeSha: null });
   });
 
   it('upsertRepo updates existing repo', () => {

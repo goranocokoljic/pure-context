@@ -152,6 +152,11 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
       cssVariables: partial.indexing?.cssVariables ?? DEFAULT_CONFIG.indexing.cssVariables,
       commitBatchSize:
         partial.indexing?.commitBatchSize ?? DEFAULT_CONFIG.indexing.commitBatchSize,
+      changedOnlyMaxFiles:
+        partial.indexing?.changedOnlyMaxFiles ?? DEFAULT_CONFIG.indexing.changedOnlyMaxFiles,
+    },
+    hooks: {
+      inlineFileLimit: partial.hooks?.inlineFileLimit ?? DEFAULT_CONFIG.hooks.inlineFileLimit,
     },
     git: {
       coChangeDepth: partial.git?.coChangeDepth ?? DEFAULT_CONFIG.git.coChangeDepth,
@@ -239,6 +244,7 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
     telemetry: {
       enabled: partial.telemetry?.enabled ?? DEFAULT_CONFIG.telemetry.enabled,
       endpoint: partial.telemetry?.endpoint ?? DEFAULT_CONFIG.telemetry.endpoint,
+      usageLedger: partial.telemetry?.usageLedger ?? DEFAULT_CONFIG.telemetry.usageLedger,
     },
     webhooks: {
       enabled: partial.webhooks?.enabled ?? DEFAULT_CONFIG.webhooks.enabled,

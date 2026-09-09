@@ -11,6 +11,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.30.0] - 2026-09-09 — Phase 97: Freshness, Worktrees and Adoption
+
+Triggered by a reporter's session on a 26k-file automotive tree: the agent
+ran `list_repos`, built two indexes, then did the whole review on `git grep`
+— citing staleness ("an index built before these commits is worse than no
+answer"), index seams (the tree was split into three indexes on our own old
+advice), forgotten tools, and absence proofs. Plus a multi-worktree workflow
+where every worktree paid a full parse and the `WorktreeCreate` hook died on
+its 120 s timeout. No schema change.
+
+### Added
+
+- **Git hooks for branch change** — `purecontext-mcp hooks --install --git
+  [--repo <path>]` writes marker-delimited `post-checkout` / `post-merge` /
+  `post-rewrite` shims into the directory git runs hooks from
+  (`core.hooksPath` honoured; a linked worktree installs into the common dir,
+  so one install covers every worktree; a pre-existing hook body is kept and
+  chained). The shims never block git: up to `hooks.inlineFileLimit` (200)
+  changed files re-index inline with a 10 s cap, larger sets or fresh
+  worktrees run detached with a job marker. `hooks --uninstall --git`,
+  `hooks --list` shows git-hook status.
+- **Stored HEAD + changed-only re-index.** Every whole-tree local index now
+  records the commit it reflects (`repos.git_tree_sha`, previously written
+  only by the remote `index_repo` path). `index_folder({ path, onlyChanged:
+  true })` / `purecontext-mcp index-changed --repo <path>` re-index from
+  git's change list (tree diff since the stored sha ∪ `git status`) with NO
+  directory walk, falling back to a full run visibly (`mode: "full"` +
+  `reason`: `no_stored_sha`, `not_git`, `since_unreachable`,
+  `too_many_changes`, `schema_outdated`, …). `verifyIndexed` / `--verify`
+  re-hashes every indexed file for the cases git cannot report
+  (`git checkout -- <path>`). Parity proven byte-for-byte against a fresh
+  index (files, symbols, edges, import records, FTS rows).
+- **Visible drift.** `list_repos` and repo-level `check_index_staleness`
+  return `head: { indexedSha, currentSha, behindBy, dirtyFiles, inProgress,
+  status }` plus a one-line `freshness`; `index_folder` echoes `head`. The
+  PreCompact / SubagentStart / TaskCompleted hook injections carry one
+  freshness line per repo.
+- **Worktree index cloning.** A new git worktree of an indexed repository
+  seeds its index by copying a sibling worktree's `.db` (WAL-checkpointed
+  first; `repo_id` rewritten in every table by schema enumeration — no
+  hand-kept list) and applying the git delta since the sibling's stored sha.
+  Both `index_folder` and `index-changed` do it automatically on a linked
+  worktree with no index (`clonedFrom` in the response); the `WorktreeCreate`
+  hook now runs detached with no timeout; `WorktreeRemove` deletes the index
+  of Claude-managed (`.claude/worktrees/*`) worktrees. Measured: this repo
+  (992 files) full parse 40 s → clone 1.6 s; novu (7,114 files, 34k symbols,
+  89 MB index) full parse 309 s / discovery no-op 53 s → clone 4 s. Result
+  byte-identical to a from-scratch index through both routes.
+- **Local usage ledger.** `<dataDir>/usage.jsonl` records tool name, repo id,
+  timestamp and duration per MCP call — nothing else, never sent anywhere;
+  5 MB rotation; `telemetry.usageLedger: false` = zero writes.
+  `get_savings_stats` gains `calls: { session, last24h }` by tool, and the
+  TaskCompleted hook's FIRST line is `PureContext this task: N calls (…)` —
+  the "did the agent use it?" question answered without asking the agent.
+- **Boundary honesty.** `get_blast_radius`, `find_importers` and
+  `get_context_bundle` attach `externalImports { count, sample,
+  siblingIndexes, note, nextAction }` when a queried file has internal-looking
+  imports (relative / alias specifiers, the repo's own package prefix, a
+  top-level dir, the go.mod module, `crate::`) that resolved to nothing in
+  this index or to a file outside it — the "edges stop at the seam" signal.
+  Absent on a fully-resolved repo (byte-identical responses).
+- Config: `indexing.changedOnlyMaxFiles` (5000), `hooks.inlineFileLimit`
+  (200), `telemetry.usageLedger` (true). CLI: `index-changed`, `git-hook`.
+- **The git hooks are surfaced everywhere a user reads:** `install <tool|all>
+  --with-git-hooks` installs them as part of the IDE install, and without the
+  flag every `install` run (and `hooks --install`) ends with the one-liner;
+  `--help` lists `hooks --install --git`; README Quick start + a "Git hooks —
+  keep the index fresh" install section; `FULL-INSTALLATION-GUIDE.md` gains
+  a "Keep the index fresh" section that also separates git hooks (per repo)
+  from Claude Code hooks (global).
+
+### Changed
+
+- **Always-on agent rules are a task table**, not a preference: what the
+  index is for (locate / read / call sites / impact / freshness) and what it
+  is NOT for (absence proofs → `git grep`; build-file facts; files already in
+  the diff; anything across an index boundary). Session start reads
+  `freshness` before trusting an index. `hooks --install` now injects the
+  same text as `install` (it carried its own older copy of the rules —
+  the absolutist "Mandatory workflow" block Phase 91 had replaced).
+- `docs/28-operations.md` "Indexing large trees" corrected: since 1.24.0 the
+  recommendation is ONE index per build tree; scope only for privacy /
+  exclusion, and a split costs graph seams. "Branch discipline" rewritten
+  around the hooks, `onlyChanged` and cloning.
+- `AGENT_REFERENCE.md` Branches row rewritten; new Freshness and Index
+  boundaries rows; `docs/HARNESS-CONTRACT.md` §2 rewritten; README.
+
+### Notes
+
+- Indexes made before 1.30.0 report `freshness: unknown` until one
+  `index_folder` run records HEAD (no re-parse needed unless the index is
+  also pre-v11).
+- Targeted `index_file` deliberately does NOT advance the stored sha — a
+  one-file refresh after a checkout must not claim the whole tree is current.
+
+---
+
 ## [1.29.0] - 2026-09-08 — Phase 96: Query-Vocabulary Follow-ups
 
 The two retrieval-side items Phase 95 carried (its scope was pure ranking).

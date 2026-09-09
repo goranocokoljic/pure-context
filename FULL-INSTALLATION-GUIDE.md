@@ -181,6 +181,41 @@ Your API key is issued by your team's PureContext administrator. See [Team Setup
 
 ---
 
+## Keep the index fresh — git hooks (recommended)
+
+The index is keyed on the folder path, not the branch. After a `git checkout`,
+`pull`, `merge` or `rebase` it is behind until something re-indexes — and an
+agent that suspects that will fall back to `grep`. Install the git hooks once
+per repository (any worktree):
+
+```bash
+npx purecontext-mcp hooks --install --git
+```
+
+This writes marker-delimited `post-checkout`, `post-merge` and `post-rewrite`
+shims into the directory git runs hooks from — `core.hooksPath` when set
+(husky / lefthook), else the repository's shared `hooks/` directory, so one
+install covers every worktree. A pre-existing hook body is kept; our block is
+inserted after its shebang and removed cleanly by `hooks --uninstall --git`.
+
+After each of those git operations the index is brought up to HEAD from git's
+change list (no directory walk). Up to 200 changed files re-index inline with
+a 10 s cap; larger changes, or a brand-new worktree, run in a detached process
+while `list_repos` reports `re-index in progress`. A new `git worktree add`
+clones the sibling worktree's index and applies the delta instead of parsing
+from scratch. Every shim exits 0 — a git command can never fail because of
+PureContext.
+
+`npx purecontext-mcp hooks --list` shows the state; `install all
+--with-git-hooks` does this as part of the IDE install. Without hooks, ask the
+agent for `index_folder({ path, onlyChanged: true })` after a branch change —
+`list_repos` shows a `freshness` line per repo either way.
+
+These are **git** hooks, per repository. The **Claude Code** hooks
+(`hooks --install`, opt-in via `install … --with-hooks`) are a different,
+global set: PostToolUse re-index after the agent's own edits, PreCompact
+snapshot, worktree create/remove, task summaries.
+
 ## Teaching your AI agent to use PureContext well
 
 Installing PureContext gives your AI agent access to the tools. Adding the agent instructions tells it *how* to use them efficiently — which tool to pick for each situation, in what order to call them, and what patterns to avoid.
@@ -226,8 +261,9 @@ npx purecontext-mcp install continue
 Useful flags:
 
 ```bash
-npx purecontext-mcp install --list           # show detection state, write nothing
-npx purecontext-mcp install all --dry-run    # preview which writers would run
+npx purecontext-mcp install --list                 # show detection state, write nothing
+npx purecontext-mcp install all --dry-run          # preview which writers would run
+npx purecontext-mcp install all --with-git-hooks   # also install the git hooks for this repo
 ```
 
 ### Supported tools

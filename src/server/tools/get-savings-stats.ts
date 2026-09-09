@@ -4,6 +4,7 @@ import {
   resetSavings,
   getSessionStart,
 } from '../../core/token-tracker.js';
+import { getSessionCalls, getLast24hCalls, getSessionId } from '../../core/db/usage-ledger.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 // ─── Context window sizes (in tokens) ────────────────────────────────────────
@@ -19,8 +20,10 @@ export const name = 'get_savings_stats';
 
 export const description =
   'Query cumulative token savings tracked across all PureContext tool calls. ' +
-  'Returns total tokens saved, cost avoided per model tier, and context-window equivalents. ' +
-  'Pass reset:true to clear the counter and start fresh.';
+  'Returns total tokens saved, cost avoided per model tier, and context-window equivalents, ' +
+  'plus `calls` — how many PureContext tool calls this server session and the last 24 h made, ' +
+  'by tool (from the local usage ledger; names, ids and timestamps only). ' +
+  'Pass reset:true to clear the savings counter and start fresh.';
 
 export const inputSchema = {
   reset: z
@@ -61,6 +64,11 @@ export function handler(args: { reset?: boolean }): CallToolResult {
             total_tokens_saved: total,
             equivalent_context_windows,
             session_start: getSessionStart().toISOString(),
+            calls: {
+              sessionId: getSessionId(),
+              session: getSessionCalls(),
+              last24h: getLast24hCalls(),
+            },
             _meta: {
               powered_by: 'PureContext MCP',
             },

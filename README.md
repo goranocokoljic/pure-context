@@ -36,6 +36,12 @@ npx purecontext-mcp@latest install all
 
 # Prefer to wire up Claude Code by hand? Register the server manually:
 claude mcp add purecontext-mcp -- npx purecontext-mcp@latest
+
+# Recommended: keep the index fresh after checkout / pull / merge / rebase.
+# Installs post-checkout, post-merge and post-rewrite git hooks for this repo
+# (all worktrees). They re-index only what git says changed and never block git.
+npx purecontext-mcp@latest hooks --install --git
+# (or: npx purecontext-mcp@latest install all --with-git-hooks)
 ```
 
 Then in a Claude Code conversation:
@@ -243,6 +249,33 @@ Symbol indexing and search cover all 34. Dependency **edges** (blast radius, imp
 claude mcp add purecontext-mcp -- npx purecontext-mcp@latest
 ```
 
+### Git hooks — keep the index fresh (recommended)
+
+An index built before your last `git checkout` / `pull` / `rebase` returns
+old symbol locations. Fix that once per repository:
+
+```bash
+npx purecontext-mcp@latest hooks --install --git        # in any worktree of the repo
+npx purecontext-mcp@latest hooks --list                 # shows the state
+npx purecontext-mcp@latest hooks --uninstall --git      # removes them
+```
+
+What you get:
+
+- `post-checkout`, `post-merge`, `post-rewrite` shims in the directory git runs
+  hooks from (`core.hooksPath` respected — husky / lefthook friendly; an
+  existing hook body is kept and chained). A linked worktree installs into the
+  shared hooks dir, so one install covers every worktree.
+- After each of those git operations the index is brought up to HEAD from
+  git's own change list — no directory walk. Small changes run inline (10 s
+  cap); big ones run detached, and `list_repos` shows `re-index in progress`.
+- `git worktree add` clones the sibling worktree's index instead of
+  re-parsing (measured: a 7k-file tree went from 309 s to 4 s).
+- Nothing here can make a git command fail — every shim exits 0.
+
+Without the hooks, run `index_folder({ path, onlyChanged: true })` after a
+branch change; `list_repos` reports `freshness` per repo either way.
+
 ### Claude Desktop
 
 Edit `~/.claude/claude_desktop_config.json`:
@@ -335,10 +368,15 @@ PCTX_DATA_DIR=/tmp/pctx-scratch npx purecontext-mcp
 The test suite sets this automatically (`test/setup.ts`), so `npm test` never
 touches your real `~/.purecontext`.
 
-**Branches:** an index is keyed on the folder path, not the git branch. After
-switching branches in place, re-run `index_folder` — it re-parses changes and
-prunes files the branch does not have. For parallel branch work, use one git
-worktree per branch: separate paths get independent indexes.
+**Branches:** an index is keyed on the folder path, not the git branch, and
+since 1.30.0 it records the commit it reflects (`head` / `freshness` on
+`list_repos`). Install the git hooks once — `npx purecontext-mcp hooks
+--install --git` — and every checkout / merge / rebase re-indexes what
+changed from git's own change list (no directory walk, never blocks git).
+Without hooks: `index_folder({ path, onlyChanged: true })` after an in-place
+switch. For parallel branch work use one git worktree per branch: a new
+worktree clones a sibling's index and applies the delta instead of
+re-parsing.
 
 → [Full installation guide](FULL-INSTALLATION-GUIDE.md)
 

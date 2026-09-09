@@ -456,6 +456,66 @@ export async function cmdIndexFile(cliArgs: string[]): Promise<void> {
 }
 
 /**
+ * `purecontext-mcp index-changed --repo <dir> [--since <sha>] [--verify] [--job] [--no-clone]`
+ * Phase 97: bring an index up to the working tree from git's change list
+ * (no discovery walk); full-index fallback with a visible reason. `--job`
+ * writes a job marker so list_repos / check_index_staleness report
+ * "re-index in progress" while a detached hook run is working.
+ */
+export async function cmdIndexChanged(cliArgs: string[]): Promise<void> {
+  const repoIdx = cliArgs.indexOf('--repo');
+  const sinceIdx = cliArgs.indexOf('--since');
+  const repoPath = repoIdx >= 0 ? resolvePath(cliArgs[repoIdx + 1]) : process.cwd();
+  const since = sinceIdx >= 0 ? cliArgs[sinceIdx + 1] : undefined;
+  const verify = cliArgs.includes('--verify');
+  const job = cliArgs.includes('--job');
+  const noClone = cliArgs.includes('--no-clone'); // parity / measurement: force a from-scratch parse
+
+  const { reindexChanged } = await import('../core/index-changed.js');
+  const { computeRepoId, getJobsDir } = await import('../core/db/schema.js');
+  const { writeJobMarker, clearJobMarker, readHeadDrift } = await import('../core/git-head.js');
+  const repoId = computeRepoId(repoPath);
+  const cfg = loadConfig();
+
+  if (job) writeJobMarker(getJobsDir(), { repoId, rootPath: repoPath, mode: 'index-changed' });
+  try {
+    const result = await reindexChanged(repoPath, {
+      since,
+      verifyIndexed: verify,
+      concurrency: cfg.concurrency,
+      fileLimit: cfg.fileLimit,
+      ...(noClone ? { cloneFromWorktree: false } : {}),
+    });
+    const head = readHeadDrift(repoPath, result.headSha ?? null);
+    console.log(
+      JSON.stringify(
+        {
+          repoId: result.repoId,
+          mode: result.mode,
+          since: result.since,
+          ...(result.reason ? { reason: result.reason } : {}),
+          ...(result.changedFiles !== undefined
+            ? { changedFiles: result.changedFiles, deletedFiles: result.deletedFiles }
+            : {}),
+          ...(result.verifiedStale !== undefined ? { verifiedStale: result.verifiedStale } : {}),
+          ...(result.clonedFrom ? { clonedFrom: result.clonedFrom } : {}),
+          filesIndexed: result.filesIndexed,
+          symbolsFound: result.symbolsFound,
+          edgesFound: result.edgesFound,
+          durationMs: result.durationMs,
+          errors: result.errors,
+          ...(head ? { head } : {}),
+        },
+        null,
+        2,
+      ),
+    );
+  } finally {
+    if (job) clearJobMarker(getJobsDir(), repoId);
+  }
+}
+
+/**
  * `purecontext-mcp analyze-diff --diff <patch> [--diff-file <path>] [--repo <path>]`
  * Parse a unified git diff and print an impact analysis as JSON.
  * Exits non-zero when reviewPriority is "critical".

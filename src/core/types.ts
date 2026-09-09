@@ -109,6 +109,14 @@ export interface RepoMetadata {
   clonePath: string | null;
   /** Owning tenant. Defaults to 'local' for single-tenant deployments. */
   tenantId?: string;
+  /**
+   * Commit sha the index was last brought up to (Phase 97). Written by every
+   * whole-tree local index (`indexFolder`, `reindexChanged`) and by the remote
+   * `index_repo` path; null on pre-1.30 indexes and non-git directories.
+   * Targeted `reindexFiles` deliberately leaves it alone — a one-file refresh
+   * after a checkout must not claim the whole tree is current.
+   */
+  gitTreeSha?: string | null;
 }
 
 // ─── Indexing ─────────────────────────────────────────────────────────────────
@@ -153,6 +161,13 @@ export interface IndexOptions {
   concurrency?: number;
   /** Tenant/workspace ID to associate with this index operation. Defaults to 'local'. */
   tenantId?: string;
+  /**
+   * Phase 97 (Task 602): when the folder is a linked git worktree with no
+   * index yet, seed its index by cloning a sibling worktree's index and let the
+   * run continue incrementally from there. Default true. Set false to force a
+   * from-scratch parse (parity tests do).
+   */
+  cloneFromWorktree?: boolean;
   /** Workspace plan — used to enforce free-tier limits. */
   workspacePlan?: 'free' | 'team' | 'enterprise';
   /** Current repo count for this workspace — used to enforce free-tier repo limit. */
@@ -225,6 +240,13 @@ export interface IndexResult {
    * whole nested repo).
    */
   excludedDirs?: Array<{ dir: string; source: 'builtin' | 'gitignore' | 'config' }>;
+  /**
+   * Phase 97 (Task 602): the index was seeded by cloning a sibling worktree's
+   * index before this run, instead of parsing every file from scratch.
+   */
+  clonedFrom?: { repoId: string; rootPath: string; sha: string | null; cloneMs: number };
+  /** Commit sha recorded on the index at the end of this run (null: not git). */
+  headSha?: string | null;
 }
 
 export interface DiscoveredFile {

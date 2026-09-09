@@ -50,6 +50,9 @@ import { updateFileGitMeta } from './db/file-store.js';
 import { insertGitCommits, deleteGitMetadataForFile } from './db/git-metadata-store.js';
 import { insertCommitFiles, deleteCommitFilesForRepo } from './db/co-change-store.js';
 import { buildTestMappings } from './test-mapper.js';
+import { setGitTreeSha } from './db/schema.js';
+import { gitHeadSha } from './git-head.js';
+import { maybeCloneWorktreeIndex } from './worktree-clone.js';
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -77,6 +80,14 @@ export async function indexFolder(
   }
 
   logger.info(`Indexing ${absRoot} (repo ${repoId})`);
+
+  // ── 0b. Worktree seed (Phase 97, Task 602) ───────────────────────────────
+  // A linked worktree with no index yet is seeded from a sibling worktree's
+  // index (copy + repo_id rewrite) so the run below is incremental — the hash
+  // cache skips every unchanged file and the prune step removes what this
+  // branch lacks — instead of a from-scratch parse. No-op when an index
+  // exists, the folder is not a linked worktree, or no sibling qualifies.
+  const clone = options.cloneFromWorktree === false ? null : maybeCloneWorktreeIndex(absRoot, repoId);
 
   // ── 1. Open database and ensure repo row exists ───────────────────────────
   const db = openDatabase(repoId);
@@ -479,60 +490,16 @@ export async function indexFolder(
 
   // ── 10f. Git metadata capture ─────────────────────────────────────────────
   // Runs after file content is indexed so git metadata is additive; failures
-  // never abort indexing.  Skipped silently for non-git directories.
-  if (toProcess.length > 0 && !options.skipGit && await isGitRepo(absRoot)) {
-    logger.info(`Capturing git metadata for ${toProcess.length} file(s)`);
-
-    // Single repo-level `git log` pass instead of 2 spawns per file. On a
-    // many-file repo the old per-file path spawned thousands of git processes
-    // (4-wide), which dominated indexing time — minutes on a fast disk, far
-    // worse on machines where each `git.exe` launch is scanned by antivirus.
-    const fileHistoryDepth = getConfig().git?.fileHistoryDepth ?? 0;
-    try {
-      const histories = await readRepoFileHistories(absRoot, { maxCommits: fileHistoryDepth });
-      if (histories) {
-        db.transaction(() => {
-          for (const { relPath } of toProcess) {
-            const meta = histories.get(relPath.replace(/\\/g, '/'));
-            if (!meta) continue;
-
-            updateFileGitMeta(db, repoId, relPath, {
-              lastCommitSha: meta.lastCommit.sha,
-              lastCommitAuthor: meta.lastCommit.authorName,
-              lastCommitDate: meta.lastCommit.date,
-              lastCommitMessage: meta.lastCommit.message,
-              commitCount: meta.commitCount,
-            });
-
-            // Replace stored commit history for this file.
-            deleteGitMetadataForFile(db, repoId, relPath);
-            insertGitCommits(db, repoId, relPath, meta.history);
-          }
-        })();
-      }
-    } catch (err) {
-      logger.debug(`Git metadata capture skipped: ${err}`);
-    }
-
-    logger.info('Git metadata capture complete');
-
-    // ── Co-change capture (repo-level commit→files) ──────────────────────────
-    // A single `git log --name-only -n N` at the repo root, stored in the
-    // dedicated commit_files table (separate from git_metadata). Gated on
-    // git.coChangeDepth > 0; failures never abort indexing.
-    const coChangeDepth = getConfig().git?.coChangeDepth ?? 0;
-    if (coChangeDepth > 0) {
-      try {
-        const commits = await readRepoCommitFiles(absRoot, coChangeDepth);
-        if (commits && commits.length > 0) {
-          deleteCommitFilesForRepo(db, repoId);
-          insertCommitFiles(db, repoId, commits);
-          logger.info(`Co-change capture: ${commits.length} commit(s) recorded`);
-        }
-      } catch (err) {
-        logger.debug(`Co-change capture skipped: ${err}`);
-      }
-    }
+  // never abort indexing. Skipped silently for non-git directories.
+  // (Only probed when something was processed — a no-op run spawns no git.)
+  const isGit = toProcess.length > 0 && !options.skipGit && (await isGitRepo(absRoot));
+  if (isGit) {
+    await captureGitMetadata(
+      db,
+      repoId,
+      absRoot,
+      toProcess.map((e) => e.relPath),
+    );
   }
 
   // ── 11. Update repo metadata ──────────────────────────────────────────────
@@ -555,10 +522,32 @@ export async function indexFolder(
     tenantId: options.tenantId ?? 'local',
   });
 
+  // ── 11b. Record HEAD (Phase 97, Task 601) ─────────────────────────────────
+  // The sha the index now reflects. Read by list_repos / check_index_staleness
+  // (drift), by `reindexChanged` (delta base) and by worktree cloning (delta
+  // base for the sibling). NULL for non-git folders. Written only by
+  // whole-tree runs — `reindexFiles` never touches it.
+  // Recorded on EVERY run, including no-ops: HEAD can move without touching
+  // an indexed file (docs-only commits) and the index still reflects it.
+  // gitHeadSha is null outside a git checkout, so no probe is needed.
+  const headSha = options.skipGit ? null : gitHeadSha(absRoot);
+  setGitTreeSha(db, repoId, headSha);
+
   db.close();
 
   const result: IndexResult = {
     repoId,
+    headSha,
+    ...(clone
+      ? {
+          clonedFrom: {
+            repoId: clone.source.repoId,
+            rootPath: clone.source.rootPath,
+            sha: clone.source.sha,
+            cloneMs: clone.cloneMs,
+          },
+        }
+      : {}),
     filesIndexed: toProcess.length,
     filesSkipped,
     symbolsFound,
@@ -596,6 +585,73 @@ export async function indexFolder(
   }).catch(() => { /* telemetry errors are always silent */ });
 
   return result;
+}
+
+/**
+ * Git metadata for `relPaths` (per-file last commit / history rows) plus the
+ * repo-level co-change capture. ONE `git log` pass for the histories and one
+ * for co-change regardless of file count. Shared by `indexFolder` and
+ * `reindexChanged` (Phase 97) so a changed-only run leaves the same git
+ * columns a full run would. Never throws.
+ */
+export async function captureGitMetadata(
+  db: Database.Database,
+  repoId: string,
+  absRoot: string,
+  relPaths: string[],
+): Promise<void> {
+  logger.info(`Capturing git metadata for ${relPaths.length} file(s)`);
+
+  // Single repo-level `git log` pass instead of 2 spawns per file. On a
+  // many-file repo the old per-file path spawned thousands of git processes
+  // (4-wide), which dominated indexing time — minutes on a fast disk, far
+  // worse on machines where each `git.exe` launch is scanned by antivirus.
+  const fileHistoryDepth = getConfig().git?.fileHistoryDepth ?? 0;
+  try {
+    const histories = await readRepoFileHistories(absRoot, { maxCommits: fileHistoryDepth });
+    if (histories) {
+      db.transaction(() => {
+        for (const relPath of relPaths) {
+          const meta = histories.get(relPath.replace(/\\/g, '/'));
+          if (!meta) continue;
+
+          updateFileGitMeta(db, repoId, relPath, {
+            lastCommitSha: meta.lastCommit.sha,
+            lastCommitAuthor: meta.lastCommit.authorName,
+            lastCommitDate: meta.lastCommit.date,
+            lastCommitMessage: meta.lastCommit.message,
+            commitCount: meta.commitCount,
+          });
+
+          // Replace stored commit history for this file.
+          deleteGitMetadataForFile(db, repoId, relPath);
+          insertGitCommits(db, repoId, relPath, meta.history);
+        }
+      })();
+    }
+  } catch (err) {
+    logger.debug(`Git metadata capture skipped: ${err}`);
+  }
+
+  logger.info('Git metadata capture complete');
+
+  // ── Co-change capture (repo-level commit→files) ──────────────────────────
+  // A single `git log --name-only -n N` at the repo root, stored in the
+  // dedicated commit_files table (separate from git_metadata). Gated on
+  // git.coChangeDepth > 0; failures never abort indexing.
+  const coChangeDepth = getConfig().git?.coChangeDepth ?? 0;
+  if (coChangeDepth > 0) {
+    try {
+      const commits = await readRepoCommitFiles(absRoot, coChangeDepth);
+      if (commits && commits.length > 0) {
+        deleteCommitFilesForRepo(db, repoId);
+        insertCommitFiles(db, repoId, commits);
+        logger.info(`Co-change capture: ${commits.length} commit(s) recorded`);
+      }
+    } catch (err) {
+      logger.debug(`Co-change capture skipped: ${err}`);
+    }
+  }
 }
 
 /**

@@ -50,6 +50,8 @@ The always-on instructions (mandatory workflow, decision rules, anti-patterns) l
 | One go/no-go before merging a completed change | `merge_readiness` |
 | Cheap single-file re-index after a write (mid-run) | `index_file` |
 | Is the index current for these files? (no discovery) | `check_index_staleness` |
+| Is the index behind HEAD? (after checkout / pull / rebase) | `list_repos` → `head` / `freshness`, then `index_folder({ onlyChanged: true })` |
+| Did the agent actually use PureContext? | `get_savings_stats` → `calls` (local usage ledger) |
 | Pre-write dedup/drift check for a NEW symbol (greenfield) | `check_consistency` |
 | 5-axis codebase health score (CI gate / dashboard) | `health_radar` |
 | Compare health before and after a refactoring | `diff_health_radar` |
@@ -82,14 +84,18 @@ The sections below document every tool's parameters in full, grouped by category
 ## Indexing tools
 
 ### `list_repos`
-Always call this first. Returns all indexed repos with their `repoId`, path, file count, and last indexed time.
+Always call this first. Returns all indexed repos with their `repoId`, path, file count, and last indexed time. Git-backed repos also carry `head` — `{ indexedSha, currentSha, behindBy, dirtyFiles, inProgress, status }` — and a one-line `freshness`. **Read it before trusting an index:** `behind` → `index_folder({ path, onlyChanged: true })`; `re-index in progress` → a detached hook run is working, wait or grep for now; `unknown` → the index predates 1.30.0, run `index_folder` once.
 
 ### `index_folder`
-Index a local directory. Returns `repoId`. Re-indexing is incremental — only changed files are re-parsed.
+Index a local directory. Returns `repoId`. Re-indexing is incremental by content hash but DISCOVERY-bound (every file is stat-ed).
 
 - `path` (required) — absolute path to project root
-- `force` (optional) — set `true` to force re-index of all files, even unchanged ones
 - `fileLimit` (optional) — override the configured file limit for this run
+- `onlyChanged` (optional) — re-index from git's change list since the stored sha (plus uncommitted edits); no directory walk. Falls back to a full run with `mode: "full"` + `reason` (`no_stored_sha`, `not_git`, `since_unreachable`, `too_many_changes`, …).
+- `since` (optional, with `onlyChanged`) — diff from this commit instead of the stored sha
+- `verifyIndexed` (optional, with `onlyChanged`) — also re-hash every indexed file (covers `git checkout -- <path>`)
+
+The response echoes `head` (drift after the run) and `clonedFrom` when a new git worktree's index was seeded by cloning a sibling's index instead of parsing from scratch. CLI equivalent: `purecontext-mcp index-changed --repo <path> [--since <sha>] [--verify]`. Git hooks call it for you: `purecontext-mcp hooks --install --git`.
 
 ### `index_file`
 Targeted re-index of one or a few specific files WITHOUT the full-tree discovery pass `index_folder` performs — O(one file), independent of repo size. This is the mid-run freshness path: call it after writing/editing a file so subsequent searches reflect current state. Firing `index_folder` after every edit is discovery-bound and stalls; `index_file` does not.
@@ -113,13 +119,16 @@ Force a full re-index by clearing content hashes. Use when the index seems stale
 
 ### Keeping the index fresh
 
-The file watcher triggers incremental re-indexing automatically. If you suspect the index is stale:
+```
+list_repos()                                     → read head / freshness per repo
+index_folder({ path, onlyChanged: true })        → after checkout / pull / merge / rebase (git delta, seconds)
+index_file({ repoId, filePaths })                → after your own writes (the PostToolUse hook does this)
+check_index_staleness({ repoId, filePaths })     → per-file verdict without discovery
+index_folder({ path })                           → full incremental walk (first index, or reason: full fallback)
+invalidate_cache({ repoId })                     → clear hashes, then index_folder (last resort)
+```
 
-```
-index_folder({ path, force: false })   → incremental (changed files only)
-index_folder({ path, force: true })    → full re-index (all files)
-invalidate_cache({ repoId })           → clear hashes, then index_folder
-```
+With `purecontext-mcp hooks --install --git`, checkout / merge / rebase in any worktree of the repository re-index automatically and `git worktree add` clones the sibling index.
 
 ---
 
@@ -706,7 +715,9 @@ Every response includes:
 |------|-----------|-----------|
 | **Dependency Graph** | Package-style imports are resolved for the JVM family (Kotlin, Java, Scala, Groovy — via each file's declared `package`; repos indexed before v1.15.0 need one re-index), C# (v1.16.0 — `using` directives via each file's declared `namespace`; namespace usings fan out to all files in the namespace, capped by `graph.maxWildcardFanout`; repos indexed before v1.16.0 need one re-index), Python (v1.17.0 — layout-convention resolver: absolute, from-, and relative imports incl. `src/` layouts; `sys.path`/editable installs/`pyproject` package-dir remapping not supported), Go (v1.17.0 — `go.mod` resolver, workspaces supported; an import resolves to every `.go` file of the target package dir), and — since v1.19.0 — PHP (declared namespace + composer.json PSR-4 fallback), Haskell (declared module header), Elixir (module symbol map, longest-prefix fallback), Erlang (module basename; `-include` by `.hrl` basename), and Fortran (MODULE symbol map, case-insensitive), and — since v1.20.0 — Rust (mod-tree resolver: module map from the `src/` file layout per Cargo crate, `crate::`/`self::`/`super::` relative resolution, workspace crates by name, globs capped by `graph.maxWildcardFanout`; `#[path]` overrides and macro-generated modules not followed). Ruby still produces **no dependency edges**: `get_blast_radius`, `find_importers`, `find_cycles`, `get_call_hierarchy`, `get_context_bundle` imports, architecture tools, and the centrality axis of `get_symbol_risk` return empty or partial results there — an empty result means "no graph", not "safe to change". Repos indexed before the version that added their resolver need one re-index. | Use `find_references` (content scan, graph-independent) and `get_co_change` (git history) for the unresolved language. |
 | **Dependency Graph** | Edges are FILE-level, not symbol-level: every symbol in a file returns an identical `get_blast_radius`/`get_context_bundle` result (`granularity: "file"` in the response). The walk is depth-capped (default 3) — `truncated: true` means deeper dependents exist beyond the result. | Treat the radius as the symbol's file's radius; raise `depth` when `truncated` is true and completeness matters. |
-| **Branches** | The index is keyed on the absolute path — every branch checked out at that path shares one index; nothing tracks HEAD. Since v1.22.0 `index_folder` prunes files the current branch does not have (`filesPruned` in the response), so re-indexing after an in-place branch switch converges to the checked-out state. On older versions it accreted the union of all branches. | Re-run `index_folder` after every in-place branch switch. Cleanest: one git worktree per branch — separate paths get fully independent indexes (by design). |
+| **Branches** | The index is keyed on the absolute path — every branch checked out at that path shares one index. Since v1.30.0 the index records the commit it reflects (`head` on `list_repos`), git hooks (`hooks --install --git`) re-index on checkout / merge / rebase from git's change list, and a new worktree clones a sibling's index instead of re-parsing. `index_folder` prunes files the current branch does not have (`filesPruned`). | Install the git hooks. Without them: `index_folder({ onlyChanged: true })` after every in-place switch / pull. One worktree per branch stays the cleanest pattern — and is now cheap. |
+| **Freshness** | Only whole-tree runs (`index_folder`, `index-changed`) advance the stored sha; `index_file` after a checkout refreshes one file but leaves `head` reporting `behind` on purpose. A working-tree edit that is later reverted (`git checkout -- <path>`) is invisible to both the git delta and `git status` — `verifyIndexed: true` (the post-checkout hook's flag-0 path) catches it. Indexes made before 1.30.0 report `unknown` until one `index_folder` run. | Read `freshness` at session start; `behind` → `onlyChanged: true`. |
+| **Index boundaries** | Dependency edges never cross an index boundary. A build tree split into several indexes makes every blast radius / importer list a LOWER bound at the seam. Since v1.30.0 `get_blast_radius` / `find_importers` / `get_context_bundle` attach `externalImports` (unresolved internal-looking imports + `siblingIndexes`) when the queried file sits on a seam. The index can never prove absence ("nothing references X"). | Index the whole build tree as one root (durable since 1.24.0). For cross-index callers `find_cross_repo_usages`; for absence proofs `git grep`. |
 | **AI Summaries** | Summaries describe intent, not contract. Stale summaries exist until re-index. | Always verify with `get_symbol_source` before modifying. |
 | **AI Summaries** | `get_architecture_doc` requires `ai.allowRemoteAI: true`. | `detect_antipatterns` and `get_quality_metrics` work without AI. |
 | **Git History** | Rename/move breaks history continuity. | Future: `git log --follow` tracking. |
