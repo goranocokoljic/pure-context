@@ -2,6 +2,8 @@ import { readdirSync, existsSync } from 'fs';
 import { z } from 'zod';
 import { getIndexDir, getJobsDir, openDatabase, getRepo } from '../../core/db/schema.js';
 import { readHeadDrift, formatDriftLine } from '../../core/git-head.js';
+import { getRepoLinks } from '../../core/db/link-store.js';
+import { describeLinkDrift, formatLinkDriftLine } from '../../core/workspace-links.js';
 import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
@@ -13,7 +15,10 @@ export const description =
   'for every project that has been indexed. Each git-backed repo also carries `head` — ' +
   "the sha the index reflects vs the checkout's HEAD (behindBy commits, dirtyFiles, " +
   'inProgress when a detached re-index is running) and a one-line `freshness` verdict. ' +
-  'Read it before trusting an index: "behind" → index_folder({ path, onlyChanged: true }).';
+  'Read it before trusting an index: "behind" → index_folder({ path, onlyChanged: true }). ' +
+  '`links` (when present) lists the indexes this one resolves dependency edges across ' +
+  '(same git checkout, or graph.linkedRepos) with per-link drift — "moved" means re-run ' +
+  'index_folder on THIS repo to re-resolve the seam.';
 
 export const inputSchema = {
   workspaceId: z.string().optional().describe(
@@ -47,6 +52,7 @@ export function handler(args: { workspaceId?: string } = {}): CallToolResult {
     try {
       const db = openDatabase(repoId);
       const meta = getRepo(db, repoId);
+      const storedLinks = meta ? getRepoLinks(db, repoId) : [];
       db.close();
       if (meta) {
         // Filter by workspace if specified
@@ -57,10 +63,16 @@ export function handler(args: { workspaceId?: string } = {}): CallToolResult {
           jobsDir: getJobsDir(),
           repoId,
         });
+        // Phase 99: per-link drift (sibling HEAD now vs when the edges were built).
+        const links = storedLinks.map((l) => {
+          const d = describeLinkDrift(l);
+          return { ...d, line: formatLinkDriftLine(d) };
+        });
         repos.push({
           ...meta,
           workspaceId: meta.tenantId ?? 'local',
           ...(head ? { head, freshness: formatDriftLine(head) } : {}),
+          ...(links.length > 0 ? { links } : {}),
         });
       }
     } catch {

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { openDatabase } from '../../core/db/schema.js';
-import { getAllDepEdges } from '../../core/db/dep-store.js';
+import { getAllDepEdges, getCrossDepEdges } from '../../core/db/dep-store.js';
+import { getRepoLinks } from '../../core/db/link-store.js';
 import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { DepEdge } from '../../core/types.js';
@@ -10,7 +11,9 @@ export const name = 'get_graph';
 export const description =
   'Return the dependency graph for a repository as nodes and edges. ' +
   'Nodes represent files; edges represent import relationships. ' +
-  'Optionally focus on a specific file and limit traversal depth.';
+  'Optionally focus on a specific file and limit traversal depth. ' +
+  'Edges into LINKED indexes (since 1.32.0) appear with target nodes named `<linkedRepoId>:<path>` ' +
+  'and `data.repoId` set; `links` lists those indexes.';
 
 export const inputSchema = {
   repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
@@ -42,6 +45,8 @@ export interface GraphNodeData {
   label: string;
   path: string;
   symbolCount: number;
+  /** Phase 99: set on nodes that live in a LINKED index. */
+  repoId?: string;
 }
 
 export interface GraphNode {
@@ -121,7 +126,18 @@ export function handler(args: {
   const limit = args.limit ?? 200;
 
   const db = openDatabase(args.repoId);
-  const allEdges = getAllDepEdges(db, args.repoId);
+  // Phase 99: cross edges join the graph with the target renamed to
+  // `<repoId>:<path>` so it never collides with a local path.
+  const links = getRepoLinks(db, args.repoId).map((l) => ({ repoId: l.linkedRepoId, rootPath: l.linkedRootPath }));
+  const crossNodes = new Map<string, string>(); // node id → owning repo id
+  const allEdges: DepEdge[] = [
+    ...getAllDepEdges(db, args.repoId),
+    ...getCrossDepEdges(db, args.repoId).map((e) => {
+      const id = `${e.targetRepoId}:${e.targetFile}`;
+      crossNodes.set(id, e.targetRepoId!);
+      return { ...e, targetFile: id };
+    }),
+  ];
 
   // Build per-file symbol counts from dep edges (approximation using distinct files)
   const symbolCountMap = new Map<string, number>();
@@ -189,14 +205,19 @@ export function handler(args: {
   const keptFiles = new Set(sortedFiles);
 
   // Build nodes
-  const nodes: GraphNode[] = sortedFiles.map((filePath) => ({
-    id: filePath,
-    data: {
-      label: basename(filePath),
-      path: filePath,
-      symbolCount: symbolCountMap.get(filePath) ?? 0,
-    },
-  }));
+  const nodes: GraphNode[] = sortedFiles.map((filePath) => {
+    const linkedRepo = crossNodes.get(filePath);
+    const path = linkedRepo ? filePath.slice(linkedRepo.length + 1) : filePath;
+    return {
+      id: filePath,
+      data: {
+        label: basename(path),
+        path,
+        symbolCount: symbolCountMap.get(filePath) ?? 0,
+        ...(linkedRepo ? { repoId: linkedRepo } : {}),
+      },
+    };
+  });
 
   // Build edges (only between kept nodes, deduplicate)
   const edgeIds = new Set<string>();

@@ -4,6 +4,8 @@ import { relative, resolve, isAbsolute, sep, join } from 'path';
 import { getIndexDir, getJobsDir, openDatabase, getRepo } from '../../core/db/schema.js';
 import { readHeadDrift, formatDriftLine } from '../../core/git-head.js';
 import { getFileHash } from '../../core/db/file-store.js';
+import { getRepoLinks } from '../../core/db/link-store.js';
+import { describeLinkDrift, formatLinkDriftLine } from '../../core/workspace-links.js';
 import { computeHash } from '../../core/hash-cache.js';
 import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -84,6 +86,15 @@ export function handler(args: { repoId: string; filePaths?: string[] }): CallToo
       const head = repo
         ? readHeadDrift(absRoot, repo.gitTreeSha ?? null, { jobsDir: getJobsDir(), repoId: args.repoId })
         : null;
+      // Phase 99: per-link drift. Edges live on THIS index, so a moved sibling
+      // means THIS root must rebuild (index_folder) to re-resolve the seam.
+      const links = repo
+        ? getRepoLinks(db, args.repoId).map((l) => {
+            const d = describeLinkDrift(l);
+            return { ...d, line: formatLinkDriftLine(d) };
+          })
+        : [];
+      const linksStale = links.filter((l) => l.status === 'moved' || l.status === 'missing' || l.status === 'pending');
       return {
         content: [
           {
@@ -98,6 +109,19 @@ export function handler(args: { repoId: string; filePaths?: string[] }): CallToo
                 symbolCount: repo?.symbolCount ?? 0,
                 ...(schemaWarning ? { schemaWarning } : {}),
                 ...(head ? { head, freshness: formatDriftLine(head) } : {}),
+                ...(links.length > 0
+                  ? {
+                      links,
+                      linksFresh: linksStale.length === 0,
+                      ...(linksStale.length > 0
+                        ? {
+                            linksNote:
+                              `${linksStale.length} link(s) pending, moved or missing — run ` +
+                              'index_folder({ path: <this root> }) to (re-)resolve the seam.',
+                          }
+                        : {}),
+                    }
+                  : {}),
                 note: head
                   ? 'head compares the indexed sha with the checkout. "behind" → ' +
                     'index_folder({ path, onlyChanged: true }) (git delta, no discovery walk); ' +

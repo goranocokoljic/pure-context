@@ -13,6 +13,7 @@ interface DbEdgeRow {
   target_symbol_id: string | null;
   edge_type: string;
   specifier: string;
+  target_repo_id?: string | null;
 }
 
 interface DbSymbolRow {
@@ -38,6 +39,7 @@ function rowToEdge(row: DbEdgeRow): DepEdge {
     targetSymbolId: row.target_symbol_id,
     edgeType: row.edge_type,
     specifier: row.specifier,
+    targetRepoId: row.target_repo_id ?? null,
   };
 }
 
@@ -68,9 +70,9 @@ export function insertEdges(
 
   const stmt = db.prepare(`
     INSERT INTO dep_edges
-      (repo_id, source_file, source_symbol_id, target_file, target_symbol_id, edge_type, specifier, tenant_id)
+      (repo_id, source_file, source_symbol_id, target_file, target_symbol_id, edge_type, specifier, tenant_id, target_repo_id)
     VALUES
-      (@repoId, @sourceFile, @sourceSymbolId, @targetFile, @targetSymbolId, @edgeType, @specifier, @tenantId)
+      (@repoId, @sourceFile, @sourceSymbolId, @targetFile, @targetSymbolId, @edgeType, @specifier, @tenantId, @targetRepoId)
   `);
 
   const insert = db.transaction((rows: DepEdge[]) => {
@@ -85,6 +87,7 @@ export function insertEdges(
           edgeType: e.edgeType,
           specifier: e.specifier,
           tenantId,
+          targetRepoId: e.targetRepoId ?? null,
         });
       } catch (err) {
         throw new StorageError(
@@ -127,8 +130,10 @@ export function deleteEdgesByFile(
   repoId: string,
   filePath: string,
 ): void {
+  // Incoming edges: LOCAL rows only (Phase 99) — a cross edge's target_file
+  // is a path in ANOTHER index; a same-named local file must not delete it.
   db.prepare(
-    'DELETE FROM dep_edges WHERE repo_id = ? AND (source_file = ? OR target_file = ?)',
+    'DELETE FROM dep_edges WHERE repo_id = ? AND (source_file = ? OR (target_file = ? AND target_repo_id IS NULL))',
   ).run(repoId, filePath, filePath);
 }
 
@@ -154,7 +159,14 @@ export function deleteEdgesByType(
   db.prepare('DELETE FROM dep_edges WHERE repo_id = ? AND edge_type = ?').run(repoId, edgeType);
 }
 
-/** All dependency edges for a repo. */
+// Phase 99 discipline (P3): every pre-99 read below returns LOCAL edges only
+// (`target_repo_id IS NULL`), so a repo without links behaves byte-identically
+// and local-only consumers (cycles, dead code, coupling, architecture, render)
+// never see a target path that belongs to another index. Cross-index rows are
+// reached through the explicit `getCross*` readers / `getForwardDeps` with
+// `includeCross`.
+
+/** All LOCAL dependency edges for a repo. */
 export function getAllDepEdges(
   db: Database.Database,
   repoId: string,
@@ -163,41 +175,56 @@ export function getAllDepEdges(
   if (tenantId !== undefined) {
     return db
       .prepare<[string, string], DbEdgeRow>(
-        'SELECT * FROM dep_edges WHERE repo_id = ? AND tenant_id = ?',
+        'SELECT * FROM dep_edges WHERE repo_id = ? AND tenant_id = ? AND target_repo_id IS NULL',
       )
       .all(repoId, tenantId)
       .map(rowToEdge);
   }
   return db
-    .prepare<[string], DbEdgeRow>('SELECT * FROM dep_edges WHERE repo_id = ?')
+    .prepare<[string], DbEdgeRow>('SELECT * FROM dep_edges WHERE repo_id = ? AND target_repo_id IS NULL')
     .all(repoId)
     .map(rowToEdge);
 }
 
-/** Files and symbols that `sourceFile` imports (forward walk, one hop). */
+/** Every CROSS-index edge stored in this repo (target lives in a linked index). */
+export function getCrossDepEdges(db: Database.Database, repoId: string): DepEdge[] {
+  return db
+    .prepare<[string], DbEdgeRow>(
+      'SELECT * FROM dep_edges WHERE repo_id = ? AND target_repo_id IS NOT NULL',
+    )
+    .all(repoId)
+    .map(rowToEdge);
+}
+
+/**
+ * Files and symbols that `sourceFile` imports (forward walk, one hop). Local
+ * edges only unless `includeCross` — cross rows carry `targetRepoId`.
+ */
 export function getForwardDeps(
   db: Database.Database,
   repoId: string,
   sourceFile: string,
   tenantId?: string,
+  includeCross = false,
 ): DepEdge[] {
+  const crossClause = includeCross ? '' : ' AND target_repo_id IS NULL';
   if (tenantId !== undefined) {
     return db
       .prepare<[string, string, string], DbEdgeRow>(
-        'SELECT * FROM dep_edges WHERE repo_id = ? AND source_file = ? AND tenant_id = ?',
+        `SELECT * FROM dep_edges WHERE repo_id = ? AND source_file = ? AND tenant_id = ?${crossClause}`,
       )
       .all(repoId, sourceFile, tenantId)
       .map(rowToEdge);
   }
   return db
     .prepare<[string, string], DbEdgeRow>(
-      'SELECT * FROM dep_edges WHERE repo_id = ? AND source_file = ?',
+      `SELECT * FROM dep_edges WHERE repo_id = ? AND source_file = ?${crossClause}`,
     )
     .all(repoId, sourceFile)
     .map(rowToEdge);
 }
 
-/** Files and symbols that import `targetFile` (reverse walk, one hop). */
+/** Files and symbols that import `targetFile` (reverse walk, one hop; local edges). */
 export function getReverseDeps(
   db: Database.Database,
   repoId: string,
@@ -207,20 +234,20 @@ export function getReverseDeps(
   if (tenantId !== undefined) {
     return db
       .prepare<[string, string, string], DbEdgeRow>(
-        'SELECT * FROM dep_edges WHERE repo_id = ? AND target_file = ? AND tenant_id = ?',
+        'SELECT * FROM dep_edges WHERE repo_id = ? AND target_file = ? AND tenant_id = ? AND target_repo_id IS NULL',
       )
       .all(repoId, targetFile, tenantId)
       .map(rowToEdge);
   }
   return db
     .prepare<[string, string], DbEdgeRow>(
-      'SELECT * FROM dep_edges WHERE repo_id = ? AND target_file = ?',
+      'SELECT * FROM dep_edges WHERE repo_id = ? AND target_file = ? AND target_repo_id IS NULL',
     )
     .all(repoId, targetFile)
     .map(rowToEdge);
 }
 
-/** Distinct file paths that import `targetFile`. */
+/** Distinct file paths that import `targetFile` (local edges). */
 export function getImportersOf(
   db: Database.Database,
   repoId: string,
@@ -230,17 +257,56 @@ export function getImportersOf(
   if (tenantId !== undefined) {
     return db
       .prepare<[string, string, string], { source_file: string }>(
-        'SELECT DISTINCT source_file FROM dep_edges WHERE repo_id = ? AND target_file = ? AND tenant_id = ?',
+        'SELECT DISTINCT source_file FROM dep_edges WHERE repo_id = ? AND target_file = ? AND tenant_id = ? AND target_repo_id IS NULL',
       )
       .all(repoId, targetFile, tenantId)
       .map((r) => r.source_file);
   }
   return db
     .prepare<[string, string], { source_file: string }>(
-      'SELECT DISTINCT source_file FROM dep_edges WHERE repo_id = ? AND target_file = ?',
+      'SELECT DISTINCT source_file FROM dep_edges WHERE repo_id = ? AND target_file = ? AND target_repo_id IS NULL',
     )
     .all(repoId, targetFile)
     .map((r) => r.source_file);
+}
+
+/**
+ * Phase 99 reverse seam query: files in `db`'s repo `repoId` whose edges land
+ * on `targetFile` inside the index `targetRepoId`. Served by the v12 partial
+ * index on (repo_id, target_repo_id, target_file).
+ */
+export function getCrossImportersOf(
+  db: Database.Database,
+  repoId: string,
+  targetRepoId: string,
+  targetFile: string,
+): string[] {
+  return db
+    .prepare<[string, string, string], { source_file: string }>(
+      'SELECT DISTINCT source_file FROM dep_edges WHERE repo_id = ? AND target_repo_id = ? AND target_file = ?',
+    )
+    .all(repoId, targetRepoId, targetFile)
+    .map((r) => r.source_file);
+}
+
+/**
+ * Phase 99: per target file, how many distinct files of repo `repoId` import
+ * it across the seam into index `targetRepoId` (afferent coupling contribution).
+ */
+export function getCrossAfferentCounts(
+  db: Database.Database,
+  repoId: string,
+  targetRepoId: string,
+): Map<string, number> {
+  const rows = db
+    .prepare<[string, string], { target_file: string; n: number }>(
+      'SELECT target_file, COUNT(DISTINCT source_file) AS n FROM dep_edges ' +
+        'WHERE repo_id = ? AND target_repo_id = ? GROUP BY target_file',
+    )
+    .all(repoId, targetRepoId);
+  const out = new Map<string, number>();
+  for (const r of rows) out.set(r.target_file, r.n);
+  return out;
 }
 
 // ─── Coupling map ─────────────────────────────────────────────────────────────
@@ -280,7 +346,7 @@ export function getCouplingMap(
                COUNT(DISTINCT target_file)       AS ce,
                GROUP_CONCAT(DISTINCT target_file) AS efferent_list
         FROM dep_edges
-        WHERE repo_id = ? AND source_file = ?
+        WHERE repo_id = ? AND source_file = ? AND target_repo_id IS NULL
         GROUP BY source_file
       `)
       .all(repoId, filePath);
@@ -291,7 +357,7 @@ export function getCouplingMap(
                COUNT(DISTINCT source_file)       AS ca,
                GROUP_CONCAT(DISTINCT source_file) AS afferent_list
         FROM dep_edges
-        WHERE repo_id = ? AND target_file = ?
+        WHERE repo_id = ? AND target_file = ? AND target_repo_id IS NULL
         GROUP BY target_file
       `)
       .all(repoId, filePath);
@@ -302,7 +368,7 @@ export function getCouplingMap(
                COUNT(DISTINCT target_file)       AS ce,
                GROUP_CONCAT(DISTINCT target_file) AS efferent_list
         FROM dep_edges
-        WHERE repo_id = ?
+        WHERE repo_id = ? AND target_repo_id IS NULL
         GROUP BY source_file
       `)
       .all(repoId);
@@ -313,7 +379,7 @@ export function getCouplingMap(
                COUNT(DISTINCT source_file)       AS ca,
                GROUP_CONCAT(DISTINCT source_file) AS afferent_list
         FROM dep_edges
-        WHERE repo_id = ?
+        WHERE repo_id = ? AND target_repo_id IS NULL
         GROUP BY target_file
       `)
       .all(repoId);
@@ -514,7 +580,7 @@ export function findClassImplementations(
   const importerFiles = db
     .prepare<[string, string], { source_file: string }>(`
       SELECT DISTINCT source_file FROM dep_edges
-      WHERE repo_id = ? AND target_file = ?
+      WHERE repo_id = ? AND target_file = ? AND target_repo_id IS NULL
     `)
     .all(repoId, targetFilePath)
     .map((r) => r.source_file);
@@ -657,6 +723,7 @@ export function findDeadExports(
             WHERE e.repo_id = ?
               AND e.tenant_id = ?
               AND e.target_file = s.file_path
+              AND e.target_repo_id IS NULL
           )
         ORDER BY s.file_path, s.start_byte
       `)
@@ -673,6 +740,7 @@ export function findDeadExports(
           SELECT 1 FROM dep_edges e
           WHERE e.repo_id = ?
             AND e.target_file = s.file_path
+            AND e.target_repo_id IS NULL
         )
       ORDER BY s.file_path, s.start_byte
     `)

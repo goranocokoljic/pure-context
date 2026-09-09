@@ -121,6 +121,9 @@ export async function handler(
             ...(result.filesPruned !== undefined ? { filesPruned: result.filesPruned } : {}),
             ...(result.excludedDirs ? { excludedDirs: result.excludedDirs } : {}),
             ...(result.clonedFrom ? { clonedFrom: result.clonedFrom } : {}),
+            ...(result.linksUsed && result.linksUsed.length > 0
+              ? { linksUsed: result.linksUsed, crossEdgesFound: result.crossEdgesFound ?? 0 }
+              : {}),
             ...(head ? { head } : {}),
             _meta: buildMeta({ timingMs: result.durationMs }),
           },

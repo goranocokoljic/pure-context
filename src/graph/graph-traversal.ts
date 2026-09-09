@@ -4,6 +4,13 @@ import { getSymbolsByFile, getSymbolById, getSymbolsByRepo } from '../core/db/sy
 import { getForwardDeps, getReverseDeps, getImportersOf, findDeadExports, getAllDepEdges, findClassesExtending, findClassOrInterfaceByName } from '../core/db/dep-store.js';
 import { getFileContent } from '../core/db/file-store.js';
 import { lineOfByte } from '../core/offsets.js';
+import {
+  collectWalk,
+  crossImportedLocalFiles,
+  walkWorkspace,
+  type LinkedFileGroup,
+  type Workspace,
+} from './workspace-graph.js';
 
 // ─── Return types ─────────────────────────────────────────────────────────────
 
@@ -19,6 +26,12 @@ export interface TraversalResult {
    * before v1.22.0 — agents treated a depth-3 cutoff as "everything".
    */
   truncated: boolean;
+  /**
+   * Phase 99: files reached in LINKED indexes, grouped per index. Present
+   * only when a workspace with ≥1 link was supplied (a repo without links
+   * returns the pre-99 shape exactly). `files` / `symbols` stay local.
+   */
+  linked?: LinkedFileGroup[];
 }
 
 export interface ImporterInfo {
@@ -38,9 +51,12 @@ export function getBlastRadius(
   repoId: string,
   db: Database.Database,
   depth = 3,
+  ws?: Workspace,
 ): TraversalResult {
   const startSymbol = getSymbolById(db, repoId, symbolId);
   if (!startSymbol) return empty();
+
+  if (ws && ws.links.length > 0) return workspaceTraversal(ws, startSymbol.filePath, depth, 'reverse');
 
   const visitedFiles = new Set<string>();
   const truncated = bfsFiles(startSymbol.filePath, repoId, db, depth, visitedFiles, 'reverse');
@@ -58,14 +74,35 @@ export function getContextBundle(
   repoId: string,
   db: Database.Database,
   depth = 3,
+  ws?: Workspace,
 ): TraversalResult {
   const startSymbol = getSymbolById(db, repoId, symbolId);
   if (!startSymbol) return empty();
+
+  if (ws && ws.links.length > 0) return workspaceTraversal(ws, startSymbol.filePath, depth, 'forward');
 
   const visitedFiles = new Set<string>();
   const truncated = bfsFiles(startSymbol.filePath, repoId, db, depth, visitedFiles, 'forward');
 
   return { ...collectResult(visitedFiles, repoId, db), truncated };
+}
+
+/** Phase 99: the same walk over the workspace graph (local + linked indexes). */
+function workspaceTraversal(
+  ws: Workspace,
+  startFile: string,
+  depth: number,
+  direction: 'forward' | 'reverse',
+): TraversalResult {
+  const walk = walkWorkspace(ws, startFile, depth, direction);
+  const { localFiles, localSymbols, linked } = collectWalk(ws, walk);
+  return {
+    symbols: localSymbols,
+    files: localFiles,
+    tokenEstimate: estimateTokens(localSymbols) + linked.reduce((n, g) => n + estimateTokens(g.symbols), 0),
+    truncated: walk.truncated,
+    linked,
+  };
 }
 
 /**
@@ -91,8 +128,14 @@ export function findImporters(
 export function findDeadCode(
   repoId: string,
   db: Database.Database,
+  ws?: Workspace,
 ): SymbolRecord[] {
-  return findDeadExports(db, repoId);
+  const dead = findDeadExports(db, repoId);
+  // Phase 99: a file some LINKED index imports is not dead.
+  if (!ws || ws.links.length === 0) return dead;
+  const crossImported = crossImportedLocalFiles(ws);
+  if (crossImported.size === 0) return dead;
+  return dead.filter((s) => !crossImported.has(s.filePath));
 }
 
 // ─── BFS helpers ─────────────────────────────────────────────────────────────

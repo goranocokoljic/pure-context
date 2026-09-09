@@ -227,6 +227,9 @@ export async function handler(args: {
         targetSymbolId: e.targetSymbolId,
         edgeType: e.edgeType,
         specifier: e.specifier,
+        // Cross edges keep their target repo id: if that index is not present
+        // locally they read as dangling-linked in graphCoverage, never followed.
+        ...(e.targetRepoId ? { targetRepoId: e.targetRepoId } : {}),
       }));
       insertEdges(db, edges, 'local');
     }

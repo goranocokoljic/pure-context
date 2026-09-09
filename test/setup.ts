@@ -46,3 +46,15 @@ if (!process.env['PCTX_DATA_DIR']) {
   mkdirSync(testDataDir, { recursive: true });
   process.env['PCTX_DATA_DIR'] = testDataDir;
 }
+
+/**
+ * Phase 99: every fixture under test/fixtures/ is a disjoint root of THIS
+ * checkout, so by the workspace rule they would all link to each other across
+ * parallel workers (cross edges, reverse rows written into another worker's
+ * database mid-transaction, edge counts that depend on which fixtures happen
+ * to be indexed). Linking is off for the suite; tests that exercise it pass
+ * `crossIndex: 'auto'` explicitly (test/graph/cross-index-e2e.test.ts).
+ */
+if (!process.env['PCTX_CROSS_INDEX']) {
+  process.env['PCTX_CROSS_INDEX'] = 'off';
+}

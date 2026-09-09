@@ -21,7 +21,7 @@ import {
   tablesWithRepoIdColumn,
   maybeCloneWorktreeIndex,
 } from '../../src/core/worktree-clone.js';
-import { computeRepoId, openDatabase, getRepo, getIndexDir } from '../../src/core/db/schema.js';
+import { computeRepoId, openDatabase, getRepo, getIndexDir, SCHEMA_VERSION } from '../../src/core/db/schema.js';
 import { gitHeadSha, isLinkedWorktree, gitWorktreeList, gitHooksDir } from '../../src/core/git-head.js';
 import { registerHandler } from '../../src/handlers/handler-registry.js';
 import { typescriptHandler } from '../../src/handlers/typescript.js';
@@ -229,7 +229,7 @@ describe('sibling selection rules', () => {
     } finally {
       // openDatabase re-runs migrations; restore the version explicitly.
       const mdb2 = openDatabase(mainRepoId);
-      mdb2.prepare('UPDATE repos SET schema_version = 11 WHERE id = ?').run(mainRepoId);
+      mdb2.prepare('UPDATE repos SET schema_version = ? WHERE id = ?').run(SCHEMA_VERSION, mainRepoId);
       mdb2.close();
     }
   }, 60_000);

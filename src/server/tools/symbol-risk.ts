@@ -21,7 +21,8 @@
 
 import type Database from 'better-sqlite3';
 import { getCommitsInWindow } from '../../core/db/git-metadata-store.js';
-import { getCouplingMap } from '../../core/db/dep-store.js';
+import { getCouplingMap, getCrossAfferentCounts } from '../../core/db/dep-store.js';
+import { openWorkspace } from '../../graph/workspace-graph.js';
 import { getBlastRadius } from '../../graph/graph-traversal.js';
 import { countCommits } from '../../core/db/co-change-store.js';
 import { getCoChange, type CoChangeResult } from './co-change.js';
@@ -163,9 +164,22 @@ export function buildRiskContext(db: Database.Database, repoId: string): RiskCon
 
   // ── Centrality: afferent coupling per file. ─────────────────────────────────
   const coupling = getCouplingMap(db, repoId);
-  const centralityDist = coupling.map((c) => c.afferentCoupling);
   const afferentByFile = new Map<string, number>();
   for (const c of coupling) afferentByFile.set(c.filePath, c.afferentCoupling);
+  // Phase 99: importers in LINKED indexes count toward centrality — a file
+  // the whole build tree depends on is central even when its own index holds
+  // no importer. Zero cost (and byte-identical) on a repo without links.
+  const ws = openWorkspace(db, repoId);
+  try {
+    for (const m of ws.links) {
+      for (const [file, n] of getCrossAfferentCounts(m.db, m.repoId, repoId)) {
+        afferentByFile.set(file, (afferentByFile.get(file) ?? 0) + n);
+      }
+    }
+  } finally {
+    ws.close();
+  }
+  const centralityDist = ws.links.length > 0 ? [...afferentByFile.values()] : coupling.map((c) => c.afferentCoupling);
 
   // ── Complexity distribution across all symbols. ─────────────────────────────
   const complexityRows = db

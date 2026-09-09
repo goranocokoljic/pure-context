@@ -17,7 +17,11 @@ type DatabaseConstructor = new (filename: string) => SqliteDatabase;
 // v11 (Phase 90): values-correctness bump, no DDL change. Pre-v11 indexes
 // stored UTF-16 char indices in start_byte/end_byte (char-vs-byte corruption);
 // index-manager force-re-parses pre-v11 repos once so spans become true bytes.
-export const SCHEMA_VERSION = 11;
+// v12 (Phase 99): additive — `dep_edges.target_repo_id` (NULL = local edge)
+// and the `repo_links` table (the linked indexes the last graph build used).
+// Old indexes open unchanged; cross-index edges appear on the next
+// whole-tree `index_folder`.
+export const SCHEMA_VERSION = 12;
 
 const DDL = `
 PRAGMA journal_mode = WAL;
@@ -99,6 +103,22 @@ CREATE TABLE IF NOT EXISTS dep_edges (
   edge_type        TEXT NOT NULL,
   specifier        TEXT NOT NULL,
   tenant_id        TEXT NOT NULL DEFAULT 'local',
+  target_repo_id   TEXT,
+  FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
+
+-- v12 (Phase 99): the linked indexes the LAST graph build resolved against.
+-- linked_sha = the sibling's HEAD at that time (per-link drift).
+CREATE TABLE IF NOT EXISTS repo_links (
+  repo_id          TEXT    NOT NULL,
+  linked_repo_id   TEXT    NOT NULL,
+  linked_root_path TEXT    NOT NULL,
+  linked_sha       TEXT,
+  linked_at        INTEGER NOT NULL,
+  source           TEXT    NOT NULL DEFAULT 'auto',
+  relation         TEXT    NOT NULL DEFAULT 'sibling',
+  built            INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (repo_id, linked_repo_id),
   FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
 
@@ -393,6 +413,22 @@ function runMigrations(db: InstanceType<DatabaseConstructor>): void {
     db.exec(`
       CREATE INDEX IF NOT EXISTS idx_files_declared_package ON files(repo_id, declared_package)
         WHERE declared_package IS NOT NULL
+    `);
+  }
+
+  // Migration v11 → v12 (Phase 99): cross-index edges. Additive — existing
+  // rows get NULL (= local edge); the partial index lives ONLY here (a
+  // base-DDL index on the new column would crash pre-v12 DBs opened before
+  // migrations run — the v9 lesson). `repo_links` is created by the DDL.
+  if (dbVersion < 12) {
+    const edgeCols = db.prepare("PRAGMA table_info(dep_edges)").all() as Array<{ name: string }>;
+    if (!edgeCols.some((c) => c.name === 'target_repo_id')) {
+      db.exec('ALTER TABLE dep_edges ADD COLUMN target_repo_id TEXT');
+    }
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_dep_edges_target_repo
+        ON dep_edges(repo_id, target_repo_id, target_file)
+        WHERE target_repo_id IS NOT NULL
     `);
   }
 }

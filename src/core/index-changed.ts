@@ -238,7 +238,12 @@ export async function reindexChanged(
   );
 
   // ── Targeted re-index + git metadata + new sha ────────────────────────────
-  const result = await reindexFiles(repoId, changed, deleted, { adapters });
+  // Phase 99: a cloned seed lost the sibling's cross edges (they were the
+  // sibling worktree's) — rediscover THIS root's links and re-resolve once.
+  const result = await reindexFiles(repoId, changed, deleted, {
+    adapters,
+    ...(clone ? { refreshLinks: true } : {}),
+  });
 
   if (!options.skipGit && changed.length > 0) {
     const db2 = openDatabase(repoId);

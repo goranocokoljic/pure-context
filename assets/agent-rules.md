@@ -12,7 +12,8 @@ PureContext is an indexed symbol graph of the repo. It is the right tool for som
 | Prove NOTHING references X across a tree (absence proof) | `git grep` / `grep` | the index — it cannot prove absence |
 | Build-file / settings / config facts | read the file (`get_file_content` or Read) | the index |
 | Files already in the diff you are reviewing | read them | the index |
-| Anything across an index boundary (another repo / unindexed subtree) | `find_cross_repo_usages` + grep | a blast radius — edges stop at the seam |
+| Impact across a split build tree (several indexes in ONE checkout) | the same graph tools — check `list_repos` → `links` first; `linked` / `linkedImporters` carry the other side | assuming the seam is a wall (edges cross linked indexes since 1.32.0) |
+| Anything across an UNLINKED boundary (another repo, worktree, unindexed subtree) | `find_cross_repo_usages` + grep | a blast radius — edges stop at an unlinked seam |
 
 ### Session start
 
@@ -32,7 +33,7 @@ PureContext is judgment, not actuation: you make the edit; these tools say what 
 ### Reading results honestly
 
 - `verdict: "no_match"` from `search_symbols` = not in the index. Report the gap; do not retry many variants.
-- `graphCoverage: "empty"` or `externalImports` on a graph result = the graph is missing or stops at an index seam; an empty blast radius there is NOT "safe to change".
+- `graphCoverage: "empty"` or `externalImports` on a graph result = the graph is missing or stops at an UNLINKED index seam; an empty blast radius there is NOT "safe to change". A link whose status is `moved` → `index_folder` on the root you are querying.
 - Rename / delete / move: `check_rename_safe` / `check_delete_safe` / `check_move_safe` first.
 
 Full tool reference: `AGENT_REFERENCE.md` in the project root; harness loop recipes: `docs/HARNESS-CONTRACT.md`.

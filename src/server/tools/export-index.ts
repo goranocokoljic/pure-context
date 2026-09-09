@@ -91,6 +91,8 @@ interface BundleDepEdge {
   edgeType: string;
   specifier: string;
   tenantId: string;
+  /** Phase 99: linked index holding the target (absent/null = local edge). */
+  targetRepoId?: string | null;
 }
 
 interface BundleVector {
@@ -208,6 +210,7 @@ export async function handler(args: {
       edgeType: row.edge_type,
       specifier: row.specifier,
       tenantId: row.tenant_id,
+      ...(row.target_repo_id ? { targetRepoId: row.target_repo_id } : {}),
     }));
 
     const vectors: BundleVector[] = embeddingRows.map((row) => ({
@@ -326,6 +329,7 @@ interface DbEdgeRow {
   edge_type: string;
   specifier: string;
   tenant_id: string;
+  target_repo_id?: string | null;
 }
 
 interface DbEmbeddingRow {

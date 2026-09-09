@@ -1,3 +1,4 @@
+import { isAbsolute, relative, resolve as resolvePath } from 'node:path';
 import type { ImportRecord, DepEdge } from '../core/types.js';
 import type { PathResolver } from './path-resolver.js';
 import { DECLARED_MODULE_EXTENSIONS, type JvmResolver } from './jvm-resolver.js';
@@ -28,6 +29,28 @@ export interface BuildGraphOptions {
    * indexed file matches. Omitted → pre-98 verbatim behavior.
    */
   indexedFiles?: IndexedFileSet;
+  /**
+   * Phase 99 (Task 615): linked indexes, in link order. A record the LOCAL
+   * resolution leaves empty is offered to each link in turn — the first one
+   * that answers wins (deterministic: callers pass links sorted by root
+   * path). A hit becomes a CROSS edge: `targetFile` is relative to the linked
+   * root and `targetRepoId` names it. Validation is the Phase-98 rule applied
+   * to the linked index's own file set — never a dangling row.
+   */
+  links?: LinkedGraphTarget[];
+}
+
+/**
+ * One linked index as the graph builder sees it. Both accessors are LAZY so
+ * a build where every import resolves locally never pays for a sibling's
+ * resolver maps (the JVM map on a jenkins-sized tree is ~1 s).
+ */
+export interface LinkedGraphTarget {
+  repoId: string;
+  /** Absolute root of the linked index. */
+  rootPath: string;
+  indexedFiles(): IndexedFileSet;
+  families(): FamilyResolvers | undefined;
 }
 
 export interface FamilyResolvers {
@@ -130,17 +153,44 @@ export function buildGraph(
         ? { jvm: familyResolvers as JvmResolver }
         : (familyResolvers as FamilyResolvers);
   const dispatch = buildDispatch(families);
+  const links = options?.links ?? [];
+  // Per-link dispatch maps, built on first use (the families() accessor is lazy).
+  const linkDispatch = new Map<string, Map<string, FamilyResolveFn>>();
+  const dispatchFor = (link: LinkedGraphTarget): Map<string, FamilyResolveFn> => {
+    let d = linkDispatch.get(link.repoId);
+    if (!d) {
+      d = buildDispatch(link.families() ?? {});
+      linkDispatch.set(link.repoId, d);
+    }
+    return d;
+  };
 
-  // Deduplicate by (sourceFile, targetFile) to avoid flooding the dep table
-  // with one row per named import specifier from the same module.
+  // Deduplicate by (sourceFile, targetRepo, targetFile) to avoid flooding the
+  // dep table with one row per named import specifier from the same module.
   const seen = new Set<string>();
   const edges: DepEdge[] = [];
+  const push = (rec: ImportRecord, targetFile: string, targetRepoId: string | null) => {
+    const key = `${rec.sourceFile}\0${targetRepoId ?? ''}\0${targetFile}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    edges.push({
+      repoId,
+      sourceFile: rec.sourceFile,
+      sourceSymbolId: null,
+      targetFile,
+      targetSymbolId: null,
+      edgeType: detectEdgeType(rec),
+      specifier: rec.specifier,
+      ...(targetRepoId ? { targetRepoId } : {}),
+    });
+  };
 
   for (const rec of imports) {
     if (!rec.sourceFile) continue; // guard against unfilled sourceFile
 
-    // Resolve the path(s) if the handler left resolvedPath null
+    // ── Local resolution (unchanged since Phase 98) ──────────────────────────
     let targetFiles: string[];
+    let viaPathResolver = false;
     if (rec.resolvedPath !== null) {
       targetFiles = options?.indexedFiles
         ? resolvePrefilledTarget(rec, options.indexedFiles, resolver)
@@ -150,29 +200,114 @@ export function buildGraph(
       if (familyFn) {
         targetFiles = familyFn(rec);
       } else {
+        viaPathResolver = true;
         const resolved = resolver.resolve(rec.specifier, rec.sourceFile);
         targetFiles = resolved === null ? [] : [resolved];
       }
     }
 
-    for (const targetFile of targetFiles) {
-      const key = `${rec.sourceFile}\0${targetFile}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-
-      edges.push({
-        repoId,
-        sourceFile: rec.sourceFile,
-        sourceSymbolId: null,
-        targetFile,
-        targetSymbolId: null,
-        edgeType: detectEdgeType(rec),
-        specifier: rec.specifier,
-      });
+    // ── Cross-index resolution (Phase 99) ───────────────────────────────────
+    if (links.length > 0) {
+      // (a) The disk path resolver followed `../../lib/x` OUT of this root.
+      //     If a linked root holds that file, it is a cross edge; otherwise the
+      //     pre-99 behavior stands (the row is the seam externalImports reports).
+      if (viaPathResolver && targetFiles.length === 1 && escapesRoot(targetFiles[0]!)) {
+        const cross = crossTargetFromDisk(targetFiles[0]!, resolver.projectRoot, links);
+        if (cross) {
+          push(rec, cross.targetFile, cross.repoId);
+          continue;
+        }
+      }
+      // (b) Nothing local answered: offer the record to each link in order.
+      if (targetFiles.length === 0 && eligibleForLinks(rec)) {
+        const cross = resolveAcrossLinks(rec, links, dispatchFor);
+        if (cross) {
+          for (const t of cross.targetFiles) push(rec, t, cross.repoId);
+          continue;
+        }
+      }
     }
+
+    for (const targetFile of targetFiles) push(rec, targetFile, null);
   }
 
   return edges;
+}
+
+// ─── Cross-index helpers (Phase 99) ──────────────────────────────────────────
+
+/** The disk resolver is LOCAL; a linked probe must never consult it. */
+const NULL_RESOLVER: PathResolver = { projectRoot: '', resolve: () => null };
+
+/**
+ * The importer's path as seen by a LINKED resolver. Family resolvers use the
+ * source path for three things: self-exclusion (`f !== sourceFile`), the
+ * same-module preference, and test-importer detection. Across a link the
+ * first two are meaningless — and the self-exclusion is actively wrong when
+ * both roots hold a file at the SAME relative path (jenkins: `core/` and
+ * `test/` both have `src/test/java/jenkins/security/Security3657Test.java`;
+ * the sibling's copy was dropped as "myself"). A prefix no index can contain
+ * keeps the test-path shape (`/src/test/`) and defeats the other two.
+ */
+const CROSS_SOURCE_PREFIX = '__linked_importer__/';
+
+function escapesRoot(rel: string): boolean {
+  const n = rel.replace(/\\/g, '/');
+  return n === '..' || n.startsWith('../') || isAbsolute(rel);
+}
+
+/**
+ * Relative / crate-relative specifiers name a place INSIDE the importer's own
+ * tree; a same-shaped path in another index is a coincidence, not an import.
+ */
+function eligibleForLinks(rec: ImportRecord): boolean {
+  const s = rec.specifier;
+  if (s.startsWith('.')) return false;
+  if (/^(crate|self|super)(::|$)/.test(s)) return false;
+  return true;
+}
+
+function toLinkedRelative(absPath: string, linkedRoot: string): string | null {
+  const rel = relative(linkedRoot, absPath);
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return null;
+  return rel.split('\\').join('/');
+}
+
+function crossTargetFromDisk(
+  localRel: string,
+  localRoot: string,
+  links: LinkedGraphTarget[],
+): { repoId: string; targetFile: string } | null {
+  const abs = resolvePath(localRoot, localRel);
+  for (const link of links) {
+    const rel = toLinkedRelative(abs, link.rootPath);
+    if (rel === null) continue;
+    const stored = link.indexedFiles().byNorm.get(rel);
+    if (stored !== undefined) return { repoId: link.repoId, targetFile: stored };
+  }
+  return null;
+}
+
+function resolveAcrossLinks(
+  rec: ImportRecord,
+  links: LinkedGraphTarget[],
+  dispatchFor: (link: LinkedGraphTarget) => Map<string, FamilyResolveFn>,
+): { repoId: string; targetFiles: string[] } | null {
+  const ext = extOf(rec.sourceFile);
+  for (const link of links) {
+    let targets: string[] = [];
+    if (rec.resolvedPath !== null) {
+      // Prefilled targets: the Phase-98 validation against the LINKED file set
+      // (repo-relative and suffix probes apply; importer-relative probes miss
+      // by construction — the importer's directory is not in that index).
+      targets = resolvePrefilledTarget(rec, link.indexedFiles(), NULL_RESOLVER);
+    } else {
+      const fn = dispatchFor(link).get(ext);
+      if (fn) targets = fn({ ...rec, sourceFile: CROSS_SOURCE_PREFIX + rec.sourceFile });
+    }
+    if (targets.length > 0) return { repoId: link.repoId, targetFiles: targets };
+  }
+  return null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

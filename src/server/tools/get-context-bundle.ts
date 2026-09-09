@@ -11,6 +11,8 @@ import { BYTES_PER_TOKEN } from '../../core/token-tracker.js';
 import { buildMeta } from './_meta.js';
 import { graphCoverageWarning } from './graph-coverage.js';
 import { computeExternalImports } from './external-imports.js';
+import { getRepo } from '../../core/db/schema.js';
+import { openWorkspace, workspaceRawBytes } from '../../graph/workspace-graph.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'get_context_bundle';
@@ -19,6 +21,8 @@ export const description =
   "Forward-walk the dependency graph from a symbol's FILE to collect everything needed to understand it. " +
   'Returns the symbol plus transitively imported files and their symbols (file-granular, depth-capped). ' +
   'Includes a token estimate so you can gauge context size before loading. ' +
+  'Since 1.32.0 the walk follows imports INTO linked indexes (same git checkout, or ' +
+  'graph.linkedRepos): those files come back under `linked`, per index. ' +
   'When git co-change data exists (git.coChangeDepth > 0), also returns ' +
   'historicalNeighbors — files that historically change together with the ' +
   'target but are not reachable via imports (e.g. a route and its test).';
@@ -99,7 +103,19 @@ function buildHistoricalNeighbors(
 export function handler(args: { repoId: string; symbolId: string; depth?: number }): CallToolResult {
   const t0 = Date.now();
   const db = openDatabase(args.repoId);
-  const result = getContextBundle(args.symbolId, args.repoId, db, args.depth);
+  const ws = openWorkspace(db, args.repoId, getRepo(db, args.repoId)?.rootPath ?? '');
+  let result: ReturnType<typeof getContextBundle>;
+  let linkedRawBytes = 0;
+  try {
+    result = getContextBundle(args.symbolId, args.repoId, db, args.depth, ws);
+    linkedRawBytes = workspaceRawBytes(
+      ws,
+      (result.linked ?? []).flatMap((g) => g.files.map((path) => ({ repoId: g.repoId, path }))),
+    );
+  } finally {
+    ws.close();
+  }
+  const links = ws.links.map((m) => ({ repoId: m.repoId, rootPath: m.rootPath }));
 
   const fileSizes = getFileSizesBatch(db, args.repoId, result.files);
   const historicalNeighbors = buildHistoricalNeighbors(
@@ -114,7 +130,9 @@ export function handler(args: { repoId: string; symbolId: string; depth?: number
   const externalImports = computeExternalImports(db, args.repoId, result.files);
   db.close();
 
-  const rawBytes = result.files.reduce((sum, fp) => sum + (fileSizes.get(fp) ?? 0), 0);
+  const rawBytes = result.files.reduce((sum, fp) => sum + (fileSizes.get(fp) ?? 0), 0) + linkedRawBytes;
+  const linkedFileCount = (result.linked ?? []).reduce((n, g) => n + g.files.length, 0);
+  const linkedSymbolCount = (result.linked ?? []).reduce((n, g) => n + g.symbols.length, 0);
 
   // Account for the co-change section in the token estimate (only when present).
   const neighborTokens = historicalNeighbors.reduce(
@@ -137,8 +155,8 @@ export function handler(args: { repoId: string; symbolId: string; depth?: number
         text: JSON.stringify(
           {
             symbolId: args.symbolId,
-            fileCount: result.files.length,
-            symbolCount: result.symbols.length,
+            fileCount: result.files.length + linkedFileCount,
+            symbolCount: result.symbols.length + linkedSymbolCount,
             _tokenEstimate: tokenEstimate,
             files: result.files.sort(),
             symbols: result.symbols.map((s) => ({
@@ -149,6 +167,25 @@ export function handler(args: { repoId: string; symbolId: string; depth?: number
               signature: s.signature,
               summary: s.summary,
             })),
+            ...(links.length > 0 ? { links } : {}),
+            ...(result.linked && result.linked.length > 0
+              ? {
+                  linkedFiles: linkedFileCount,
+                  linked: result.linked.map((g) => ({
+                    repoId: g.repoId,
+                    rootPath: g.rootPath,
+                    files: [...g.files].sort(),
+                    symbols: g.symbols.map((s) => ({
+                      id: s.id,
+                      name: s.name,
+                      kind: s.kind,
+                      filePath: s.filePath,
+                      signature: s.signature,
+                      summary: s.summary,
+                    })),
+                  })),
+                }
+              : {}),
             ...(historicalNeighbors.length > 0 ? { historicalNeighbors } : {}),
             ...(coverage ?? {}),
             ...(externalImports ? { externalImports } : {}),

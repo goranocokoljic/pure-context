@@ -294,6 +294,28 @@ export interface PureContextConfig {
      */
     reservedNamespaces: string[];
     /**
+     * Phase 99 — cross-index edges. 'auto' (default): indexes whose roots sit
+     * inside the SAME git checkout (`git rev-parse --show-toplevel` equal —
+     * nested or sibling roots of one clone) link automatically; worktrees and
+     * unrelated repositories under one parent folder never do. 'off': no
+     * cross-index edges at all (auto or explicit). Env override:
+     * `PCTX_CROSS_INDEX=off|auto` (the test suite sets `off`).
+     */
+    crossIndex: 'auto' | 'off';
+    /**
+     * Explicit links (Phase 99): indexed root paths or repo ids this index
+     * may resolve imports into, even across git repositories (a services
+     * monorepo split into clones). Applied to every local index that has the
+     * matching language; empty by default.
+     */
+    linkedRepos: string[];
+    /**
+     * Cap on linked indexes per graph build (Phase 99, P5). Candidates beyond
+     * it (sorted by root path) are reported as `unlinkedSiblings` with
+     * reason 'cap'. Default 8.
+     */
+    maxLinkedRepos: number;
+    /**
      * Python source roots (Phase 98, Task 607): first-level directories whose
      * name is NOT part of the module path (`src/mypkg/x.py` → `mypkg.x`).
      * Strict allowlist — every other first-level directory keeps its name
@@ -556,6 +578,9 @@ export const DEFAULT_CONFIG: PureContextConfig = {
     ],
     pythonSourceRoots: ['src', 'lib'],
     reservedPythonModules: [...PYTHON_STDLIB_MODULES],
+    crossIndex: 'auto',
+    linkedRepos: [],
+    maxLinkedRepos: 8,
   },
   transport: 'stdio',
   http: {
@@ -968,12 +993,21 @@ export function validateConfig(raw: unknown): ValidationResult {
           );
         }
       }
-      for (const key of ['pythonSourceRoots', 'reservedPythonModules'] as const) {
+      for (const key of ['pythonSourceRoots', 'reservedPythonModules', 'linkedRepos'] as const) {
         if (key in gr) {
           const v = gr[key];
           if (!Array.isArray(v) || v.some((n) => typeof n !== 'string' || n.length === 0)) {
             errors.push(`graph.${key} must be an array of non-empty strings ([] = disabled)`);
           }
+        }
+      }
+      if ('crossIndex' in gr && !['auto', 'off'].includes(gr['crossIndex'] as string)) {
+        errors.push("graph.crossIndex must be 'auto' or 'off'");
+      }
+      if ('maxLinkedRepos' in gr) {
+        const v = gr['maxLinkedRepos'];
+        if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+          errors.push('graph.maxLinkedRepos must be a non-negative integer (0 = no links)');
         }
       }
     }

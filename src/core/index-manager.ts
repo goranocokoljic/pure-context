@@ -2,7 +2,7 @@ import { readFileSync, unlinkSync, existsSync, rmSync } from 'fs';
 import { resolve } from 'path';
 import { cpus } from 'os';
 import type Database from 'better-sqlite3';
-import type { IndexOptions, IndexResult, ImportRecord, SymbolRecord } from './types.js';
+import type { DepEdge, IndexOptions, IndexResult, ImportRecord, SymbolRecord } from './types.js';
 import { IndexError, WorkspaceLimitError } from './errors.js';
 import { logger } from './logger.js';
 import {
@@ -43,6 +43,8 @@ import { buildGraph } from '../graph/graph-builder.js';
 import { buildIndexedFileSet } from '../graph/prefilled-targets.js';
 import { buildFamilyResolvers } from '../graph/family-resolvers.js';
 import { buildDiEdges } from '../graph/di-edges.js';
+import { linksChangedSince, prepareLinkedBuild } from './cross-index.js';
+import { getRepoLinks } from './db/link-store.js';
 import { join } from 'path';
 import { track } from './telemetry.js';
 import { discoverProviders } from '../providers/provider-registry.js';
@@ -402,13 +404,45 @@ export async function indexFolder(
   // JVM/Python/Go imports need their family resolvers, built here — after
   // file/symbol persistence — so they see the full files + symbol tables.
   // Each family's map build is skipped when the batch has none of its files.
-  const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, allImports);
-  const edges = buildGraph(allImports, resolver, repoId, familyResolvers, {
-    indexedFiles: buildIndexedFileSet(getAllFileHashes(db, repoId).keys()),
+  // Phase 99: a whole-tree run DISCOVERS the workspace links (same git
+  // toplevel / explicit config) and resolves local misses across them. When
+  // the link set changed since the last build (a sibling appeared, was
+  // recorded by the other side, or moved), the WHOLE graph is re-resolved
+  // from stored import records — otherwise unchanged files would keep their
+  // pre-link edges forever (a no-op walk only rebuilds reprocessed files).
+  const storedLinks = getRepoLinks(db, repoId);
+  let graphImports: ImportRecord[] = allImports;
+  const linked = prepareLinkedBuild(db, repoId, absRoot, () => graphImports, {
+    discover: true,
+    crossIndex: options.crossIndex,
+    linkedRepos: options.linkedRepos,
+    maxLinkedRepos: options.maxLinkedRepos,
   });
-  if (edges.length > 0) {
-    insertEdges(db, edges);
+  const reresolveAll =
+    (storedLinks.length > 0 || linked.links.length > 0) &&
+    linksChangedSince(storedLinks, linked.links) &&
+    (preRepo?.schemaVersion ?? SCHEMA_VERSION) >= 10;
+  if (reresolveAll) graphImports = getAllImportRecords(db, repoId);
+  if (reresolveAll) {
+    deleteEdgesExceptType(db, repoId, 'di');
+    logger.info(`cross-index: link set changed — re-resolving all ${graphImports.length} import records`);
   }
+  const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, graphImports);
+  let edges: DepEdge[];
+  try {
+    edges = buildGraph(graphImports, resolver, repoId, familyResolvers, {
+      indexedFiles: buildIndexedFileSet(getAllFileHashes(db, repoId).keys()),
+      links: linked.targets,
+    });
+    if (edges.length > 0) {
+      insertEdges(db, edges);
+    }
+    linked.commit(db, repoId);
+  } finally {
+    linked.close();
+  }
+  const crossEdgesFound = edges.filter((e) => e.targetRepoId).length;
+  const linksUsed = linked.summary();
 
   // ── 10a. Android DI edges (Phase 85) ─────────────────────────────────────
   // Adapters emit symbols only; DI coupling becomes edges here, read from the
@@ -564,6 +598,8 @@ export async function indexFolder(
     totalSymbolsInDb: totalSymbols,
     totalFilesInDb: totalFiles,
     edgesFound: edges.length,
+    crossEdgesFound,
+    linksUsed,
     durationMs: Date.now() - start,
     errors,
     warnings,
@@ -672,7 +708,16 @@ export async function reindexFiles(
   repoId: string,
   changedPaths: string[],
   deletedPaths: string[] = [],
-  options?: Pick<IndexOptions, 'adapters' | 'aiSummarizer' | 'semanticIndexer'>,
+  options?: Pick<IndexOptions, 'adapters' | 'aiSummarizer' | 'semanticIndexer' | 'crossIndex' | 'linkedRepos' | 'maxLinkedRepos'> & {
+    /**
+     * Phase 99: re-run the workspace link rule and re-resolve the WHOLE graph
+     * from stored import records against the fresh link set. Used after a
+     * worktree clone (the copied `repo_links` belonged to the sibling
+     * worktree — a different git toplevel, never linkable). Default false:
+     * the links stored by the last whole-tree build are reused.
+     */
+    refreshLinks?: boolean;
+  },
 ): Promise<IndexResult> {
   const start = Date.now();
   const db = openDatabase(repoId);
@@ -772,24 +817,44 @@ export async function reindexFiles(
   }
 
   let edgesBuilt = 0;
-  if (newFiles.length > 0 && repo.schemaVersion >= 10) {
+  let crossEdgesFound = 0;
+  let linksUsed: IndexResult['linksUsed'];
+  const fullReresolve =
+    (newFiles.length > 0 && repo.schemaVersion >= 10) || options?.refreshLinks === true;
+  if (fullReresolve) {
     // A new file can be the TARGET of imports that unchanged files wrote
     // before it existed — batch-only edges would miss those forever
     // (runbook §7). Re-resolve the whole graph from stored import records:
     // no re-parsing, just resolution over in-memory maps. 'di' edges keep
-    // their own repo-wide rebuild below.
+    // their own repo-wide rebuild below. Phase 99: `refreshLinks` takes the
+    // same path with a freshly discovered link set.
     deleteEdgesExceptType(db, repoId, 'di');
     const storedImports = getAllImportRecords(db, repoId);
     const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, storedImports);
-    const rebuilt = buildGraph(storedImports, resolver, repoId, familyResolvers, {
-      indexedFiles: buildIndexedFileSet(getAllFileHashes(db, repoId).keys()),
+    const linked = prepareLinkedBuild(db, repoId, absRoot, storedImports, {
+      discover: options?.refreshLinks === true,
+      crossIndex: options?.crossIndex,
+      linkedRepos: options?.linkedRepos,
+      maxLinkedRepos: options?.maxLinkedRepos,
     });
-    if (rebuilt.length > 0) {
-      insertEdges(db, rebuilt);
+    let rebuilt: DepEdge[];
+    try {
+      rebuilt = buildGraph(storedImports, resolver, repoId, familyResolvers, {
+        indexedFiles: buildIndexedFileSet(getAllFileHashes(db, repoId).keys()),
+        links: linked.targets,
+      });
+      if (rebuilt.length > 0) {
+        insertEdges(db, rebuilt);
+      }
+      linked.commit(db, repoId);
+    } finally {
+      linked.close();
     }
     edgesBuilt = rebuilt.length;
+    crossEdgesFound = rebuilt.filter((e) => e.targetRepoId).length;
+    linksUsed = linked.summary();
     logger.debug(
-      `Full edge re-resolve (${newFiles.length} new file(s)): ${rebuilt.length} edges`,
+      `Full edge re-resolve (${newFiles.length} new file(s)${options?.refreshLinks ? ', links refreshed' : ''}): ${rebuilt.length} edges`,
     );
   } else {
     if (newFiles.length > 0) {
@@ -800,15 +865,26 @@ export async function reindexFiles(
     }
     // Build edges only for the re-processed files. The family resolvers read
     // the full files/symbols tables (already updated above), so targeted
-    // re-index edges match what a full index_folder would produce.
+    // re-index edges match what a full index_folder would produce. Phase 99:
+    // the touched files' records are resolved against the STORED links
+    // (no index-dir scan per edit); the linked resolver maps are lazy.
     const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, allImports);
-    const edges = buildGraph(allImports, resolver, repoId, familyResolvers, {
-    indexedFiles: buildIndexedFileSet(getAllFileHashes(db, repoId).keys()),
-  });
-    if (edges.length > 0) {
-      insertEdges(db, edges);
+    const linked = prepareLinkedBuild(db, repoId, absRoot, allImports, { discover: false });
+    let edges: DepEdge[];
+    try {
+      edges = buildGraph(allImports, resolver, repoId, familyResolvers, {
+        indexedFiles: buildIndexedFileSet(getAllFileHashes(db, repoId).keys()),
+        links: linked.targets,
+      });
+      if (edges.length > 0) {
+        insertEdges(db, edges);
+      }
+    } finally {
+      linked.close();
     }
     edgesBuilt = edges.length;
+    crossEdgesFound = edges.filter((e) => e.targetRepoId).length;
+    linksUsed = linked.summary();
   }
 
   // ── Android DI edges (Phase 85) — same repo-wide rebuild as indexFolder ───
@@ -896,6 +972,8 @@ export async function reindexFiles(
     totalSymbolsInDb: totalSymbols,
     totalFilesInDb: totalFiles,
     edgesFound: edgesBuilt,
+    crossEdgesFound,
+    linksUsed,
     durationMs: Date.now() - start,
     errors,
     warnings: [],

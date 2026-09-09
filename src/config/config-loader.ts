@@ -218,6 +218,14 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
         partial.graph?.pythonSourceRoots ?? DEFAULT_CONFIG.graph.pythonSourceRoots,
       reservedPythonModules:
         partial.graph?.reservedPythonModules ?? DEFAULT_CONFIG.graph.reservedPythonModules,
+      // PCTX_CROSS_INDEX=off|auto overrides the file (operator kill switch; the
+      // test suite sets `off` because every fixture lives in ONE checkout).
+      crossIndex:
+        process.env['PCTX_CROSS_INDEX'] === 'off' || process.env['PCTX_CROSS_INDEX'] === 'auto'
+          ? (process.env['PCTX_CROSS_INDEX'] as 'off' | 'auto')
+          : (partial.graph?.crossIndex ?? DEFAULT_CONFIG.graph.crossIndex),
+      linkedRepos: partial.graph?.linkedRepos ?? DEFAULT_CONFIG.graph.linkedRepos,
+      maxLinkedRepos: partial.graph?.maxLinkedRepos ?? DEFAULT_CONFIG.graph.maxLinkedRepos,
     },
     transport: partial.transport ?? DEFAULT_CONFIG.transport,
     http: {

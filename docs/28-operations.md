@@ -56,13 +56,19 @@ big tree is durable while it indexes:
 - The response reports `batchesCommitted`.
 
 Earlier versions of this guide recommended splitting a large tree into
-several scoped indexes. **Do not do that for size.** Every split is a seam:
-dependency edges never cross an index boundary, so a blast radius rooted in
-one module never reaches its callers in another, `find_importers` reads
-"nobody", and the graph tools silently under-report. Since v1.30.0 those
-tools attach `externalImports` when a queried file imports across a seam
-(with `siblingIndexes` naming the other roots), but the fix is structural:
-index the whole build tree as one root.
+several scoped indexes. **Do not do that for size.** One root is still the
+simplest shape. Since v1.32.0 a tree that MUST stay split is no longer a
+dead seam: indexes whose roots are disjoint directories of the same git
+checkout link automatically (`list_repos` → `links`), and
+`get_blast_radius` / `find_importers` / `get_context_bundle` (plus symbol
+risk centrality and the change tools built on them) answer across the link.
+Edges live in the index that holds the importing file, so after a sibling
+moves (`links[].status: moved`) re-run `index_folder` on the root whose
+edges you query. What still stops at the seam: search, `find_references`,
+`find_cycles`, architecture/render tools, DI edges. An UNLINKED seam
+(different repository, worktree, unindexed subtree) still shows as
+`externalImports` with `unlinkedSiblings` and the reason; `graph.linkedRepos`
+links across repositories on purpose.
 
 Scope an index only for a reason other than size:
 
@@ -237,12 +243,13 @@ SELECT COUNT(*) FROM dep_edges;
 - **Edges are file-level, not symbol-level.** Every symbol in a file shares
   the file's blast radius; `get_blast_radius` responses carry
   `granularity: "file"` to say so.
-- **Edges never cross index boundaries.** `find_cross_repo_usages` spans
-  indexes but is word-boundary text search, explicitly heuristic. Since
-  v1.30.0 `get_blast_radius` / `find_importers` / `get_context_bundle`
-  attach `externalImports` (unresolved internal-looking imports of the
-  queried files + `siblingIndexes`) when a file sits on such a seam — the
-  radius is a lower bound there. The fix is one index per build tree.
+- **Edges cross LINKED index boundaries only** (v1.32.0: disjoint roots of
+  one git checkout, or `graph.linkedRepos`). Across an unlinked seam
+  `find_cross_repo_usages` spans indexes but is word-boundary text search,
+  explicitly heuristic, and `get_blast_radius` / `find_importers` /
+  `get_context_bundle` attach `externalImports` (unresolved internal-looking
+  imports of the queried files + `unlinkedSiblings` with the reason) — the
+  radius is a lower bound there.
 - **The index cannot prove absence.** "Nothing anywhere references X" is a
   `git grep` job; the always-on rules say so.
 - Per-language import-resolution coverage varies — see

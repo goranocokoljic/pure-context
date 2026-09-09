@@ -15,27 +15,41 @@
  * `graphCoverage` note from "the graph is empty" to "the graph stops here".
  */
 import type Database from 'better-sqlite3';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
-import { getIndexDir, openDatabase, getRepo } from '../../core/db/schema.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { getRepo } from '../../core/db/schema.js';
 import { getConfig } from '../../config/config-loader.js';
+import { getRepoLinks } from '../../core/db/link-store.js';
+import {
+  findSiblingIndexes,
+  resolveLinks,
+  type SiblingIndex,
+  type UnlinkedSibling,
+} from '../../core/workspace-links.js';
+
+export { findSiblingIndexes, type SiblingIndex };
 
 export interface ExternalImportSample {
   sourceFile: string;
   specifier: string;
 }
 
-export interface SiblingIndex {
+export interface LinkedIndexRef {
   repoId: string;
   rootPath: string;
-  /** How the other index's root relates to this one. */
-  relation: 'nested' | 'parent' | 'sibling';
+  relation: string;
+  source: 'auto' | 'config';
 }
 
 export interface ExternalImports {
-  /** Unresolved, internal-looking import records across the queried files. */
+  /** Unresolved, internal-looking import records across the queried files (after linking). */
   count: number;
   sample: ExternalImportSample[];
+  /** Phase 99: indexes this index resolves across (edges already follow them). */
+  links: LinkedIndexRef[];
+  /** Related indexes the workspace rule did NOT link, with the reason. */
+  unlinkedSiblings: UnlinkedSibling[];
+  /** @deprecated since 1.32.0 — `links` ∪ `unlinkedSiblings` (kept one release for consumers). */
   siblingIndexes: SiblingIndex[];
   note: string;
   nextAction: string;
@@ -160,42 +174,6 @@ export function looksInternal(
 }
 
 /**
- * Other indexed roots that are nested under, above, or beside `rootPath` —
- * the shape of a split build tree. Reads each index's repo row (cheap; a
- * handful of DBs).
- */
-export function findSiblingIndexes(repoId: string, rootPath: string): SiblingIndex[] {
-  const dir = getIndexDir();
-  if (!existsSync(dir) || !rootPath) return [];
-  const norm = (p: string) => resolve(p).replace(/[\\/]+$/, '');
-  const me = norm(rootPath);
-  const meLower = me.toLowerCase();
-  const myParent = dirname(me).toLowerCase();
-  const out: SiblingIndex[] = [];
-  for (const file of readdirSync(dir)) {
-    if (!file.endsWith('.db')) continue;
-    const otherId = file.slice(0, -3);
-    if (otherId === repoId) continue;
-    try {
-      const db = openDatabase(otherId);
-      const meta = getRepo(db, otherId);
-      db.close();
-      if (!meta?.rootPath) continue;
-      const other = norm(meta.rootPath);
-      const otherLower = other.toLowerCase();
-      let relation: SiblingIndex['relation'] | null = null;
-      if (otherLower.startsWith(meLower + sep.toLowerCase()) || otherLower.startsWith(meLower + '/')) relation = 'nested';
-      else if (meLower.startsWith(otherLower + sep.toLowerCase()) || meLower.startsWith(otherLower + '/')) relation = 'parent';
-      else if (dirname(other).toLowerCase() === myParent) relation = 'sibling';
-      if (relation) out.push({ repoId: otherId, rootPath: other, relation });
-    } catch {
-      /* unreadable index — skip */
-    }
-  }
-  return out.sort((a, b) => a.rootPath.localeCompare(b.rootPath));
-}
-
-/**
  * The seam signal for `files` (repo-relative). Null when every internal-
  * looking import of those files resolved — the common case.
  */
@@ -210,8 +188,8 @@ export function computeExternalImports(
   const recStmt = db.prepare<[string, string], { specifier: string; resolved_path: string | null }>(
     'SELECT specifier, resolved_path FROM import_records WHERE repo_id = ? AND source_file = ?',
   );
-  const edgeStmt = db.prepare<[string, string], { specifier: string; target_file: string }>(
-    'SELECT specifier, target_file FROM dep_edges WHERE repo_id = ? AND source_file = ?',
+  const edgeStmt = db.prepare<[string, string], { specifier: string; target_file: string; target_repo_id: string | null }>(
+    'SELECT specifier, target_file, target_repo_id FROM dep_edges WHERE repo_id = ? AND source_file = ?',
   );
   const pkgStmt = db.prepare<[string, string], { declared_package: string | null }>(
     'SELECT declared_package FROM files WHERE repo_id = ? AND path = ?',
@@ -225,13 +203,14 @@ export function computeExternalImports(
     const records = recStmt.all(repoId, file);
     if (records.length === 0) continue;
     ctx ??= buildRepoContext(db, repoId);
-    // A specifier counts as resolved only when an edge lands on a file THIS
-    // index holds. The path resolver happily follows `../../other-module/x`
-    // to a file on disk outside the root — that edge is the seam itself.
+    // A specifier counts as resolved when an edge lands on a file THIS index
+    // holds, or (Phase 99) on a file in a LINKED index (target_repo_id set).
+    // The path resolver happily follows `../../other-module/x` to a file on
+    // disk outside the root — an unlinked such edge is the seam itself.
     const resolved = new Set(
       edgeStmt
         .all(repoId, file)
-        .filter((e) => ctx!.files.has(e.target_file))
+        .filter((e) => e.target_repo_id !== null || ctx!.files.has(e.target_file))
         .map((e) => e.specifier),
     );
     const declared = pkgStmt.get(repoId, file)?.declared_package ?? null;
@@ -245,20 +224,59 @@ export function computeExternalImports(
 
   if (count === 0) return null;
   const rootPath = ctx?.rootPath ?? getRepo(db, repoId)?.rootPath ?? '';
+  // Phase 99: what the last build linked (stored) vs what the rule rejects now.
+  const stored = getRepoLinks(db, repoId);
+  const links: LinkedIndexRef[] = stored.map((l) => ({
+    repoId: l.linkedRepoId,
+    rootPath: l.linkedRootPath,
+    relation: l.relation,
+    source: l.source,
+  }));
+  const linkedIds = new Set(links.map((l) => l.repoId));
+  // The rule NOW vs the links the last build stored: a sibling indexed after
+  // that build is linkable but unlinked — the fix is a rebuild of this root.
+  let ruleNow: ReturnType<typeof resolveLinks> = { links: [], unlinked: [] };
+  try {
+    ruleNow = resolveLinks(repoId, rootPath);
+  } catch {
+    /* fail-soft: no hints */
+  }
+  const unlinkedSiblings: UnlinkedSibling[] = ruleNow.unlinked.filter((u) => !linkedIds.has(u.repoId));
+  const linkableNow = ruleNow.links.filter((l) => !linkedIds.has(l.repoId));
   const siblingIndexes = findSiblingIndexes(repoId, rootPath);
+  const hints: string[] = [];
+  if (links.length > 0) hints.push(`${links.length} linked index(es) already searched (links).`);
+  if (linkableNow.length > 0) {
+    hints.push(
+      `${linkableNow.length} index(es) in the same checkout are NOT yet linked — run index_folder ` +
+        'on this root to link them: ' + linkableNow.map((l) => l.rootPath).join(', ') + '.',
+    );
+  }
+  if (unlinkedSiblings.length > 0) {
+    hints.push(
+      `${unlinkedSiblings.length} related index(es) never link automatically (unlinkedSiblings: ` +
+        [...new Set(unlinkedSiblings.map((u) => u.reason))].join('/') +
+        ') — graph.linkedRepos links across repositories on purpose.',
+    );
+  }
   return {
     count,
     sample,
+    links,
+    unlinkedSiblings,
     siblingIndexes,
     note:
       `${count} import(s) of the queried file(s) look internal to the code base but resolved to ` +
-      'nothing in THIS index — dependency edges stop at an index boundary (a module indexed ' +
-      'separately, or not at all). Results here are a LOWER bound; an empty radius is not proof.' +
-      (siblingIndexes.length > 0
-        ? ` ${siblingIndexes.length} related index(es) found (siblingIndexes).`
-        : ''),
+      'nothing in THIS index or its linked indexes — dependency edges stop at an index boundary ' +
+      '(a module indexed separately without a link, or not at all). Results here are a LOWER ' +
+      'bound; an empty radius is not proof.' +
+      (hints.length > 0 ? ' ' + hints.join(' ') : ''),
     nextAction:
-      'For cross-index callers use find_cross_repo_usages (text search across all indexes) ' +
+      (linkableNow.length > 0
+        ? 'Run index_folder on this root so the same-checkout indexes link (since 1.32.0 edges ' +
+          'cross linked indexes). '
+        : '') +
+      'For callers in UNLINKED indexes use find_cross_repo_usages (text search across all indexes) ' +
       'and git grep for absence proofs; for a complete graph index the whole build tree as ONE ' +
       'root (since 1.24.0 large trees index durably in batches — see docs/28-operations.md).',
   };

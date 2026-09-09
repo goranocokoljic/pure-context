@@ -11,6 +11,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.32.0] - 2026-09-09 — Phase 99: Cross-Index Edges (workspace graph)
+
+Dependency edges now cross index boundaries. The reporter's build tree is
+split into three indexes over 46 Gradle modules; every blast radius at a
+seam was a LOWER bound and his agent named that as the reason to skip the
+graph tools. Phase 97 made the seam visible (`externalImports`); this release
+removes it for indexes that live in the same git checkout.
+
+**Schema v12 — additive.** Existing indexes open unchanged; links and cross
+edges appear on each root's next whole-tree `index_folder`. The hook path
+(`index-changed`) runs one full pass on a pre-1.32 index, then stays fast.
+
+### Added
+
+- **Workspace links** (`src/core/workspace-links.ts`): two indexes link
+  automatically when their roots are DISJOINT directories of the same git
+  checkout (`git rev-parse --show-toplevel` equal). Worktrees (`worktree`),
+  unrelated repositories under one parent (`different-repo`), roots outside
+  git (`not-git`) and a whole-tree index vs a nested one (`overlapping`)
+  never link by themselves. `graph.linkedRepos` (root paths or repo ids)
+  links across repositories on purpose; `graph.crossIndex: 'off'` disables
+  linking; `graph.maxLinkedRepos` (default 8) caps fan-out with reason `cap`.
+- **Cross-index edges**: `dep_edges.target_repo_id` (NULL = local). When the
+  local resolution of an import finds nothing, the same family resolver
+  (JVM declared packages, Python source roots of THAT root, `go.mod`, PHP,
+  Haskell, Elixir, Erlang, Fortran, Rust, Dart) is asked over each linked
+  index in turn; TypeScript/JavaScript relative paths that leave the root
+  are matched against the linked root's files. Hits are validated against
+  the linked index's file table (Phase-98 rule: never a dangling row).
+  Relative and `crate::`/`self::`/`super::` specifiers never cross.
+  Linked resolver maps are built lazily — a build where everything resolves
+  locally pays nothing.
+- **`repo_links`** table: the links the last graph build used, with each
+  sibling's HEAD sha. The importing side also records itself in the sibling
+  (reverse row), so a library index finds the app's edges into it.
+- **Traversal over the workspace** (`src/graph/workspace-graph.ts`):
+  `get_blast_radius`, `find_importers`, `get_context_bundle` walk across
+  links — `links[]` lists the indexes searched; results from them come back
+  under `linked[]` / `linkedImporters[]` tagged with the index and its
+  `rootPath`; `affectedFiles` / `importerCount` / `fileCount` include them.
+  `get_symbol_risk` centrality counts cross importers (and so do
+  `analyze_diff` / `prepare_change` / `verify_change` / `merge_readiness`);
+  `find_dead_code` no longer reports a file some linked index imports;
+  `get_graph` shows cross targets as `<linkedRepoId>:<path>` nodes.
+- **Per-link drift**: `list_repos` and `check_index_staleness` carry
+  `links[]` with `status: fresh | moved | missing` and `behindBy` — `moved`
+  means re-run `index_folder` on the root whose edges you query.
+- **Honesty**: `graphCoverage` counts a cross edge as resolvable when the
+  linked index holds the target; stale ones are reported as
+  `danglingLinked` (`index_missing` / `file_missing`). `externalImports` now
+  counts only what is still external after linking and reports `links`,
+  `unlinkedSiblings[]` with the rejection reason, and a hint when a
+  same-checkout index is linkable but the last build predates it.
+- `index_folder` / `index_file` results carry `linksUsed` and
+  `crossEdgesFound`; `export_index` / `import_index` carry `targetRepoId`.
+
+### Changed
+
+- Every pre-99 `dep_edges` reader returns LOCAL edges only
+  (`target_repo_id IS NULL`): `find_cycles`, coupling, architecture, layer
+  and render tools, `get_graph`'s local part, and the traversal helpers
+  without a workspace are byte-identical to 1.31.0. Deleting a local file
+  removes its LOCAL incoming edges only (a cross edge's target lives in
+  another index).
+- A worktree clone drops the copied `repo_links` and cross edges (they were
+  the sibling worktree's) and re-resolves the graph against its own links.
+
+### Still per index (documented)
+
+`search_symbols`, `find_references`, `find_cycles`, architecture/layer/render
+tools, Hilt/Dagger DI edges. `find_cross_repo_usages` remains the text
+fallback for UNLINKED repositories.
+
+---
+
 ## [1.31.0] - 2026-09-09 — Phase 98: Resolver Hygiene Wave 2
 
 The dependency graph stops lying. Gap-analysis follow-up (CRITICAL 2 +

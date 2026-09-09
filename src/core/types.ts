@@ -93,6 +93,12 @@ export interface DepEdge {
   /** 'import' | 'dynamic-import' | 're-export' */
   edgeType: string;
   specifier: string;
+  /**
+   * Phase 99: the LINKED index that holds `targetFile` when the edge crosses an
+   * index boundary; null / absent for a local edge (target in this index).
+   * Stored in the SOURCE index only.
+   */
+  targetRepoId?: string | null;
 }
 
 // ─── Repository ───────────────────────────────────────────────────────────────
@@ -138,6 +144,16 @@ export interface IndexOptions {
   watchDebounceMs?: number;
   /** Active framework adapters to apply during indexing. */
   adapters?: FrameworkAdapter[];
+  /**
+   * Phase 99: cross-index linking. Overrides config `graph.crossIndex`
+   * ('auto' | 'off') and `graph.linkedRepos` (root paths or repo ids linked
+   * explicitly, even across git repositories). Tests use these; the MCP
+   * tool path reads config.
+   */
+  crossIndex?: 'auto' | 'off';
+  linkedRepos?: string[];
+  /** Phase 99: overrides config `graph.maxLinkedRepos` (0 = no links). */
+  maxLinkedRepos?: number;
   /**
    * Optional AI summarizer for Stage 3 summaries. When provided, symbols
    * whose summaries are still the signature fallback after Stage 1/2 are
@@ -255,6 +271,13 @@ export interface IndexResult {
   clonedFrom?: { repoId: string; rootPath: string; sha: string | null; cloneMs: number };
   /** Commit sha recorded on the index at the end of this run (null: not git). */
   headSha?: string | null;
+  /**
+   * Phase 99: the linked indexes this run resolved cross-index edges against
+   * (empty array when the workspace rule found none; absent on remote paths).
+   */
+  linksUsed?: Array<{ repoId: string; rootPath: string; source: 'auto' | 'config'; relation: string }>;
+  /** Phase 99: cross-index edges stored by this run. */
+  crossEdgesFound?: number;
 }
 
 export interface DiscoveredFile {

@@ -157,6 +157,16 @@ export function cloneIndex(source: CloneSource, newRepoId: string, newRoot: stri
       db.prepare(
         'UPDATE repos SET id = ?, root_path = ?, indexed_at = ? WHERE id = ?',
       ).run(newRepoId, newRoot, Date.now(), source.repoId);
+      // Phase 99: the sibling's workspace links point at indexes INSIDE the
+      // sibling worktree (a different git toplevel — never linkable from
+      // here). Drop them and the cross edges that depend on them; the caller
+      // re-resolves the graph against this worktree's own links.
+      try {
+        db.prepare('DELETE FROM repo_links WHERE repo_id = ?').run(newRepoId);
+        db.prepare('DELETE FROM dep_edges WHERE repo_id = ? AND target_repo_id IS NOT NULL').run(newRepoId);
+      } catch {
+        /* pre-v12 sibling: no such column / table — nothing to drop */
+      }
     });
     rewrite();
     db.exec('PRAGMA foreign_keys = ON');
