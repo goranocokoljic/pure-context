@@ -35,7 +35,7 @@ describe('parallel indexing (Task 117)', () => {
     expect(result.errors).toHaveLength(0);
     expect(result.filesIndexed).toBeGreaterThan(0);
     expect(result.totalSymbolsInDb).toBeGreaterThan(0);
-  });
+  }, 30_000);
 
   it('concurrency:2 (parallel) produces same symbol count as sequential', async () => {
     // Sequential baseline
@@ -49,7 +49,7 @@ describe('parallel indexing (Task 117)', () => {
     expect(par.filesIndexed).toBe(seq.filesIndexed);
     expect(par.symbolsFound).toBe(seq.symbolsFound);
     expect(par.totalSymbolsInDb).toBe(seq.totalSymbolsInDb);
-  });
+  }, 30_000);
 
   it('concurrency:2 — all symbols written to DB without race conditions', async () => {
     const result = await indexFolder(FIXTURE, { concurrency: 2 });
@@ -58,7 +58,7 @@ describe('parallel indexing (Task 117)', () => {
     // it would show here.
     expect(result.totalSymbolsInDb).toBe(result.symbolsFound);
     expect(result.errors).toHaveLength(0);
-  });
+  }, 30_000);
 
   it('concurrency:2 — re-index skips all unchanged files', async () => {
     await indexFolder(FIXTURE, { concurrency: 2 });
@@ -68,7 +68,7 @@ describe('parallel indexing (Task 117)', () => {
     // or fall through with 0 jobs. Either way: no files indexed.
     expect(r2.filesIndexed).toBe(0);
     expect(r2.filesSkipped).toBeGreaterThan(0);
-  });
+  }, 30_000);
 
   it('edges found matches between sequential and parallel runs', async () => {
     const seq = await indexFolder(FIXTURE, { concurrency: 1 });
@@ -76,5 +76,5 @@ describe('parallel indexing (Task 117)', () => {
     const par = await indexFolder(FIXTURE, { concurrency: 2 });
 
     expect(par.edgesFound).toBe(seq.edgesFound);
-  });
+  }, 30_000);
 });

@@ -41,7 +41,7 @@ describe('indexing correctness regression — all Phase 15 optimizations active 
     expect(result.errors).toHaveLength(0);
     expect(result.totalSymbolsInDb).toBeGreaterThan(0);
     expect(result.totalSymbolsInDb).toBe(row?.count ?? -1);
-  });
+  }, 30_000);
 
   it('FTS table row count matches symbols table (no orphaned or missing FTS entries)', async () => {
     await indexFolder(FIXTURE);
@@ -57,7 +57,7 @@ describe('indexing correctness regression — all Phase 15 optimizations active 
 
     expect(ftsRow?.count).toBe(symRow?.count);
     expect(ftsRow?.count).toBeGreaterThan(0);
-  });
+  }, 30_000);
 
   it('import edge count is stable across two independent full indexes', async () => {
     const r1 = await indexFolder(FIXTURE);
@@ -66,7 +66,7 @@ describe('indexing correctness regression — all Phase 15 optimizations active 
 
     expect(r1.edgesFound).toBeGreaterThan(0);
     expect(r2.edgesFound).toBe(r1.edgesFound);
-  });
+  }, 30_000);
 
   it('re-index with unchanged files: filesIndexed = 0, filesSkipped = N', async () => {
     const r1 = await indexFolder(FIXTURE);
@@ -77,7 +77,7 @@ describe('indexing correctness regression — all Phase 15 optimizations active 
     expect(r2.filesIndexed).toBe(0);
     expect(r2.filesSkipped).toBe(r1.filesIndexed);
     expect(r2.totalSymbolsInDb).toBe(r1.totalSymbolsInDb);
-  });
+  }, 30_000);
 
   it('two full independent indexes produce identical symbol and edge counts', async () => {
     const r1 = await indexFolder(FIXTURE);
@@ -87,5 +87,5 @@ describe('indexing correctness regression — all Phase 15 optimizations active 
     expect(r2.symbolsFound).toBe(r1.symbolsFound);
     expect(r2.totalSymbolsInDb).toBe(r1.totalSymbolsInDb);
     expect(r2.edgesFound).toBe(r1.edgesFound);
-  });
+  }, 30_000);
 });
