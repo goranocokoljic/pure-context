@@ -12,6 +12,7 @@ import { FORTRAN_FAMILY_EXTENSIONS, type FortranResolver } from './fortran-resol
 import { RUST_FAMILY_EXTENSIONS, type RustResolver } from './rust-resolver.js';
 import { DART_FAMILY_EXTENSIONS, type DartResolver } from './dart-resolver.js';
 import { resolvePrefilledTarget, type IndexedFileSet } from './prefilled-targets.js';
+import { isJsFamilyFile, type WorkspacePackageResolver } from './workspace-packages.js';
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -38,6 +39,14 @@ export interface BuildGraphOptions {
    * to the linked index's own file set — never a dangling row.
    */
   links?: LinkedGraphTarget[];
+  /**
+   * Phase 100 (Task 627): npm/pnpm/yarn workspace package names of THIS
+   * root. Consulted for a bare TS/JS specifier AFTER the path resolver's
+   * relative + tsconfig-alias strategies returned null and BEFORE it is
+   * treated as external. Built with the indexed file set so a target that is
+   * not an indexed file is dropped (Phase-98 rule).
+   */
+  workspacePackages?: WorkspacePackageResolver | null;
 }
 
 /**
@@ -51,6 +60,8 @@ export interface LinkedGraphTarget {
   rootPath: string;
   indexedFiles(): IndexedFileSet;
   families(): FamilyResolvers | undefined;
+  /** Phase 100: the linked root's workspace packages (lazy; null = none). */
+  workspacePackages?(): WorkspacePackageResolver | null;
 }
 
 export interface FamilyResolvers {
@@ -201,7 +212,13 @@ export function buildGraph(
         targetFiles = familyFn(rec);
       } else {
         viaPathResolver = true;
-        const resolved = resolver.resolve(rec.specifier, rec.sourceFile);
+        let resolved = resolver.resolve(rec.specifier, rec.sourceFile);
+        // Phase 100 (Task 627): a bare specifier naming a workspace package
+        // (`@nuxt/kit`) resolves to that package's source entry.
+        if (resolved === null && options?.workspacePackages && isBareSpecifier(rec.specifier)) {
+          resolved = options.workspacePackages.resolve(rec.specifier);
+          if (resolved !== null) viaPathResolver = false; // never "escapes the root"
+        }
         targetFiles = resolved === null ? [] : [resolved];
       }
     }
@@ -250,6 +267,11 @@ const NULL_RESOLVER: PathResolver = { projectRoot: '', resolve: () => null };
  * keeps the test-path shape (`/src/test/`) and defeats the other two.
  */
 const CROSS_SOURCE_PREFIX = '__linked_importer__/';
+
+/** Not relative, not absolute, not a `node:` builtin — a package-ish name. */
+function isBareSpecifier(s: string): boolean {
+  return s !== '' && !s.startsWith('.') && !s.startsWith('/') && !isAbsolute(s) && !s.startsWith('node:');
+}
 
 function escapesRoot(rel: string): boolean {
   const n = rel.replace(/\\/g, '/');
@@ -303,7 +325,15 @@ function resolveAcrossLinks(
       targets = resolvePrefilledTarget(rec, link.indexedFiles(), NULL_RESOLVER);
     } else {
       const fn = dispatchFor(link).get(ext);
-      if (fn) targets = fn({ ...rec, sourceFile: CROSS_SOURCE_PREFIX + rec.sourceFile });
+      if (fn) {
+        targets = fn({ ...rec, sourceFile: CROSS_SOURCE_PREFIX + rec.sourceFile });
+      } else if (isJsFamilyFile(rec.sourceFile) && isBareSpecifier(rec.specifier) && link.workspacePackages) {
+        // Phase 100 (Task 627): a workspace split into several roots — the
+        // package named by `@scope/pkg` lives in the linked root. Its
+        // resolver is built with THAT root's indexed file set (validated).
+        const hit = link.workspacePackages()?.resolve(rec.specifier) ?? null;
+        if (hit !== null) targets = [hit];
+      }
     }
     if (targets.length > 0) return { repoId: link.repoId, targetFiles: targets };
   }

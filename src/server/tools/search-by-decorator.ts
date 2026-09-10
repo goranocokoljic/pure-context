@@ -28,6 +28,7 @@ import { initParser, parseFile, isInitialized } from '../../core/parse-dispatche
 import { lineOfChar } from '../../core/offsets.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SyntaxNode } from '../../core/types.js';
+import { getAllFilesWithContent } from '../../core/db/file-store.js';
 
 export const name = 'search_by_decorator';
 
@@ -90,11 +91,6 @@ export const inputSchema = {
 };
 
 // ─── DB row types ─────────────────────────────────────────────────────────────
-
-interface FileRow {
-  path: string;
-  raw_content: Buffer | null;
-}
 
 interface SymbolRow {
   id: string;
@@ -473,18 +469,10 @@ export async function handler(args: {
     }
 
     // ── Query files with raw content ──────────────────────────────────────
-    const conditions: string[] = ['repo_id = @repoId', 'raw_content IS NOT NULL'];
-    const params: Record<string, unknown> = { repoId };
-
-    if (filePath) {
-      conditions.push('(path = @filePath OR path LIKE @filePathPrefix)');
-      params['filePath'] = filePath;
-      params['filePathPrefix'] = `${filePath}%`;
-    }
-
-    const fileRows = db.prepare<Record<string, unknown>, FileRow>(
-      `SELECT path, raw_content FROM files WHERE ${conditions.join(' AND ')} ORDER BY path`,
-    ).all(params);
+    const fileRows = getAllFilesWithContent(db, repoId, {
+      pathPrefix: filePath || undefined,
+      onlyWithContent: true,
+    });
 
     // ── Initialize tree-sitter (idempotent) ───────────────────────────────
     if (!isInitialized()) {
@@ -508,10 +496,10 @@ export async function handler(args: {
     let truncated = false;
 
     for (const row of fileRows) {
-      if (!row.raw_content || truncated) break;
+      if (!row.rawContent || truncated) break;
 
       const fPath = row.path;
-      const content = row.raw_content;
+      const content = row.rawContent;
 
       // ── Extension filter ───────────────────────────────────────────────
       const ext = fPath.includes('.')

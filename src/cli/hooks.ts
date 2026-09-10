@@ -22,6 +22,7 @@ import { getPureContextInstructions } from './install-writers.js';
 import { readHeadDrift, formatDriftLine } from '../core/git-head.js';
 import { computeRepoId, getJobsDir } from '../core/db/schema.js';
 import { takeTaskCalls, formatCallsLine } from '../core/db/usage-ledger.js';
+import { blobFileBytes, getBlobDbPath } from '../core/db/blob-store.js';
 import { loadConfig } from '../config/config-loader.js';
 import { join, dirname, resolve } from 'path';
 import { homedir } from 'os';
@@ -533,10 +534,13 @@ export async function cmdHookWorktreeCreate(): Promise<void> {
 }
 
 /**
- * WorktreeRemove: drop the index of a Claude-managed worktree
- * (`.claude/worktrees/<name>`) — those are created and removed by Claude
- * Code, so their indexes are ours to clean up. A manual worktree's index is
- * the user's (`purecontext-mcp delete-index <path>`).
+ * WorktreeRemove: drop the index of the removed worktree.
+ * - `.claude/worktrees/<name>` (created and removed by Claude Code): deleted
+ *   outright — those indexes are ours.
+ * - any other worktree (Phase 100): a SCOPED gc — the index goes only if its
+ *   root path is already gone from disk and no re-index is running. If the
+ *   hook fires before the directory is removed, the next `list_repos`
+ *   reports it (`rootExists: false`) and `gc_indexes` / `index gc` removes it.
  */
 export async function cmdHookWorktreeRemove(): Promise<void> {
   try {
@@ -545,6 +549,9 @@ export async function cmdHookWorktreeRemove(): Promise<void> {
     if (worktreePath && isClaudeManagedWorktree(worktreePath)) {
       const { deleteIndex } = await import('../core/index-manager.js');
       deleteIndex(computeRepoId(resolve(worktreePath)));
+    } else if (worktreePath) {
+      const { applyGc } = await import('../core/index-gc.js');
+      applyGc({ scopeRoot: resolve(worktreePath) });
     }
   } catch { /* never block */ }
   process.exit(0);
@@ -651,6 +658,19 @@ export async function cmdHookTaskCompleted(): Promise<void> {
     }
 
     const lines: string[] = [callsLine, '', '## PureContext Post-Task Summary\n'];
+
+    // Phase 100 (R4): the shared blob store grows until `index gc --blobs`
+    // runs; say so once it passes the configured size.
+    try {
+      const warnAt = loadConfig().storage?.blobWarnBytes ?? 0;
+      const blobBytes = blobFileBytes(getBlobDbPath());
+      if (warnAt > 0 && blobBytes > warnAt) {
+        lines.push(
+          `⚠ blob store is ${(blobBytes / 1_073_741_824).toFixed(2)} GB — run \`purecontext-mcp index gc --blobs\` (dry run) to see what is unreferenced.`,
+        );
+        lines.push('');
+      }
+    } catch { /* ignore */ }
 
     lines.push('**Indexed repos:**');
     for (const r of repos) {

@@ -21,7 +21,11 @@ type DatabaseConstructor = new (filename: string) => SqliteDatabase;
 // and the `repo_links` table (the linked indexes the last graph build used).
 // Old indexes open unchanged; cross-index edges appear on the next
 // whole-tree `index_folder`.
-export const SCHEMA_VERSION = 12;
+// v13 (Phase 100): semantic — `files.raw_content` NULL = "bytes live in the
+// shared blob store (<dataDir>/blobs.db), keyed by content_hash". No DDL
+// change; inline rows keep reading inline. A pre-v13 index moves its inline
+// content to the store on its next whole-tree `index_folder` (no re-parse).
+export const SCHEMA_VERSION = 13;
 
 const DDL = `
 PRAGMA journal_mode = WAL;
@@ -44,7 +48,7 @@ CREATE TABLE IF NOT EXISTS files (
   repo_id             TEXT    NOT NULL,
   path                TEXT    NOT NULL,
   content_hash        TEXT    NOT NULL,
-  raw_content         BLOB,
+  raw_content         BLOB,               -- NULL since v13 = in the blob store (by content_hash)
   indexed_at          INTEGER NOT NULL,
   tenant_id           TEXT    NOT NULL DEFAULT 'local',
   remote_sha          TEXT,
@@ -431,6 +435,9 @@ function runMigrations(db: InstanceType<DatabaseConstructor>): void {
         WHERE target_repo_id IS NOT NULL
     `);
   }
+
+  // Migration v12 → v13 (Phase 100): no DDL. `raw_content` was always
+  // nullable; v13 gives NULL a meaning (blob store). Nothing to run.
 }
 
 // ─── Repo operations ──────────────────────────────────────────────────────────

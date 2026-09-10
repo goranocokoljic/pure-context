@@ -160,6 +160,33 @@ export interface PureContextConfig {
     inlineFileLimit: number;
   };
   /**
+   * Where indexed file CONTENT lives (Phase 100, Task 621).
+   */
+  storage: {
+    /**
+     * 'blob' (default): file bytes go to ONE shared content-addressed store
+     * (`<dataDir>/blobs.db`, keyed by content hash) and `files.raw_content`
+     * is NULL — two worktrees, two re-indexes of one commit, or two repos
+     * vendoring the same file share a single copy. 'inline' = pre-1.33
+     * behavior (bytes inside each index; no shared file). Rows written
+     * either way stay readable: inline reads inline, NULL reads the store.
+     * The WASM SQLite tier always writes inline (it loads whole databases
+     * into memory).
+     */
+    contentStore: 'blob' | 'inline';
+    /**
+     * TaskCompleted prints a "run `purecontext-mcp index gc --blobs`" line
+     * when `blobs.db` exceeds this many bytes. Default: 2 GiB. 0 = never.
+     */
+    blobWarnBytes: number;
+    /**
+     * `index gc --blobs` never sweeps a blob younger than this (an indexer
+     * writes the blob BEFORE the files row that references it). Default:
+     * 15 minutes.
+     */
+    gcGraceMs: number;
+  };
+  /**
    * Git / temporal-coupling capture settings (Phase 76).
    */
   git: {
@@ -315,6 +342,14 @@ export interface PureContextConfig {
      * reason 'cap'. Default 8.
      */
     maxLinkedRepos: number;
+    /**
+     * Phase 100 (Task 627): resolve bare TS/JS specifiers that name an
+     * npm / pnpm / yarn WORKSPACE package (`@nuxt/kit`) to that package's
+     * source entry (`exports` → `main`/`module`/`types` → `src/index`,
+     * source before built output). 'off' = pre-1.33 behavior (such imports
+     * are external). Env override: `PCTX_WORKSPACE_PACKAGES=off|auto`.
+     */
+    workspacePackages: 'auto' | 'off';
     /**
      * Python source roots (Phase 98, Task 607): first-level directories whose
      * name is NOT part of the module path (`src/mypkg/x.py` → `mypkg.x`).
@@ -527,6 +562,11 @@ export const DEFAULT_CONFIG: PureContextConfig = {
   hooks: {
     inlineFileLimit: 200,
   },
+  storage: {
+    contentStore: 'blob',
+    blobWarnBytes: 2 * 1024 * 1024 * 1024,
+    gcGraceMs: 15 * 60 * 1000,
+  },
   git: {
     coChangeDepth: 300,
     fileHistoryDepth: 0,
@@ -581,6 +621,7 @@ export const DEFAULT_CONFIG: PureContextConfig = {
     crossIndex: 'auto',
     linkedRepos: [],
     maxLinkedRepos: 8,
+    workspacePackages: 'auto',
   },
   transport: 'stdio',
   http: {
@@ -852,6 +893,25 @@ export function validateConfig(raw: unknown): ValidationResult {
       }
     }
   }
+  if ('storage' in cfg) {
+    const st = cfg['storage'];
+    if (typeof st !== 'object' || st === null || Array.isArray(st)) {
+      errors.push('storage must be an object');
+    } else {
+      const so = st as Record<string, unknown>;
+      if ('contentStore' in so && so['contentStore'] !== 'blob' && so['contentStore'] !== 'inline') {
+        errors.push("storage.contentStore must be 'blob' or 'inline'");
+      }
+      for (const key of ['blobWarnBytes', 'gcGraceMs']) {
+        if (
+          key in so &&
+          (typeof so[key] !== 'number' || !Number.isInteger(so[key]) || (so[key] as number) < 0)
+        ) {
+          errors.push(`storage.${key} must be a non-negative integer`);
+        }
+      }
+    }
+  }
   if ('git' in cfg) {
     const g = cfg['git'];
     if (typeof g !== 'object' || g === null || Array.isArray(g)) {
@@ -1003,6 +1063,9 @@ export function validateConfig(raw: unknown): ValidationResult {
       }
       if ('crossIndex' in gr && !['auto', 'off'].includes(gr['crossIndex'] as string)) {
         errors.push("graph.crossIndex must be 'auto' or 'off'");
+      }
+      if ('workspacePackages' in gr && !['auto', 'off'].includes(gr['workspacePackages'] as string)) {
+        errors.push("graph.workspacePackages must be 'auto' or 'off'");
       }
       if ('maxLinkedRepos' in gr) {
         const v = gr['maxLinkedRepos'];

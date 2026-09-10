@@ -38,6 +38,28 @@ describe('source hygiene', () => {
     expect(offenders).toEqual([]);
   });
 
+  // Phase 100 (P1): file content is inline-or-blob since schema v13. Every
+  // reader must go through file-store so NULL rows resolve from blobs.db;
+  // raw SQL against raw_content anywhere else would silently read NULL.
+  it('no module outside file-store/schema touches files.raw_content', () => {
+    const allowed = new Set(
+      [
+        'core/db/file-store.ts',
+        'core/db/schema.ts',
+        'core/db/blob-store.ts',
+        'config/config-schema.ts',
+      ].map((p) => join(SRC_ROOT, p)),
+    );
+    const offenders: string[] = [];
+    for (const file of walk(SRC_ROOT)) {
+      if (allowed.has(file)) continue;
+      if (!/\.(ts|tsx|js|mjs|cjs)$/.test(file)) continue;
+      const text = readFileSync(file, 'utf8');
+      if (/raw_content/.test(text)) offenders.push(file);
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('src/version.ts matches package.json', async () => {
     const pkg = JSON.parse(
       readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8'),

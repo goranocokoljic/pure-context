@@ -28,6 +28,7 @@ import { registerStandardHandlers } from './core/bootstrap-registry.js';
 import { startServer } from './server/mcp-server.js';
 import { cmdInit, cmdCheck, cmdShow, cmdHealth, cmdExport, cmdImport, cmdFetch, cmdListPublic, cmdIndexFolder, cmdIndexFile, cmdIndexChanged, cmdAnalyzeDiff, cmdDetectAntipatterns } from './config/cli.js';
 import { cmdGitHook } from './cli/git-hooks.js';
+import { cmdIndexGc } from './cli/gc.js';
 import { runKeysCommand } from './config/keys-cli.js';
 import { runWorkspacesCommand } from './config/workspaces-cli.js';
 import { runHooksCommand, cmdHookPreToolUse, cmdHookPostToolUse, cmdHookPreCompact, cmdHookWorktreeCreate, cmdHookWorktreeRemove, cmdHookTaskCompleted, cmdHookSubagentStart } from './cli/hooks.js';
@@ -98,6 +99,8 @@ Usage:
   purecontext-mcp install --list          Show detected IDEs and install state
   purecontext-mcp install --dry-run all   Preview what would be installed
   purecontext-mcp delete-index [<path>]   Delete the stored index for a project
+  purecontext-mcp index gc                Dry run: list orphan indexes (no repo row / root gone)
+                                  [--blobs] [--yes] [--repo <path>]   …and unreferenced blobs; --yes deletes the list
   purecontext-mcp --version               Print version
   purecontext-mcp --help                  Print this help
 
@@ -296,6 +299,13 @@ async function main(): Promise<void> {
     await bootstrap();
     await cmdDetectAntipatterns(args.slice(1));
     process.exit(0);
+  }
+
+  // ── index gc sub-command (Phase 100) ──────────────────────────────────────
+  if ((args[0] === 'index' && args[1] === 'gc') || args[0] === 'gc') {
+    await initSqliteBackend();
+    const code = cmdIndexGc(args.slice(args[0] === 'gc' ? 1 : 2));
+    process.exit(code);
   }
 
   // ── delete-index sub-command ──────────────────────────────────────────────

@@ -158,6 +158,11 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
     hooks: {
       inlineFileLimit: partial.hooks?.inlineFileLimit ?? DEFAULT_CONFIG.hooks.inlineFileLimit,
     },
+    storage: {
+      contentStore: partial.storage?.contentStore ?? DEFAULT_CONFIG.storage.contentStore,
+      blobWarnBytes: partial.storage?.blobWarnBytes ?? DEFAULT_CONFIG.storage.blobWarnBytes,
+      gcGraceMs: partial.storage?.gcGraceMs ?? DEFAULT_CONFIG.storage.gcGraceMs,
+    },
     git: {
       coChangeDepth: partial.git?.coChangeDepth ?? DEFAULT_CONFIG.git.coChangeDepth,
       fileHistoryDepth: partial.git?.fileHistoryDepth ?? DEFAULT_CONFIG.git.fileHistoryDepth,
@@ -226,6 +231,7 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
           : (partial.graph?.crossIndex ?? DEFAULT_CONFIG.graph.crossIndex),
       linkedRepos: partial.graph?.linkedRepos ?? DEFAULT_CONFIG.graph.linkedRepos,
       maxLinkedRepos: partial.graph?.maxLinkedRepos ?? DEFAULT_CONFIG.graph.maxLinkedRepos,
+      workspacePackages: partial.graph?.workspacePackages ?? DEFAULT_CONFIG.graph.workspacePackages,
     },
     transport: partial.transport ?? DEFAULT_CONFIG.transport,
     http: {

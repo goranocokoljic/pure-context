@@ -20,6 +20,7 @@ import { buildMeta } from './_meta.js';
 import type { SymbolKind } from '../../core/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type Database from 'better-sqlite3';
+import { getFileContent } from '../../core/db/file-store.js';
 
 export const name = 'get_churn_metrics';
 
@@ -190,17 +191,12 @@ function buildSymbolChurn(
      WHERE repo_id = ? AND file_path = ?`,
   );
 
-  const contentQuery = db.prepare<[string, string], { raw_content: Buffer | null }>(
-    `SELECT raw_content FROM files WHERE repo_id = ? AND path = ?`,
-  );
-
   for (const fp of filePaths) {
     if (scope && !fp.startsWith(scope)) continue;
 
-    const contentRow = contentQuery.get(repoId, fp);
-    if (!contentRow?.raw_content) continue;
+    const content = getFileContent(db, repoId, fp);
+    if (!content) continue;
 
-    const content = contentRow.raw_content;
     fileContent.set(fp, content);
 
     const symbols = symbolQuery.all(repoId, fp);

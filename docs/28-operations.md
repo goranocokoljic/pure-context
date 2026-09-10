@@ -216,10 +216,62 @@ and the TaskCompleted hook's first line (`PureContext this task: N calls
 it. Rotates at 5 MB (one generation kept). `telemetry.usageLedger: false`
 stops the writes.
 
+## Disk
+
+**What an index holds** (`indexes/<repoId>.db`): symbols, dependency edges,
+import records, FTS, git metadata, co-change history, links — everything
+derived from the source. Since 1.33.0 it does NOT hold the source text
+itself.
+
+**What the blob store holds** (`blobs.db`, one per data dir): every indexed
+file's bytes, once, keyed by its SHA-256 (`files.content_hash`). Two
+worktrees of one repository, two re-indexes of one commit, two repos that
+vendor the same file — one copy. Measured before the change, the stored
+text was 40–80% of every index (flutter 202 MB / 76 MB of content; envoy
+184 / 90; eu-za-tebe 49 / 40). A `files` row whose `raw_content` is NULL
+reads the store; a row written before 1.33.0 still holds its bytes inline
+and keeps working — the repo's next whole-tree `index_folder` moves them
+out (no re-parse) and reclaims the pages. `storage.contentStore: 'inline'`
+restores the pre-1.33 layout; the WASM SQLite tier always writes inline.
+
+**Worktree cost model.** Time: seconds (a new worktree clones a sibling's
+index and applies the git delta — see *Branch discipline*). Space: the
+index minus its content — the clone carries no source bytes at all
+(measured on this repo: see CHANGELOG 1.33.0). Edges still never cross
+worktrees (Phase 99's rule links disjoint roots of ONE checkout; worktrees
+are separate checkouts by design).
+
+**Garbage.** Nothing removes an index when its checkout disappears (only
+Claude-managed `.claude/worktrees/*` are cleaned by the WorktreeRemove
+hook), and a crashed run can leave a `.db` with no repo row. `list_repos`
+reports the state (`sizeBytes`, `rootExists` per repo; `store` totals with
+`orphanIndexes` / `deadRootIndexes`), and:
+
+```bash
+npx purecontext-mcp index gc              # dry run: orphan indexes, dead roots, bytes
+npx purecontext-mcp index gc --blobs      # …plus blobs no live index references
+npx purecontext-mcp index gc --blobs --yes   # delete exactly that list, VACUUM the store
+npx purecontext-mcp index gc --repo <path>   # one index only (a removed worktree)
+```
+
+or `gc_indexes({})` / `gc_indexes({ apply: true, blobs: true })` from the
+agent. Rules: dry run by default; an index with a re-index in progress or a
+live root is never a candidate; an unreadable file is reported, not
+deleted; blobs younger than `storage.gcGraceMs` (15 min) are never swept
+(an indexer writes the blob before the row that references it); the sweep
+re-marks under a write lock. The TaskCompleted hook prints a reminder once
+`blobs.db` passes `storage.blobWarnBytes` (2 GB).
+
+**Privacy.** The blob store holds source bytes exactly as the indexes
+already did — same directory, same permissions; `PCTX_DATA_DIR` moves both.
+`export_index` still writes a self-contained bundle (bytes inline);
+`import_index` stores them by the importing machine's mode.
+
 ## Where things live
 
 ```
-~/.purecontext/indexes/<repoId>.db   one SQLite file per indexed root
+~/.purecontext/indexes/<repoId>.db   one SQLite file per indexed root (no source text since 1.33.0)
+~/.purecontext/blobs.db              shared content store — every indexed file's bytes, once, by hash
 ~/.purecontext/jobs/<repoId>.json    marker while a detached re-index runs (hooks)
 ~/.purecontext/usage.jsonl           local usage ledger (tool names + ids + timestamps)
 ~/.purecontext/config.json           config
@@ -236,6 +288,7 @@ To see what an index actually covers, open the `.db` and run:
 SELECT root_path FROM repos;
 SELECT COUNT(*) FROM files;
 SELECT COUNT(*) FROM dep_edges;
+SELECT COUNT(*) FROM files WHERE raw_content IS NULL;   -- rows served from blobs.db
 ```
 
 ## Known limitations

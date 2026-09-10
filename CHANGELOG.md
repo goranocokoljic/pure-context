@@ -11,6 +11,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.33.0] - 2026-09-10 — Phase 100: Index Economy (shared content, gc, workspace packages)
+
+Every index used to carry the full source text of every file it indexed —
+40–80% of each `.db`, byte-identical across worktrees of one repository.
+The reporter works several worktrees at once on a 26k-file tree; Phase 97
+made a new worktree cheap in TIME (309 s → 4 s on novu), this release makes
+it cheap in SPACE. Plus the disk hygiene that never existed, and the npm
+workspace import resolution Phase 99's nuxt evidence asked for.
+
+### Added
+- **Shared content-addressed blob store** (`<dataDir>/blobs.db`, Task 621):
+  file bytes are stored ONCE, keyed by `files.content_hash`; a `files` row
+  whose `raw_content` is NULL reads the store. Dedup by construction
+  (`INSERT OR IGNORE`), WAL + busy timeout for concurrent indexers, a failed
+  blob write leaves that file inline (never lost). `storage.contentStore:
+  'blob' | 'inline'` (default blob; the WASM SQLite tier always writes
+  inline), `PCTX_CONTENT_STORE` override. **Schema v13** — no DDL change;
+  NULL gained a meaning. Old indexes keep reading inline and move their
+  bytes to the store on the next whole-tree `index_folder` (no re-parse,
+  then VACUUM).
+- **One accessor for file content** (`core/db/file-store.ts`): the 18
+  readers that issued their own `SELECT raw_content` now go through
+  `getFileContent` / `getAllFilesWithContent` / `getAllFileRows`;
+  `source-hygiene.test.ts` forbids `raw_content` SQL anywhere else.
+  `export_index` still inlines bytes (portable); `import_index` stores by
+  the importing machine's mode.
+- **`gc_indexes` tool + `purecontext-mcp index gc [--blobs] [--yes] [--repo]`**
+  (Task 622): dry run by default; lists index files with no repo row
+  (crashed / half-deleted runs), indexes whose root path no longer exists
+  (removed worktrees), and — with `--blobs` — blobs no live index references
+  (mark-and-sweep across every surviving index, re-marked under a write
+  lock, blobs younger than `storage.gcGraceMs` = 15 min never swept). A live
+  index or one with a re-index in progress is never a candidate; an
+  unreadable file is reported, not deleted. On the development machine the
+  dry run found **172 orphan index files, 8.66 GB** next to 71 live indexes
+  (2.70 GB).
+- **`list_repos`**: `sizeBytes` and `rootExists` per repo; top-level
+  `store { indexesBytes, blobsBytes, contentStore, orphanIndexes,
+  orphanIndexBytes, deadRootIndexes, nextAction }`.
+- **WorktreeRemove hook** now runs a scoped gc for ANY removed worktree
+  (Claude-managed ones are deleted outright as before); TaskCompleted prints
+  a reminder once `blobs.db` exceeds `storage.blobWarnBytes` (2 GB).
+- **npm / pnpm / yarn workspace package-name resolution** (TS/JS, Task 627,
+  `graph.workspacePackages: 'auto' | 'off'`): a bare `@scope/pkg[/subpath]`
+  import that names a workspace package resolves to that package's SOURCE
+  entry — `exports` (`.`, subpaths, `*` patterns, `import`/`default`/`types`
+  conditions) → `module`/`main`/`types` → `src/index.*`, a `dist/` target
+  mirrored to `src/` first, a target that is not an indexed file dropped
+  (the Phase-98 rule). The workspace manifest is found at the index root or
+  its nearest ancestor (never past `.git`); an index rooted at a package
+  (`packages/kit`) is that package by name, so LINKED roots (v1.32.0)
+  resolve `@nuxt/kit` into the root that holds it. `externalImports` counts
+  an unresolved workspace name as internal.
+
+### Changed
+- **Worktree clones carry no source bytes** (Task 623): `cloneIndex` copies
+  with `COPYFILE_FICLONE` (reflink where the file system has it), moves a
+  pre-v13 sibling's inline content to the blob store and `VACUUM INTO`s the
+  copy. A v12 sibling is still a valid clone seed.
+- `indexFolder` reads the index's schema version BEFORE stamping the current
+  one — the pre-v11 offset heal (Phase 90) had been comparing against the
+  freshly written version and never fired on a hash-skipped run.
+
+### Measured (fresh `phase100-pre` baseline in a detached worktree of 1.32.0 vs `phase100-post`, isolated data dirs)
+- Scores **byte-identical on all 8 repos** (nuxt 40/64/76, kurirfe 40/64/72,
+  excalidraw 8/44/52, infisical 8/28/40, cal-com 36/56/72, novu 28/40/56,
+  jenkins 36/64/68, flutter 0/0/4); symbol counts identical.
+- Edges (workspace names): nuxt 703 → **948**, cal-com 3,937 → **13,046**,
+  novu 11,950 → **16,296**; kurirfe / excalidraw / jenkins / flutter
+  unchanged; no new dangling edge anywhere (resolvable == edges wherever it
+  was before).
+- Index size (the per-worktree cost) → blob store: flutter 192.9 → **114.4**
+  MB (+79.4 in blobs), novu 79.4 → **51.7** (+30.2), infisical 85.7 →
+  **46.5** (+40.2), cal-com 69.5 → **34.0** (+39.5), jenkins 45.0 → **28.1**
+  (+17.4), nuxt 6.2 → 3.3, kurirfe 7.9 → 3.4, excalidraw 15.6 → 6.7. Eight
+  indexes: 502 MB → 288 MB + 223 MB shared. A second worktree of novu now
+  costs 52 MB instead of 79; of flutter 114 instead of 193.
+- Self-index of PureContext: 25.1 MB → 17.0 MB + 5.5 MB blobs (1,028 blobs),
+  935 files unchanged — the migration re-parsed nothing.
+- nuxt `packages/` as ten linked roots vs one root: 658 parity walks, 0
+  mismatches; cross edges **4 → 170** (kit 23, nitro-server 16, nuxt 70,
+  vite 43, webpack 15, ui-templates 2, schema 1); the one-root graph of
+  `packages/` 589 → 804 edges (the workspace manifest is found one level up).
+
+### Re-index note
+None forced. Existing indexes migrate their content on the next whole-tree
+`index_folder`; `index gc` is opt-in and dry-run by default.
+
+---
+
 ## [1.32.0] - 2026-09-09 — Phase 99: Cross-Index Edges (workspace graph)
 
 Dependency edges now cross index boundaries. The reporter's build tree is

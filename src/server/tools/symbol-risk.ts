@@ -28,6 +28,7 @@ import { countCommits } from '../../core/db/co-change-store.js';
 import { getCoChange, type CoChangeResult } from './co-change.js';
 import { getConfig } from '../../config/config-loader.js';
 import { isTestFilePath as isTestFile } from '../../core/test-paths.js';
+import { getAllFilesWithContent } from '../../core/db/file-store.js';
 
 export interface RiskFactor {
   /** Repo-relative normalized value in [0,1] (percentile rank or binary). */
@@ -190,15 +191,11 @@ export function buildRiskContext(db: Database.Database, repoId: string): RiskCon
   const complexityDist = complexityRows.map((r) => r.cyclomatic_complexity ?? 0);
 
   // ── Test-file content set (scanned once, not per symbol). ───────────────────
-  const fileRows = db
-    .prepare<[string], { path: string; raw_content: Buffer | null }>(
-      'SELECT path, raw_content FROM files WHERE repo_id = ?',
-    )
-    .all(repoId);
+  const fileRows = getAllFilesWithContent(db, repoId);
   const testFileContents: string[] = [];
   for (const f of fileRows) {
-    if (isTestFile(f.path) && f.raw_content) {
-      testFileContents.push(f.raw_content.toString('utf8'));
+    if (isTestFile(f.path) && f.rawContent) {
+      testFileContents.push(f.rawContent.toString('utf8'));
     }
   }
 

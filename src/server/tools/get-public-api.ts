@@ -23,6 +23,7 @@ import { buildMeta } from './_meta.js';
 import { byteOffsetToLine } from './symbol-lines.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SymbolKind } from '../../core/types.js';
+import { getFileContent } from '../../core/db/file-store.js';
 
 export const name = 'get_public_api';
 
@@ -195,15 +196,10 @@ export async function handler(args: {
     const lineMap = new Map<string, number>();
     let rawBytes = 0;
     for (const [filePath, syms] of fileSymbols) {
-      const fileRow = db
-        .prepare<[string, string], { raw_content: Buffer | null }>(
-          'SELECT raw_content FROM files WHERE repo_id = ? AND path = ?',
-        )
-        .get(repoId, filePath);
+      const content = getFileContent(db, repoId, filePath);
 
-      if (fileRow?.raw_content) {
-        rawBytes += fileRow.raw_content.length;
-        const content = fileRow.raw_content;
+      if (content) {
+        rawBytes += content.length;
         for (const sym of syms) {
           lineMap.set(sym.id, byteOffsetToLine(content, sym.start_byte));
         }

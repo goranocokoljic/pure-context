@@ -19,6 +19,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getRepo } from '../../core/db/schema.js';
 import { getConfig } from '../../config/config-loader.js';
+import { packageHead, workspaceResolverFor } from '../../graph/workspace-packages.js';
 import { getRepoLinks } from '../../core/db/link-store.js';
 import {
   findSiblingIndexes,
@@ -65,6 +66,8 @@ interface RepoContext {
   topPyModules: Set<string>;
   goModule: string | null;
   reservedNamespaces: string[];
+  /** Phase 100 (Task 627): workspace package names of this root. */
+  workspaceNames: ReadonlySet<string>;
 }
 
 function extOf(p: string): string {
@@ -102,6 +105,7 @@ function buildRepoContext(db: Database.Database, repoId: string): RepoContext {
     topPyModules,
     goModule,
     reservedNamespaces: getConfig().graph?.reservedNamespaces ?? [],
+    workspaceNames: rootPath ? (workspaceResolverFor(rootPath)?.names() ?? new Set<string>()) : new Set<string>(),
   };
 }
 
@@ -131,6 +135,9 @@ export function looksInternal(
     case '.mjs': case '.cjs': case '.vue': case '.svelte': case '.astro':
       if (specifier.startsWith('.')) return true; // relative — resolver could not find the file
       if (/^(@|~~?|#)\//.test(specifier)) return true; // path aliases (@/, ~/, ~~/, #/)
+      // Phase 100: a workspace package of this root that still did not resolve
+      // (no entry file indexed) is internal, not a third-party dependency.
+      if (ctx.workspaceNames?.has(packageHead(specifier))) return true;
       return ctx.topDirs.has(first) && first !== 'node_modules';
 
     case '.kt': case '.kts': case '.java': case '.scala': case '.groovy': {

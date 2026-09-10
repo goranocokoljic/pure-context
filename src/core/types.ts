@@ -219,6 +219,11 @@ export interface IndexOptions {
 }
 
 export interface IndexResult {
+  /**
+   * Phase 100: set when this whole-tree run moved a pre-v13 index's inline
+   * file content into the shared blob store (files moved, bytes freed).
+   */
+  contentMigrated?: { files: number; bytes: number };
   repoId: string;
   filesIndexed: number;
   /** unchanged + failed (kept for compatibility â€” see the split below) */

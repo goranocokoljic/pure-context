@@ -26,6 +26,7 @@ import { buildMeta } from './_meta.js';
 import { byteOffsetToLine } from './symbol-lines.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SymbolKind } from '../../core/types.js';
+import { getFileContent } from '../../core/db/file-store.js';
 
 export const name = 'get_complexity_hotspots';
 
@@ -315,13 +316,11 @@ export async function handler(args: {
         const syms = fileMap.get(stats.filePath) ?? [];
 
         // Resolve start lines from file content (best-effort)
-        const fileRow = db.prepare<[string, string], { raw_content: Buffer | null }>(
-          'SELECT raw_content FROM files WHERE repo_id = ? AND path = ?',
-        ).get(repoId, stats.filePath);
+        const fileContent = getFileContent(db, repoId, stats.filePath);
 
         const lineOf = (startByte: number): number => {
-          if (fileRow?.raw_content) {
-            return byteOffsetToLine(fileRow.raw_content, startByte);
+          if (fileContent) {
+            return byteOffsetToLine(fileContent, startByte);
           }
           return Math.max(1, Math.floor(startByte / 80) + 1);
         };

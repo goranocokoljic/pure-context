@@ -27,7 +27,7 @@ import { kotlinHandler } from '../../src/handlers/kotlin.js';
 import { pythonHandler } from '../../src/handlers/python.js';
 import { typescriptHandler } from '../../src/handlers/typescript.js';
 import { initParser } from '../../src/core/parse-dispatcher.js';
-import { openDatabase, computeRepoId, getRepo } from '../../src/core/db/schema.js';
+import { openDatabase, computeRepoId, getRepo, SCHEMA_VERSION } from '../../src/core/db/schema.js';
 import { getRepoLinks } from '../../src/core/db/link-store.js';
 import { resolveLinks, describeLinkDrift } from '../../src/core/workspace-links.js';
 import { getBlastRadius, getContextBundle, findDeadCode } from '../../src/graph/graph-traversal.js';
@@ -512,7 +512,7 @@ describe('P3 — a repo with no links is byte-identical', () => {
     expect(computeRepoId(solo)).toBe(soloId);
     const db = openDatabase(soloId);
     expect(getRepoLinks(db, soloId)).toEqual([]);
-    expect(getRepo(db, soloId)?.schemaVersion).toBe(12);
+    expect(getRepo(db, soloId)?.schemaVersion).toBe(SCHEMA_VERSION);
     const r = getBlastRadius(symbolId(soloId, 'b'), soloId, db, 3, openWorkspace(db, soloId, solo));
     expect(Object.keys(r).sort()).toEqual(['files', 'symbols', 'tokenEstimate', 'truncated']);
     db.close();

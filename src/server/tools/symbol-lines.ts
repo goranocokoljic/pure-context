@@ -8,6 +8,7 @@
 
 import type Database from 'better-sqlite3';
 import { lineOfByte } from '../../core/offsets.js';
+import { getFileContent } from '../../core/db/file-store.js';
 
 /**
  * Convert a byte offset to a 1-based line number within `content`.
@@ -42,14 +43,9 @@ export function getSymbolLineRange(
     .get(repoId, symbolId);
   if (!sym) return null;
 
-  const contentRow = db
-    .prepare<[string, string], { raw_content: Buffer | null }>(
-      'SELECT raw_content FROM files WHERE repo_id = ? AND path = ?',
-    )
-    .get(repoId, sym.file_path);
-  if (!contentRow?.raw_content) return null;
+  const content = getFileContent(db, repoId, sym.file_path);
+  if (!content) return null;
 
-  const content = contentRow.raw_content;
   const startLine = byteOffsetToLine(content, sym.start_byte);
   const endLine = byteOffsetToLine(content, sym.end_byte);
   return { filePath: sym.file_path, startLine, endLine, lineSpan: Math.max(1, endLine - startLine + 1) };

@@ -22,6 +22,7 @@ import { gitHeadSha } from './git-head.js';
 import { logger } from './logger.js';
 import { resolveLinks, type LinkedIndex, type UnlinkedSibling } from './workspace-links.js';
 import type { FamilyResolvers, LinkedGraphTarget } from '../graph/graph-builder.js';
+import { workspaceResolverFor, type WorkspacePackageResolver } from '../graph/workspace-packages.js';
 import { buildFamilyResolvers } from '../graph/family-resolvers.js';
 import { buildIndexedFileSet, type IndexedFileSet } from '../graph/prefilled-targets.js';
 
@@ -137,12 +138,24 @@ export function prepareLinkedBuild(
     let files: IndexedFileSet | null = null;
     let fams: FamilyResolvers | undefined;
     let famsBuilt = false;
+    let wsp: WorkspacePackageResolver | null = null;
+    let wspBuilt = false;
+    const indexedFiles = () => {
+      if (!files) files = buildIndexedFileSet(getAllFileHashes(ldb, link.repoId).keys());
+      return files;
+    };
     targets.push({
       repoId: link.repoId,
       rootPath: link.rootPath,
-      indexedFiles: () => {
-        if (!files) files = buildIndexedFileSet(getAllFileHashes(ldb, link.repoId).keys());
-        return files;
+      indexedFiles,
+      // Phase 100 (Task 627): the linked root's own workspace packages,
+      // validated against ITS indexed files; built on first bare TS/JS miss.
+      workspacePackages: () => {
+        if (!wspBuilt) {
+          wsp = workspaceResolverFor(link.rootPath, indexedFiles());
+          wspBuilt = true;
+        }
+        return wsp;
       },
       families: () => {
         if (!famsBuilt) {

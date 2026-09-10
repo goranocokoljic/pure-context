@@ -37,6 +37,7 @@ import * as findReferencesTool from './tools/find-references.js';
 import * as getFileContentTool from './tools/get-file-content.js';
 import * as getSymbolsTool from './tools/get-symbols.js';
 import * as invalidateCacheTool from './tools/invalidate-cache.js';
+import * as gcIndexesTool from './tools/gc-indexes.js';
 import * as searchColumnsTool from './tools/search-columns.js';
 import * as searchSimilarTool from './tools/search-similar.js';
 import * as findCrossRepoUsagesTool from './tools/find-cross-repo-usages.js';
@@ -316,6 +317,11 @@ export function createMcpServer(): McpServer {
     description: invalidateCacheTool.description,
     inputSchema: invalidateCacheTool.inputSchema,
   }, typed(invalidateCacheTool.name, (args) => invalidateCacheTool.handler(args)));
+
+  server.registerTool(gcIndexesTool.name, {
+    description: gcIndexesTool.description,
+    inputSchema: gcIndexesTool.inputSchema,
+  }, typed(gcIndexesTool.name, (args) => gcIndexesTool.handler(args)));
 
   server.registerTool(searchColumnsTool.name, {
     description: searchColumnsTool.description,

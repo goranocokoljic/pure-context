@@ -5,6 +5,7 @@ import { dirname } from 'path';
 import { gzip } from 'zlib';
 import { promisify } from 'util';
 import { openDatabase, getRepo, SCHEMA_VERSION } from '../../core/db/schema.js';
+import { getAllFileRows } from '../../core/db/file-store.js';
 import { buildMeta } from './_meta.js';
 import { PureContextError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
@@ -81,6 +82,8 @@ interface BundleFile {
   lastCommitDate: number | null;
   lastCommitMessage: string | null;
   commitCount: number | null;
+  /** Since 1.33.0 (schema v13 bundles); absent in older bundles. */
+  declaredPackage?: string | null;
 }
 
 interface BundleDepEdge {
@@ -141,9 +144,10 @@ export async function handler(args: {
       .prepare<[string], DbSymbolRow>('SELECT * FROM symbols WHERE repo_id = ?')
       .all(repoId);
 
-    const fileRows = db
-      .prepare<[string], DbFileRow>('SELECT * FROM files WHERE repo_id = ?')
-      .all(repoId);
+    // Content resolved through the one accessor (inline or blob store) so a
+    // bundle ALWAYS carries bytes inline — portable to a machine without the
+    // exporting machine's blob store.
+    const fileRows = getAllFileRows(db, repoId, { includeContent: includeSource });
 
     const edgeRows = db
       .prepare<[string], DbEdgeRow>('SELECT * FROM dep_edges WHERE repo_id = ?')
@@ -187,19 +191,17 @@ export async function handler(args: {
 
     const files: BundleFile[] = fileRows.map((row) => ({
       path: row.path,
-      contentHash: row.content_hash,
-      rawContent:
-        includeSource && row.raw_content
-          ? (row.raw_content as Buffer).toString('base64')
-          : null,
-      indexedAt: row.indexed_at,
-      tenantId: row.tenant_id,
-      remoteSha: row.remote_sha ?? null,
-      lastCommitSha: row.last_commit_sha ?? null,
-      lastCommitAuthor: row.last_commit_author ?? null,
-      lastCommitDate: row.last_commit_date ?? null,
-      lastCommitMessage: row.last_commit_message ?? null,
-      commitCount: row.commit_count ?? null,
+      contentHash: row.contentHash,
+      rawContent: includeSource && row.rawContent ? row.rawContent.toString('base64') : null,
+      indexedAt: row.indexedAt,
+      tenantId: row.tenantId,
+      remoteSha: row.remoteSha,
+      lastCommitSha: row.lastCommitSha,
+      lastCommitAuthor: row.lastCommitAuthor,
+      lastCommitDate: row.lastCommitDate,
+      lastCommitMessage: row.lastCommitMessage,
+      commitCount: row.commitCount,
+      declaredPackage: row.declaredPackage,
     }));
 
     const depEdges: BundleDepEdge[] = edgeRows.map((row) => ({
@@ -302,21 +304,6 @@ interface DbSymbolRow {
   param_count: number | null;
   return_count: number | null;
   nesting_depth: number | null;
-}
-
-interface DbFileRow {
-  repo_id: string;
-  path: string;
-  content_hash: string;
-  raw_content: Buffer | null;
-  indexed_at: number;
-  tenant_id: string;
-  remote_sha: string | null;
-  last_commit_sha: string | null;
-  last_commit_author: string | null;
-  last_commit_date: number | null;
-  last_commit_message: string | null;
-  commit_count: number | null;
 }
 
 interface DbEdgeRow {

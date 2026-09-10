@@ -35,6 +35,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SymbolKind } from '../../core/types.js';
 import { isTestFilePath as isTestFile } from '../../core/test-paths.js';
 import { byteOffsetToLine } from './symbol-lines.js';
+import { getAllFilesWithContent, getFileContent } from '../../core/db/file-store.js';
 
 export const name = 'find_untested_symbols';
 
@@ -110,11 +111,6 @@ interface SymbolRow {
   summary: string;
   line_count: number | null;
   cyclomatic_complexity: number | null;
-}
-
-interface FileRow {
-  path: string;
-  raw_content: Buffer | null;
 }
 
 interface UntestedSymbol {
@@ -198,12 +194,10 @@ export async function handler(args: {
     }
 
     // ── Load all indexed files (with content) ─────────────────────────────────
-    const allFiles = db
-      .prepare<[string], FileRow>('SELECT path, raw_content FROM files WHERE repo_id = ?')
-      .all(repoId);
+    const allFiles = getAllFilesWithContent(db, repoId);
 
     // ── Partition files: test vs source ───────────────────────────────────────
-    const testFiles: FileRow[] = [];
+    const testFiles: typeof allFiles = [];
     for (const f of allFiles) {
       if (isTestFile(f.path)) testFiles.push(f);
     }
@@ -215,8 +209,8 @@ export async function handler(args: {
     const allTestIdentifiers = new Set<string>();
 
     for (const tf of testFiles) {
-      if (!tf.raw_content) continue;
-      const text = tf.raw_content.toString('utf8');
+      if (!tf.rawContent) continue;
+      const text = tf.rawContent.toString('utf8');
       const ids = extractIdentifiers(text);
       identifiersByTestFile.push({ path: tf.path, ids });
       for (const id of ids) allTestIdentifiers.add(id);
@@ -282,12 +276,7 @@ export async function handler(args: {
     const fileBufferCache = new Map<string, Buffer>();
     const getFileBuffer = (filePath: string): Buffer | null => {
       if (fileBufferCache.has(filePath)) return fileBufferCache.get(filePath) ?? null;
-      const row = db
-        .prepare<[string, string], { raw_content: Buffer | null }>(
-          'SELECT raw_content FROM files WHERE repo_id = ? AND path = ?',
-        )
-        .get(repoId, filePath);
-      const buf = row?.raw_content ?? null;
+      const buf = getFileContent(db, repoId, filePath);
       if (buf) fileBufferCache.set(filePath, buf);
       return buf;
     };

@@ -94,6 +94,7 @@ Applied before any handler runs:
 
 ## Grammar notes and known limitations
 
+- **TypeScript / JavaScript workspace packages** (1.33.0): a bare import that names an npm / pnpm / yarn workspace package (`@nuxt/kit`) resolves to that package's source entry — `exports` (`.`, subpaths, `import`/`default`/`types` conditions, `*` patterns) → `module` / `main` / `types` → `src/index.*`; a `dist/` target is mirrored to `src/` first and a target that is not an indexed file is dropped. The package map comes from the `package.json` `workspaces` globs or `pnpm-workspace.yaml` of the index root or its nearest ancestor (never past a `.git` boundary), restricted to packages inside the root; a root that is itself a named package (an index rooted at `packages/kit`) resolves by its own name. Across linked indexes (v1.32.0) the package's own root answers. `graph.workspacePackages: 'off'` restores the pre-1.33 behavior (such imports are external).
 - **TypeScript JSX** (`.tsx`) uses `tree-sitter-tsx`, a separate grammar from `tree-sitter-typescript`. Both are bundled.
 - **Python stubs** (`.pyi`) are not indexed — only `.py` files.
 - **Objective-C** `.h` files are guarded: parsed as ObjC only if the first 16 KB contain `@interface` or `@protocol`; otherwise treated as C.

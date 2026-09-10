@@ -24,6 +24,7 @@ import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { buildMeta } from './_meta.js';
 import { byteOffsetToLine } from './symbol-lines.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { getFileContent } from '../../core/db/file-store.js';
 
 export const name = 'get_entry_points';
 
@@ -449,15 +450,10 @@ export async function handler(args: {
     }
 
     for (const [filePath, items] of fileToSymbols) {
-      const fileRow = db
-        .prepare<[string, string], { raw_content: Buffer | null }>(
-          'SELECT raw_content FROM files WHERE repo_id = ? AND path = ?',
-        )
-        .get(repoId, filePath);
+      const content = getFileContent(db, repoId, filePath);
 
-      if (fileRow?.raw_content) {
-        rawBytes += fileRow.raw_content.length;
-        const content = fileRow.raw_content;
+      if (content) {
+        rawBytes += content.length;
         for (const { ep, row } of items) {
           ep.startLine = byteOffsetToLine(content, row.start_byte);
         }

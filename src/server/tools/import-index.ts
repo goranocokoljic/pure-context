@@ -10,7 +10,7 @@ import {
   SCHEMA_VERSION,
 } from '../../core/db/schema.js';
 import { insertSymbols } from '../../core/db/symbol-store.js';
-import { upsertFile } from '../../core/db/file-store.js';
+import { importFileRow } from '../../core/db/file-store.js';
 import { saveEmbeddings } from '../../core/db/embedding-store.js';
 import { insertEdges } from '../../core/db/dep-store.js';
 import { buildMeta } from './_meta.js';
@@ -173,32 +173,11 @@ export async function handler(args: {
     // ── Upsert files ──────────────────────────────────────────────────────────
 
     if (bundle.files && bundle.files.length > 0) {
-      const upsertStmt = db.prepare(`
-        INSERT INTO files
-          (repo_id, path, content_hash, raw_content, indexed_at, tenant_id,
-           remote_sha, last_commit_sha, last_commit_author, last_commit_date,
-           last_commit_message, commit_count)
-        VALUES
-          (@repoId, @path, @contentHash, @rawContent, @indexedAt, @tenantId,
-           @remoteSha, @lastCommitSha, @lastCommitAuthor, @lastCommitDate,
-           @lastCommitMessage, @commitCount)
-        ON CONFLICT(repo_id, path) DO UPDATE SET
-          content_hash        = excluded.content_hash,
-          raw_content         = excluded.raw_content,
-          indexed_at          = excluded.indexed_at,
-          tenant_id           = excluded.tenant_id,
-          remote_sha          = excluded.remote_sha,
-          last_commit_sha     = excluded.last_commit_sha,
-          last_commit_author  = excluded.last_commit_author,
-          last_commit_date    = excluded.last_commit_date,
-          last_commit_message = excluded.last_commit_message,
-          commit_count        = excluded.commit_count
-      `);
-
+      // Bundles carry bytes inline; importFileRow stores them by THIS
+      // machine's mode (blob store or inline) — Phase 100 P1/R5.
       const upsertAll = db.transaction(() => {
         for (const f of bundle.files) {
-          upsertStmt.run({
-            repoId,
+          importFileRow(db, repoId, {
             path: f.path,
             contentHash: f.contentHash,
             rawContent: f.rawContent ? Buffer.from(f.rawContent, 'base64') : null,
@@ -210,6 +189,7 @@ export async function handler(args: {
             lastCommitDate: f.lastCommitDate,
             lastCommitMessage: f.lastCommitMessage,
             commitCount: f.commitCount,
+            declaredPackage: f.declaredPackage ?? null,
           });
         }
       });

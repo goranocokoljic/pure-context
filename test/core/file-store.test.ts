@@ -53,8 +53,12 @@ describe('file-store', () => {
   });
 
   it('stores file without content (hash-only mode)', () => {
-    upsertFile(db, REPO_ID, 'src/foo.ts', 'abc123');
-    expect(getFileHash(db, REPO_ID, 'src/foo.ts')).toBe('abc123');
+    // A hash no other test ever stores content under: since 1.33.0 a NULL
+    // row is answered from the shared blob store by content hash, so a
+    // colliding fake hash would return another test's bytes.
+    const hash = `hash-only-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    upsertFile(db, REPO_ID, 'src/foo.ts', hash);
+    expect(getFileHash(db, REPO_ID, 'src/foo.ts')).toBe(hash);
     expect(getFileContent(db, REPO_ID, 'src/foo.ts')).toBeNull();
   });
 

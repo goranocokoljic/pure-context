@@ -14,7 +14,14 @@ import {
   SCHEMA_VERSION,
 } from './db/schema.js';
 import { insertSymbols, deleteByFile, getSymbolsByRepo, getSymbolsByFile, updateSymbolSummaries } from './db/symbol-store.js';
-import { upsertFile, deleteFile, getAllFileHashes } from './db/file-store.js';
+import {
+  upsertFile,
+  deleteFile,
+  getAllFileHashes,
+  persistContent,
+  persistContentBatch,
+  moveInlineContentToBlobs,
+} from './db/file-store.js';
 import {
   insertEdges,
   deleteEdgesByFile,
@@ -43,6 +50,7 @@ import { buildGraph } from '../graph/graph-builder.js';
 import { buildIndexedFileSet } from '../graph/prefilled-targets.js';
 import { buildFamilyResolvers } from '../graph/family-resolvers.js';
 import { buildDiEdges } from '../graph/di-edges.js';
+import { workspaceResolverFor } from '../graph/workspace-packages.js';
 import { linksChangedSince, prepareLinkedBuild } from './cross-index.js';
 import { getRepoLinks } from './db/link-store.js';
 import { join } from 'path';
@@ -94,6 +102,10 @@ export async function indexFolder(
 
   // ── 1. Open database and ensure repo row exists ───────────────────────────
   const db = openDatabase(repoId);
+  // The schema version this index was LAST written at — read before the
+  // upsert below stamps the current one. Drives the one-time heals (pre-v11
+  // re-parse, pre-v13 inline → blob content move).
+  const preRunSchemaVersion = getRepo(db, repoId)?.schemaVersion ?? null;
   upsertRepo(db, {
     id: repoId,
     rootPath: absRoot,
@@ -186,14 +198,14 @@ export async function indexFolder(
   const cache = createHashCache();
   const preRepo = getRepo(db, repoId);
   const existingHashes = getAllFileHashes(db, repoId);
-  if (preRepo && preRepo.schemaVersion < 11) {
+  if (preRepo && preRunSchemaVersion !== null && preRunSchemaVersion < 11) {
     // Pre-v10 index: import_records (Task 561) were never captured for its
     // files. Pre-v11 index: start_byte/end_byte hold UTF-16 char indices, not
     // true byte offsets (Phase 90 char-vs-byte fix). Either way, leave the
     // cache empty so every file re-parses once and the stored values heal —
     // hash-skipped files would otherwise keep corrupted spans forever.
     logger.info(
-      `Index predates schema v${preRepo.schemaVersion < 10 ? '10' : '11'} — full re-parse to heal stored data`,
+      `Index predates schema v${preRunSchemaVersion < 10 ? '10' : '11'} — full re-parse to heal stored data`,
     );
   } else {
     for (const [path, hash] of existingHashes) {
@@ -289,6 +301,10 @@ export async function indexFolder(
       declaredPackage: string | null;
     }>,
   ): void => {
+    // Phase 100: bytes go to the shared blob store in ONE transaction per
+    // batch (dedup by hash); the files row then stores NULL. A blob write
+    // that fails leaves that file's bytes inline (R1: never a lost file).
+    const stored = persistContentBatch(batch.map((r) => ({ hash: r.hash, content: r.content })));
     db.transaction(() => {
       for (const r of batch) {
         allImports.push(...r.imports);
@@ -307,7 +323,15 @@ export async function indexFolder(
         // re-parse churn: such files were never recorded, so every subsequent
         // no-op index re-read and re-parsed them. Recording the hash lets the
         // next run recognise them as unchanged and skip them.
-        upsertFile(db, repoId, r.relPath, r.hash, r.content, 'local', r.declaredPackage);
+        upsertFile(
+          db,
+          repoId,
+          r.relPath,
+          r.hash,
+          stored.has(r.hash) ? stored.get(r.hash) : r.content,
+          'local',
+          r.declaredPackage,
+        );
         replaceImportRecords(db, repoId, r.relPath, r.imports);
         cache.set(r.relPath, r.hash);
 
@@ -421,7 +445,7 @@ export async function indexFolder(
   const reresolveAll =
     (storedLinks.length > 0 || linked.links.length > 0) &&
     linksChangedSince(storedLinks, linked.links) &&
-    (preRepo?.schemaVersion ?? SCHEMA_VERSION) >= 10;
+    (preRunSchemaVersion ?? SCHEMA_VERSION) >= 10;
   if (reresolveAll) graphImports = getAllImportRecords(db, repoId);
   if (reresolveAll) {
     deleteEdgesExceptType(db, repoId, 'di');
@@ -430,9 +454,12 @@ export async function indexFolder(
   const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, graphImports);
   let edges: DepEdge[];
   try {
+    const indexedFiles = buildIndexedFileSet(getAllFileHashes(db, repoId).keys());
     edges = buildGraph(graphImports, resolver, repoId, familyResolvers, {
-      indexedFiles: buildIndexedFileSet(getAllFileHashes(db, repoId).keys()),
+      indexedFiles,
       links: linked.targets,
+      // Phase 100 (Task 627): `@scope/pkg` imports inside a workspace monorepo.
+      workspacePackages: workspaceResolverFor(absRoot, indexedFiles),
     });
     if (edges.length > 0) {
       insertEdges(db, edges);
@@ -574,11 +601,32 @@ export async function indexFolder(
   const headSha = options.skipGit ? null : gitHeadSha(absRoot);
   setGitTreeSha(db, repoId, headSha);
 
+  // ── 11c. Inline → blob store, once (Phase 100, Task 621) ──────────────────
+  // A pre-v13 index carries every file's bytes inline; hash-skipped files
+  // would keep them there forever. Move them on this whole-tree run (no
+  // re-parse: bytes + hash are already in the row) and reclaim the pages.
+  let contentMigrated: IndexResult['contentMigrated'];
+  if (preRunSchemaVersion !== null && preRunSchemaVersion < 13) {
+    const moved = moveInlineContentToBlobs(db, repoId);
+    if (moved.files > 0) {
+      try {
+        db.exec('VACUUM');
+      } catch {
+        /* WASM tier / busy — pages are reused by later writes */
+      }
+      contentMigrated = moved;
+      logger.info(
+        `Moved ${moved.files} files (${(moved.bytes / 1_048_576).toFixed(1)} MB) from the index into the blob store`,
+      );
+    }
+  }
+
   db.close();
 
   const result: IndexResult = {
     repoId,
     headSha,
+    ...(contentMigrated ? { contentMigrated } : {}),
     ...(clone
       ? {
           clonedFrom: {
@@ -792,7 +840,7 @@ export async function reindexFiles(
       deleteEdgesBySource(db, repoId, relPath);
 
       const hash = computeHash(content);
-      upsertFile(db, repoId, relPath, hash, content, 'local', declaredPackage);
+      upsertFile(db, repoId, relPath, hash, persistContent(hash, content), 'local', declaredPackage);
       replaceImportRecords(db, repoId, relPath, imports);
 
       if (symbols.length === 0 && imports.length === 0) {
@@ -839,9 +887,11 @@ export async function reindexFiles(
     });
     let rebuilt: DepEdge[];
     try {
+      const indexedFiles = buildIndexedFileSet(getAllFileHashes(db, repoId).keys());
       rebuilt = buildGraph(storedImports, resolver, repoId, familyResolvers, {
-        indexedFiles: buildIndexedFileSet(getAllFileHashes(db, repoId).keys()),
+        indexedFiles,
         links: linked.targets,
+        workspacePackages: workspaceResolverFor(absRoot, indexedFiles),
       });
       if (rebuilt.length > 0) {
         insertEdges(db, rebuilt);
@@ -872,9 +922,11 @@ export async function reindexFiles(
     const linked = prepareLinkedBuild(db, repoId, absRoot, allImports, { discover: false });
     let edges: DepEdge[];
     try {
+      const indexedFiles = buildIndexedFileSet(getAllFileHashes(db, repoId).keys());
       edges = buildGraph(allImports, resolver, repoId, familyResolvers, {
-        indexedFiles: buildIndexedFileSet(getAllFileHashes(db, repoId).keys()),
+        indexedFiles,
         links: linked.targets,
+        workspacePackages: workspaceResolverFor(absRoot, indexedFiles),
       });
       if (edges.length > 0) {
         insertEdges(db, edges);

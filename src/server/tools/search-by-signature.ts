@@ -23,6 +23,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { byteOffsetToLine } from './symbol-lines.js';
 import type { SymbolKind } from '../../core/types.js';
 import type Database from 'better-sqlite3';
+import { getFileContent } from '../../core/db/file-store.js';
 
 export const name = 'search_by_signature';
 
@@ -189,12 +190,9 @@ export async function handler(args: {
 
     for (const [filePath, syms] of fileSymbols) {
       // Try to get file content for accurate line numbers
-      const fileRow = db.prepare<[string, string], { raw_content: Buffer | null }>(
-        'SELECT raw_content FROM files WHERE repo_id = ? AND path = ?',
-      ).get(args.repoId, filePath);
+      const content = getFileContent(db, args.repoId, filePath);
 
-      if (fileRow?.raw_content) {
-        const content = fileRow.raw_content;
+      if (content) {
         for (const sym of syms) {
           lineMap.set(sym.id, byteOffsetToLine(content, sym.start_byte));
         }

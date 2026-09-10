@@ -19,7 +19,7 @@
  * - the `repo_id` rewrite enumerates columns via `sqlite_master` +
  *   `PRAGMA table_info` — no hand-kept table list, ever.
  */
-import { copyFileSync, existsSync, statSync, unlinkSync } from 'node:fs';
+import { constants as fsConstants, copyFileSync, existsSync, renameSync, statSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type Database from 'better-sqlite3';
 import { logger } from './logger.js';
@@ -32,7 +32,16 @@ import {
   SCHEMA_VERSION,
 } from './db/schema.js';
 import { getSqliteFactory } from './db/sqlite-loader.js';
+import { contentStoreMode } from './db/blob-store.js';
+import { inlineContentBytes, moveInlineContentToBlobs } from './db/file-store.js';
 import { gitDirtyFiles, gitWorktreeList, isJobInProgress, isLinkedWorktree } from './git-head.js';
+
+/**
+ * Oldest sibling schema a clone may be seeded from. v12 → v13 changed no
+ * table (content location only), so a v12 sibling is still a correct seed;
+ * its inline content is moved to the blob store right after the copy.
+ */
+export const MIN_CLONE_SCHEMA_VERSION = 12;
 
 export interface CloneSource {
   repoId: string;
@@ -49,7 +58,12 @@ export interface CloneResult {
   /** Tables whose `repo_id` column was rewritten. */
   tables: string[];
   rowsRewritten: number;
+  /** Final size of the new index file. */
   bytes: number;
+  /** Size right after the copy, before inline content was moved out (Phase 100). */
+  bytesCopied: number;
+  /** Files whose inline bytes moved to the blob store during the clone. */
+  contentMoved: number;
   cloneMs: number;
   /**
    * Paths dirty in the SIBLING's working tree right now. The sibling's index
@@ -89,9 +103,9 @@ export function findCloneSource(absRoot: string): CloneSource | null {
       const meta = getRepo(db, repoId);
       db.close();
       if (!meta) continue;
-      if (meta.schemaVersion !== SCHEMA_VERSION) {
+      if (meta.schemaVersion < MIN_CLONE_SCHEMA_VERSION || meta.schemaVersion > SCHEMA_VERSION) {
         logger.info(
-          `worktree clone: sibling ${wt.path} is schema v${meta.schemaVersion} (need v${SCHEMA_VERSION}) — skipped`,
+          `worktree clone: sibling ${wt.path} is schema v${meta.schemaVersion} (need v${MIN_CLONE_SCHEMA_VERSION}–v${SCHEMA_VERSION}) — skipped`,
         );
         continue;
       }
@@ -134,9 +148,11 @@ export function cloneIndex(source: CloneSource, newRepoId: string, newRoot: stri
     }
   }
 
-  // 2. Copy the main file only (after TRUNCATE the WAL is empty).
-  copyFileSync(source.dbPath, dest);
-  const bytes = statSync(dest).size;
+  // 2. Copy the main file only (after TRUNCATE the WAL is empty). A reflink
+  //    (COPYFILE_FICLONE) shares blocks on btrfs/xfs/APFS/ReFS; file systems
+  //    without it (NTFS) fall back to a plain copy silently — Node semantics.
+  copyFileSync(source.dbPath, dest, fsConstants.COPYFILE_FICLONE);
+  const bytesCopied = statSync(dest).size;
 
   // 3. Rewrite repo ids. FK enforcement is ON in this schema (children
   //    reference repos.id, ON UPDATE = NO ACTION), so disable it for the
@@ -144,6 +160,7 @@ export function cloneIndex(source: CloneSource, newRepoId: string, newRoot: stri
   const db = getSqliteFactory().open(dest);
   const tables: string[] = [];
   let rowsRewritten = 0;
+  let contentMoved = 0;
   try {
     db.exec('PRAGMA foreign_keys = OFF');
     const rewrite = db.transaction(() => {
@@ -175,20 +192,58 @@ export function cloneIndex(source: CloneSource, newRepoId: string, newRoot: stri
     if (leftovers > 0) {
       throw new Error(`cloneIndex: ${leftovers} row(s) still carry the source repo id`);
     }
+    // Phase 100 (Task 623): a sibling indexed before v13 (or in inline mode)
+    // carries every file's bytes inline — the copy just duplicated them.
+    // Move them to the shared blob store; the clone keeps only what is
+    // unique to it. `VACUUM INTO` below drops the freed pages.
+    if (contentStoreMode() === 'blob' && inlineContentBytes(db, newRepoId) > 0) {
+      contentMoved = moveInlineContentToBlobs(db, newRepoId).files;
+    }
   } catch (err) {
     db.close();
     try { unlinkSync(dest); } catch { /* best effort */ }
     throw err;
   }
-  db.close();
+  if (contentMoved > 0) {
+    // Rewrite the file without the freed pages (a plain VACUUM would also
+    // work but rewrites in place; INTO lets a failure leave `dest` intact).
+    const slim = `${dest}.slim`;
+    try {
+      try { unlinkSync(slim); } catch { /* absent */ }
+      db.exec(`VACUUM INTO '${slim.replace(/'/g, "''")}'`);
+      db.close();
+      unlinkSync(dest);
+      renameSync(slim, dest);
+    } catch (err) {
+      logger.debug(`cloneIndex: VACUUM INTO unavailable — keeping the un-vacuumed copy: ${String(err)}`);
+      try { db.close(); } catch { /* already closed */ }
+      try { unlinkSync(slim); } catch { /* absent */ }
+    }
+  } else {
+    db.close();
+  }
+  const bytes = statSync(dest).size;
 
   const sourceDirtyFiles = gitDirtyFiles(source.rootPath) ?? [];
   const cloneMs = Date.now() - t0;
   logger.info(
-    `Cloned index from worktree ${source.rootPath} (${(bytes / 1_048_576).toFixed(1)} MB, ` +
-      `${tables.length} tables, ${rowsRewritten} rows re-keyed) in ${cloneMs}ms`,
+    `Cloned index from worktree ${source.rootPath} (${(bytes / 1_048_576).toFixed(1)} MB` +
+      (contentMoved > 0
+        ? `, ${(bytesCopied / 1_048_576).toFixed(1)} MB before moving ${contentMoved} files' content to the blob store`
+        : '') +
+      `, ${tables.length} tables, ${rowsRewritten} rows re-keyed) in ${cloneMs}ms`,
   );
-  return { source, newRepoId, tables, rowsRewritten, bytes, cloneMs, sourceDirtyFiles };
+  return {
+    source,
+    newRepoId,
+    tables,
+    rowsRewritten,
+    bytes,
+    bytesCopied,
+    contentMoved,
+    cloneMs,
+    sourceDirtyFiles,
+  };
 }
 
 /**

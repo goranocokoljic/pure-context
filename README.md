@@ -276,6 +276,17 @@ What you get:
 Without the hooks, run `index_folder({ path, onlyChanged: true })` after a
 branch change; `list_repos` reports `freshness` per repo either way.
 
+**Keep it small.** Since 1.33.0 an index no longer carries the source text;
+every file's bytes live once in a shared, content-addressed store
+(`~/.purecontext/blobs.db`), so a second worktree costs its symbols and
+edges only. Indexes whose checkout is gone, and half-written ones from a
+crashed run, are listed by `list_repos` (`store`) and removed by
+
+```bash
+npx purecontext-mcp@latest index gc            # dry run
+npx purecontext-mcp@latest index gc --blobs --yes
+```
+
 ### Claude Desktop
 
 Edit `~/.claude/claude_desktop_config.json`:
@@ -357,9 +368,10 @@ If your team runs a shared PureContext server, connect with an HTTP transport in
 
 ### Data directory
 
-Indexes, config, and telemetry live under `~/.purecontext/` by default. Set the
-`PCTX_DATA_DIR` environment variable to relocate everything (useful for CI, test
-isolation, or keeping experiments away from your real indexes):
+Indexes, the shared content store (`blobs.db`), config, and telemetry live
+under `~/.purecontext/` by default. Set the `PCTX_DATA_DIR` environment
+variable to relocate everything (useful for CI, test isolation, or keeping
+experiments away from your real indexes):
 
 ```bash
 PCTX_DATA_DIR=/tmp/pctx-scratch npx purecontext-mcp

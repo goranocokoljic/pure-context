@@ -19,6 +19,7 @@
 import type Database from 'better-sqlite3';
 import { logger } from './logger.js';
 import { isTestFilePath } from './test-paths.js';
+import { getFileContent } from './db/file-store.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -62,11 +63,6 @@ interface SymbolRow {
   file_path: string;
 }
 
-interface FileContentRow {
-  path: string;
-  raw_content: string | null;
-}
-
 // ─── Core function ────────────────────────────────────────────────────────────
 
 /**
@@ -103,14 +99,8 @@ export function buildTestMappings(repoId: string, db: Database.Database): number
   // ── 2. Load test file contents from the files table ───────────────────────
   const fileContents = new Map<string, string>(); // filePath → raw content
   for (const fp of testFilePaths) {
-    const row = db
-      .prepare<[string, string], FileContentRow>(
-        'SELECT path, raw_content FROM files WHERE repo_id = ? AND path = ?',
-      )
-      .get(repoId, fp);
-    if (row?.raw_content) {
-      fileContents.set(fp, row.raw_content);
-    }
+    const buf = getFileContent(db, repoId, fp);
+    if (buf) fileContents.set(fp, buf.toString('utf8'));
   }
 
   // ── 3. Build per-test-file symbol sets ────────────────────────────────────

@@ -43,6 +43,7 @@ import { buildMeta } from './_meta.js';
 import { byteOffsetToLine } from './symbol-lines.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SymbolKind } from '../../core/types.js';
+import { getFileContent } from '../../core/db/file-store.js';
 
 export const name = 'get_test_coverage_map';
 
@@ -678,12 +679,7 @@ export async function handler(args: {
           .all(repoId, relPath);
 
         // Load file content for line number computation
-        const row = db
-          .prepare<[string, string], { raw_content: Buffer | null }>(
-            'SELECT raw_content FROM files WHERE repo_id = ? AND path = ?',
-          )
-          .get(repoId, relPath);
-        const fileContent = row?.raw_content ?? null;
+        const fileContent = getFileContent(db, repoId, relPath);
 
         const entry = processIstanbulFile(
           relPath,
@@ -719,12 +715,7 @@ export async function handler(args: {
           )
           .all(repoId, relPath);
 
-        const row = db
-          .prepare<[string, string], { raw_content: Buffer | null }>(
-            'SELECT raw_content FROM files WHERE repo_id = ? AND path = ?',
-          )
-          .get(repoId, relPath);
-        const fileContent = row?.raw_content ?? null;
+        const fileContent = getFileContent(db, repoId, relPath);
 
         const entry = processV8File(
           relPath,
