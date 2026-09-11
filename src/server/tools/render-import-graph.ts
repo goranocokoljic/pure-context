@@ -21,6 +21,8 @@
 import { z } from 'zod';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { getAllDepEdges } from '../../core/db/dep-store.js';
+import type { DepEdge } from '../../core/types.js';
+import { openWorkspace, rootLabels, workspaceAdjacency } from '../../graph/workspace-graph.js';
 import {
   sanitizeId,
   shortLabel,
@@ -43,7 +45,9 @@ export const description =
   'clustered by subdirectory using Mermaid subgraph blocks. Files outside the ' +
   'directory that are imported by in-scope files appear as grey boundary nodes. ' +
   'Use maxNodes (default 30) to keep large graphs readable. ' +
-  'Mermaid output renders natively in GitHub, VS Code, and Claude.';
+  'Mermaid output renders natively in GitHub, VS Code, and Claude. ' +
+  'crossIndex:true (since 1.35.0) draws imports into LINKED indexes as boundary nodes named ' +
+  '`<rootName>:<file>` (fullPath `<linkedRepoId>:<path>`).';
 
 export const inputSchema = {
   repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
@@ -73,6 +77,10 @@ export const inputSchema = {
     .enum(['mermaid', 'dot'])
     .optional()
     .describe('Output format. Default "mermaid".'),
+  crossIndex: z
+    .boolean()
+    .optional()
+    .describe('Include edges into LINKED indexes as boundary nodes (default false).'),
 };
 
 // ─── Output type ──────────────────────────────────────────────────────────────
@@ -82,6 +90,9 @@ interface RenderImportGraphOutput {
   fileCount: number;
   edgeCount: number;
   truncated: boolean;
+  crossIndex?: boolean;
+  links?: Array<{ repoId: string; rootPath: string; rootName: string }>;
+  crossEdgeCount?: number;
   _tokenEstimate: number;
   _meta: ReturnType<typeof buildMeta>;
 }
@@ -94,6 +105,7 @@ export async function handler(args: {
   includeExternal?: boolean;
   maxNodes?: number;
   format?: 'mermaid' | 'dot';
+  crossIndex?: boolean;
 }): Promise<CallToolResult> {
   const t0 = Date.now();
   const {
@@ -102,6 +114,7 @@ export async function handler(args: {
     includeExternal = false,
     maxNodes = 30,
     format = 'mermaid',
+    crossIndex = false,
   } = args;
 
   const db = openDatabase(repoId);
@@ -121,13 +134,43 @@ export async function handler(args: {
     const scopePrefix = filePath.endsWith('/') ? filePath : filePath + '/';
 
     // Fetch all dep_edges for the repo and filter to edges whose source is in scope.
-    const allEdges = getAllDepEdges(db, repoId);
+    // Phase 102 (Task 638): with crossIndex, this root's edges INTO linked
+    // indexes join as boundary edges whose target is `<linkedRepoId>:<path>`.
+    let allEdges: Array<Pick<DepEdge, 'sourceFile' | 'targetFile' | 'targetRepoId'>>;
+    let crossFields: Pick<RenderImportGraphOutput, 'crossIndex' | 'links' | 'crossEdgeCount'> = {};
+    const crossLabel = new Map<string, { label: string; group: string }>(); // display target → label/group
+    if (crossIndex) {
+      const ws = openWorkspace(db, repoId, repo.rootPath);
+      try {
+        const labels = rootLabels(ws);
+        const { edges } = workspaceAdjacency(ws, { scope: 'local-source', excludeEdgeTypes: [], skipSelfLoops: false });
+        allEdges = edges.map((e) => {
+          if (e.target.repoId === ws.local.repoId) {
+            return { sourceFile: e.source.path, targetFile: e.target.path, targetRepoId: null };
+          }
+          const root = labels.get(e.target.repoId) ?? e.target.repoId;
+          const display = `${e.target.repoId}:${e.target.path}`;
+          crossLabel.set(display, { label: `${root}:${shortLabel(e.target.path)}`, group: root });
+          return { sourceFile: e.source.path, targetFile: display, targetRepoId: e.target.repoId };
+        });
+        crossFields = {
+          crossIndex: true,
+          links: ws.links.map((m) => ({ repoId: m.repoId, rootPath: m.rootPath, rootName: labels.get(m.repoId) ?? m.repoId })),
+          crossEdgeCount: 0,
+        };
+      } finally {
+        ws.close();
+      }
+    } else {
+      allEdges = getAllDepEdges(db, repoId);
+    }
     const sourceEdges = allEdges.filter((e) => e.sourceFile.startsWith(scopePrefix));
+    if (crossFields.crossIndex) crossFields.crossEdgeCount = sourceEdges.filter((e) => e.targetRepoId).length;
 
     // Classify edges into internal (both endpoints in scope) and boundary
     // (target is an internal file but outside the scope prefix).
-    const internalEdges = sourceEdges.filter((e) => e.targetFile.startsWith(scopePrefix));
-    const boundaryEdges = sourceEdges.filter((e) => !e.targetFile.startsWith(scopePrefix));
+    const internalEdges = sourceEdges.filter((e) => !e.targetRepoId && e.targetFile.startsWith(scopePrefix));
+    const boundaryEdges = sourceEdges.filter((e) => e.targetRepoId || !e.targetFile.startsWith(scopePrefix));
 
     // Build node set: collect in-scope files from all source edges, then add
     // boundary files from boundary edges.
@@ -158,11 +201,12 @@ export async function handler(args: {
     }
 
     for (const fp of boundaryFiles) {
+      const cross = crossLabel.get(fp);
       nodes.push({
         id: sanitizeId(fp),
-        label: shortLabel(fp),
+        label: cross ? cross.label : shortLabel(fp),
         fullPath: fp,
-        group: parentDir(fp),
+        group: cross ? cross.group : parentDir(fp),
         styleClass: 'boundary',
       });
     }
@@ -205,6 +249,7 @@ export async function handler(args: {
       fileCount,
       edgeCount: prunedEdges.length,
       truncated,
+      ...crossFields,
       _tokenEstimate: Math.ceil(diagram.length / 4),
       ...(graphCoverageWarning(db, repoId) ?? {}), // Phase 98 (Task 608)
       _meta: buildMeta({ timingMs: Date.now() - t0 }),

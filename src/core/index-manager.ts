@@ -26,7 +26,6 @@ import {
   insertEdges,
   deleteEdgesByFile,
   deleteEdgesBySource,
-  deleteEdgesByType,
   deleteEdgesExceptType,
   getForwardDeps,
   getReverseDeps,
@@ -49,7 +48,7 @@ import { createResolver } from '../graph/path-resolver.js';
 import { buildGraph } from '../graph/graph-builder.js';
 import { buildIndexedFileSet } from '../graph/prefilled-targets.js';
 import { buildFamilyResolvers } from '../graph/family-resolvers.js';
-import { buildDiEdges } from '../graph/di-edges.js';
+import { rebuildDiEdges } from '../graph/di-edges.js';
 import { workspaceResolverFor } from '../graph/workspace-packages.js';
 import { linksChangedSince, prepareLinkedBuild } from './cross-index.js';
 import { rebuildSymbolRefs, symbolEdgesEnabled } from './symbol-ref-build.js';
@@ -496,11 +495,7 @@ export async function indexFolder(
   // just-persisted symbols table. Repo-wide rebuild (delete-then-insert) keeps
   // targeted re-index and full index identical. Zero cost on non-Android repos.
   if (adapters.some((a) => a.name === 'android')) {
-    deleteEdgesByType(db, repoId, 'di');
-    const diEdges = buildDiEdges(db, repoId);
-    if (diEdges.length > 0) {
-      insertEdges(db, diEdges);
-    }
+    rebuildDiEdges(db, repoId); // Phase 102: providers in linked roots too
   }
 
   // ── 10b. Stage 3: AI summarization (optional) ────────────────────────────
@@ -972,11 +967,7 @@ export async function reindexFiles(
 
   // ── Android DI edges (Phase 85) — same repo-wide rebuild as indexFolder ───
   if (adapters.some((a) => a.name === 'android')) {
-    deleteEdgesByType(db, repoId, 'di');
-    const diEdges = buildDiEdges(db, repoId);
-    if (diEdges.length > 0) {
-      insertEdges(db, diEdges);
-    }
+    rebuildDiEdges(db, repoId); // Phase 102: providers in linked roots too
   }
 
   // ── Re-summarize changed symbols with AI (if available) ───────────────────

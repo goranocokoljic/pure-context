@@ -195,3 +195,67 @@ describe('buildDiEdges', () => {
     expect(buildDiEdges(db, REPO)).toHaveLength(1);
   });
 });
+
+// ─── Phase 102 (Task 639): providers in a LINKED index ───────────────────────
+
+describe('buildDiEdges across links', () => {
+  function seedLinked(symbols: SymbolRecord[]) {
+    const ldb = openInMemoryDatabase();
+    upsertRepo(ldb, {
+      id: 'dilinked',
+      rootPath: '/tmp/dilinked',
+      symbolCount: 0,
+      fileCount: 0,
+      languages: [],
+      indexedAt: Date.now(),
+      schemaVersion: SCHEMA_VERSION,
+      clonePath: null,
+      tenantId: 'local',
+    });
+    if (symbols.length > 0) insertSymbols(ldb, 'dilinked', symbols);
+    return ldb;
+  }
+
+  it('a consumer here is wired to a provider in the linked index (edge carries targetRepoId)', () => {
+    const db = seedDb([
+      sym('HomeViewModel', 'app/HomeViewModel.kt', { role: 'consumer', injectConstructor: true, consumedTypes: ['UserRepository'] }),
+    ]);
+    const ldb = seedLinked([
+      sym('bindUserRepository', 'core/DataModule.kt', { role: 'provider', providedType: 'UserRepository', binds: true }, 'method'),
+    ]);
+    expect(buildDiEdges(db, REPO)).toEqual([]); // nothing without the link
+    const edges = buildDiEdges(db, REPO, [{ repoId: 'dilinked', db: ldb }]);
+    expect(edges).toHaveLength(1);
+    expect(edges[0]!.sourceFile).toBe('app/HomeViewModel.kt');
+    expect(edges[0]!.targetFile).toBe('core/DataModule.kt');
+    expect(edges[0]!.targetRepoId).toBe('dilinked');
+    expect(edges[0]!.specifier).toBe('di:UserRepository');
+  });
+
+  it('local providers keep their edges; a linked provider of the same type ADDS one; linked consumers add nothing', () => {
+    const db = seedDb([
+      sym('provideDb', 'core/LocalModule.kt', { role: 'provider', providedType: 'AppDatabase' }, 'method'),
+      sym('Repo', 'core/Repo.kt', { role: 'consumer', injectConstructor: true, consumedTypes: ['AppDatabase'] }),
+    ]);
+    const ldb = seedLinked([
+      sym('provideDbToo', 'lib/OtherModule.kt', { role: 'provider', providedType: 'AppDatabase' }, 'method'),
+      // A consumer over there is the OTHER index's business (importing side only).
+      sym('Elsewhere', 'lib/Elsewhere.kt', { role: 'consumer', injectConstructor: true, consumedTypes: ['AppDatabase'] }),
+    ]);
+    const local = buildDiEdges(db, REPO);
+    const linked = buildDiEdges(db, REPO, [{ repoId: 'dilinked', db: ldb }]);
+    expect(local.map((e) => e.targetFile)).toEqual(['core/LocalModule.kt']);
+    expect(linked.filter((e) => !e.targetRepoId)).toEqual(local);
+    expect(linked.filter((e) => e.targetRepoId).map((e) => `${e.sourceFile} -> ${e.targetRepoId}:${e.targetFile}`)).toEqual([
+      'core/Repo.kt -> dilinked:lib/OtherModule.kt',
+    ]);
+  });
+
+  it('a linked index without DI meta contributes nothing (adapter not active there)', () => {
+    const db = seedDb([
+      sym('Vm', 'app/Vm.kt', { role: 'consumer', injectConstructor: true, consumedTypes: ['Thing'] }),
+    ]);
+    const ldb = seedLinked([sym('Thing', 'lib/Thing.kt')]);
+    expect(buildDiEdges(db, REPO, [{ repoId: 'dilinked', db: ldb }])).toEqual([]);
+  });
+});

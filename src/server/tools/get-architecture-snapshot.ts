@@ -24,11 +24,15 @@ import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { getCouplingMap } from '../../core/db/dep-store.js';
 import { findImportCycles } from '../../graph/graph-traversal.js';
 import {
+  computeCurrentCrossCycles,
+  computeCurrentCrossLayerViolations,
   computeCurrentCycles,
   computeCurrentLayerViolations,
+  linkSetOf,
   type StoredCycle,
   type StoredLayerViolation,
 } from './compare-change-impact.js';
+import { openWorkspace, type Workspace } from '../../graph/workspace-graph.js';
 import { buildMeta } from './_meta.js';
 import { graphCoverageWarning } from './graph-coverage.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -42,7 +46,10 @@ export const description =
   'avgComplexity and store them with an optional label. ' +
   'action "list": return all snapshots for the repo, newest first. ' +
   'action "diff": compare two snapshots and return deltas (cycleCountDelta < 0 means fewer cycles — good). ' +
-  'action "delete": remove a snapshot by ID.';
+  'action "delete": remove a snapshot by ID. crossIndex:true on "create" (since 1.35.0) also stores ' +
+  'the cycles / layer violations that cross into LINKED indexes plus the link set, so ' +
+  'compare_change_impact({ crossIndex: true }) can diff them; "diff" reports crossCycleCountDelta ' +
+  'only when both snapshots carry the same link set.';
 
 export const inputSchema = {
   repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
@@ -61,6 +68,10 @@ export const inputSchema = {
     .string()
     .optional()
     .describe('Human-readable label for the snapshot (e.g. "before-auth-refactor")'),
+  crossIndex: z
+    .boolean()
+    .optional()
+    .describe('On "create": also store cross-index cycles / layer violations and the link set (default false).'),
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -81,6 +92,14 @@ interface StoredMetrics {
    */
   cycles?: StoredCycle[];
   layerViolations?: StoredLayerViolation[];
+  /**
+   * Phase 102 (crossIndex:true only): cycles / violations that cross into a
+   * linked index, and the sorted link set they were computed against. A later
+   * compare with a different link set gets `crossBaseline: no_baseline`.
+   */
+  linkSet?: string[];
+  crossCycles?: StoredCycle[];
+  crossLayerViolations?: StoredLayerViolation[];
 }
 
 interface SnapshotRecord {
@@ -105,6 +124,10 @@ interface SnapshotDiff {
   cycleCountDelta: number;
   avgCouplingDelta: number;
   avgComplexityDelta: number;
+  /** Phase 102: only when both snapshots carry cross data for the SAME link set. */
+  crossCycleCountDelta?: number;
+  crossLayerViolationCountDelta?: number;
+  crossBaseline?: 'compared' | 'no_baseline';
 }
 
 interface GetArchitectureSnapshotOutput {
@@ -163,7 +186,7 @@ function rowToRecord(row: DbSnapshotRow): SnapshotRecord {
 
 // ─── Metrics computation ──────────────────────────────────────────────────────
 
-function computeMetrics(db: Db, repoId: string): StoredMetrics {
+function computeMetrics(db: Db, repoId: string, ws?: Workspace): StoredMetrics {
   // File count
   const fileRow = db
     .prepare<[string], { n: number }>('SELECT COUNT(*) AS n FROM files WHERE repo_id = ?')
@@ -228,7 +251,21 @@ function computeMetrics(db: Db, repoId: string): StoredMetrics {
     files: filePaths,
     cycles,
     layerViolations,
+    ...(ws
+      ? {
+          linkSet: linkSetOf(ws),
+          crossCycles: computeCurrentCrossCycles(ws),
+          crossLayerViolations: computeCurrentCrossLayerViolations(ws),
+        }
+      : {}),
   };
+}
+
+function sameLinkSet(a: unknown, b: unknown): boolean {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  const x = [...(a as string[])].sort();
+  const y = [...(b as string[])].sort();
+  return x.every((v, i) => v === y[i]);
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
@@ -239,9 +276,10 @@ export async function handler(args: {
   snapshotId?: string;
   compareId?: string;
   label?: string;
+  crossIndex?: boolean;
 }): Promise<CallToolResult> {
   const t0 = Date.now();
-  const { repoId, action, snapshotId, compareId, label = '' } = args;
+  const { repoId, action, snapshotId, compareId, label = '', crossIndex = false } = args;
 
   const db = openDatabase(repoId);
 
@@ -263,7 +301,24 @@ export async function handler(args: {
     ensureSnapshotsTable(db);
 
     if (action === 'create') {
-      const metrics = computeMetrics(db, repoId);
+      let metrics: StoredMetrics;
+      let crossFields: Record<string, unknown> = {};
+      if (crossIndex) {
+        const ws = openWorkspace(db, repoId, repo.rootPath);
+        try {
+          metrics = computeMetrics(db, repoId, ws);
+          crossFields = {
+            crossIndex: true,
+            links: ws.links.map((m) => ({ repoId: m.repoId, rootPath: m.rootPath })),
+            crossCycleCount: metrics.crossCycles?.length ?? 0,
+            crossLayerViolationCount: metrics.crossLayerViolations?.length ?? 0,
+          };
+        } finally {
+          ws.close();
+        }
+      } else {
+        metrics = computeMetrics(db, repoId);
+      }
       const snapId = randomBytes(6).toString('hex'); // 12-char hex
       const now = Date.now();
 
@@ -287,6 +342,7 @@ export async function handler(args: {
       const output: GetArchitectureSnapshotOutput = {
         action: 'create',
         snapshot: record,
+        ...crossFields,
         ...(graphCoverageWarning(db, repoId) ?? {}), // Phase 98 (Task 608)
         _meta: buildMeta({ timingMs: Date.now() - t0 }),
       };
@@ -381,6 +437,19 @@ export async function handler(args: {
           Math.round((compareMetrics.avgCoupling - baseMetrics.avgCoupling) * 100) / 100,
         avgComplexityDelta:
           Math.round((compareMetrics.avgComplexity - baseMetrics.avgComplexity) * 100) / 100,
+        // Phase 102: cross deltas only for the same link set (R3).
+        ...(baseMetrics.crossCycles || compareMetrics.crossCycles
+          ? sameLinkSet(baseMetrics.linkSet, compareMetrics.linkSet) &&
+            baseMetrics.crossCycles &&
+            compareMetrics.crossCycles
+            ? {
+                crossCycleCountDelta: compareMetrics.crossCycles.length - baseMetrics.crossCycles.length,
+                crossLayerViolationCountDelta:
+                  (compareMetrics.crossLayerViolations?.length ?? 0) - (baseMetrics.crossLayerViolations?.length ?? 0),
+                crossBaseline: 'compared' as const,
+              }
+            : { crossBaseline: 'no_baseline' as const }
+          : {}),
       };
 
       const output: GetArchitectureSnapshotOutput = {

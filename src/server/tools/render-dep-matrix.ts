@@ -20,6 +20,7 @@
 import { z } from 'zod';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { getCouplingMap } from '../../core/db/dep-store.js';
+import { openWorkspace, rootLabels, workspaceCouplingMap } from '../../graph/workspace-graph.js';
 import {
   sanitizeId,
   shortLabel,
@@ -40,7 +41,9 @@ export const description =
   'ASCII format (default) is token-efficient and renders in any markdown context. ' +
   'Mermaid format produces a graph TD showing import edges between the top-N files. ' +
   'Use topN (default 10) to control how many files appear. ' +
-  'Use filePath to scope selection to a directory.';
+  'Use filePath to scope selection to a directory. ' +
+  'crossIndex:true (since 1.35.0) counts imports across LINKED indexes; linked files that the ' +
+  'selected rows import join the matrix as `<rootName>:<file>` columns (at most topN of them).';
 
 export const inputSchema = {
   repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
@@ -73,6 +76,8 @@ interface RenderDepMatrixOutput {
   matrix: string;
   files: string[];
   format: 'ascii' | 'mermaid';
+  crossIndex?: boolean;
+  links?: Array<{ repoId: string; rootPath: string; rootName: string }>;
   _tokenEstimate: number;
   _meta: ReturnType<typeof buildMeta>;
 }
@@ -179,9 +184,10 @@ export async function handler(args: {
   topN?: number;
   filePath?: string;
   format?: 'ascii' | 'mermaid';
+  crossIndex?: boolean;
 }): Promise<CallToolResult> {
   const t0 = Date.now();
-  const { repoId, topN = 10, filePath, format = 'ascii' } = args;
+  const { repoId, topN = 10, filePath, format = 'ascii', crossIndex = false } = args;
 
   const db = openDatabase(repoId);
 
@@ -196,8 +202,46 @@ export async function handler(args: {
       };
     }
 
-    // Fetch coupling rows for the whole repo (or scoped path).
-    let rows = getCouplingMap(db, repoId, filePath);
+    // Fetch coupling rows for the whole repo (or scoped path). Phase 102:
+    // with crossIndex the workspace map counts linked deps both ways; linked
+    // targets are renamed `<rootName>:<path>` for the labels below.
+    let rows: Array<{ filePath: string; efferentCoupling: number; afferentCoupling: number; efferentDeps: string[] }>;
+    let crossFields: Pick<RenderDepMatrixOutput, 'crossIndex' | 'links'> = {};
+    const crossTargets = new Map<string, number>(); // display name → local importers
+    if (crossIndex) {
+      const ws = openWorkspace(db, repoId, repo.rootPath);
+      try {
+        const labels = rootLabels(ws);
+        const rename = (d: string): string => {
+          const i = d.indexOf(':');
+          if (i < 0) return d;
+          const id = d.slice(0, i);
+          const label = labels.get(id);
+          return label ? `${label}:${d.slice(i + 1)}` : d;
+        };
+        rows = (ws.links.length > 0 ? workspaceCouplingMap(ws, filePath) : getCouplingMap(db, repoId, filePath)).map((r) => ({
+          filePath: r.filePath,
+          efferentCoupling: r.efferentCoupling,
+          afferentCoupling: r.afferentCoupling,
+          efferentDeps: r.efferentDeps.map(rename),
+        }));
+        for (const r of rows) {
+          for (const d of r.efferentDeps) {
+            if (ws.links.some((m) => d.startsWith(`${labels.get(m.repoId) ?? m.repoId}:`))) {
+              crossTargets.set(d, (crossTargets.get(d) ?? 0) + 1);
+            }
+          }
+        }
+        crossFields = {
+          crossIndex: true,
+          links: ws.links.map((m) => ({ repoId: m.repoId, rootPath: m.rootPath, rootName: labels.get(m.repoId) ?? m.repoId })),
+        };
+      } finally {
+        ws.close();
+      }
+    } else {
+      rows = getCouplingMap(db, repoId, filePath);
+    }
 
     // When scoping to a directory, filter to files under that path.
     if (filePath) {
@@ -217,6 +261,18 @@ export async function handler(args: {
 
     const filePaths = rows.map((r) => r.filePath);
 
+    // Phase 102: linked files the selected rows import join as extra columns
+    // (most-imported first, at most topN) so the seam is visible in the grid.
+    if (crossTargets.size > 0) {
+      const selected = new Set(rows.flatMap((r) => r.efferentDeps));
+      const extra = [...crossTargets.entries()]
+        .filter(([d]) => selected.has(d))
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, topN)
+        .map(([d]) => d);
+      filePaths.push(...extra);
+    }
+
     // Build a set-of-targets per file for O(1) lookup during matrix construction.
     const importMap = new Map<string, Set<string>>();
     for (const r of rows) {
@@ -235,6 +291,7 @@ export async function handler(args: {
       matrix,
       files: filePaths,
       format,
+      ...crossFields,
       _tokenEstimate: Math.ceil(matrix.length / 4),
       _meta: buildMeta({ timingMs: Date.now() - t0 }),
     };

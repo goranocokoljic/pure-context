@@ -123,9 +123,9 @@ dev-docs/          # Phase task files, benchmark notes (gitignored, not public)
 
 ## Current Status
 
-- **Version:** 1.34.0. Phases 1–101 are COMPLETE (latest: Phase 101 — Symbol-Level Edges: `symbol_refs` table (schema v14), lexical symbol → symbol `ref` edges built from import names + byte spans, `granularity: 'symbol'` on blast radius / context bundle, symbol centrality in risk, ref-fed call hierarchy, `directReferences` / `symbolRadius` in the change tools).
-- **Next, in order:** Phase 102 Cross-Index Completion (`dev-docs/PHASE102_TASKS.md`, 1.35.0) → 103 Resolver Wave 3 → 104 Test-Mapper Redesign → 105 Search-Quality Sweep 3. Plan files: `dev-docs/PHASE10{2..5}_TASKS.md`.
-- **Re-index note:** none forced since 1.31.0; symbol refs backfill on each repo's next whole-tree run (`list_repos.symbolRefs` = 0 until then); content migrates to the blob store the same way.
+- **Version:** 1.35.0. Phases 1–102 are COMPLETE (latest: Phase 102 — Cross-Index Completion: one `workspaceAdjacency` over linked indexes; `crossIndex: true` on `find_cycles` / layer violations / snapshot + `compare_change_impact` (same-link-set rule) / coupling map / both renders; `find_dead_code.keptAliveByLinks` with per-symbol `referencedBy`; android DI edges into linked providers; `get_task_context` coverage + `externalImports` riders. No schema change).
+- **Next, in order:** Phase 103 Resolver Wave 3 (`dev-docs/PHASE103_TASKS.md`, 1.36.0) → 104 Test-Mapper Redesign → 105 Search-Quality Sweep 3. Plan files: `dev-docs/PHASE10{3..5}_TASKS.md`.
+- **Re-index note:** none forced since 1.31.0; symbol refs backfill on each repo's next whole-tree run (`list_repos.symbolRefs` = 0 until then); content migrates to the blob store the same way; cross-index DI edges appear on an android root's next run.
 - **History:** phase summaries for 75–100 are in `dev-docs/PHASE-HISTORY.md`; earlier phases in `dev-docs/PHASE*_TASKS.md`; the full decision log (167 rows) is in `dev-docs/DECISION-LOG.md`. Read those before making an architectural decision, and append new decisions to `dev-docs/DECISION-LOG.md`.
 
 **Working rules that came out of the history (keep these):**

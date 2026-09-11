@@ -64,8 +64,13 @@ checkout link automatically (`list_repos` → `links`), and
 risk centrality and the change tools built on them) answer across the link.
 Edges live in the index that holds the importing file, so after a sibling
 moves (`links[].status: moved`) re-run `index_folder` on the root whose
-edges you query. What still stops at the seam: search, `find_references`,
-`find_cycles`, architecture/render tools, DI edges. An UNLINKED seam
+edges you query. Since v1.35.0 `find_cycles`, the layer / snapshot /
+regression tools, `get_coupling_map` and the two renders cross the link too
+when called with `crossIndex: true` (a linked file shows as
+`<linkedRepoId>:<path>`; a layer rule names a linked root as
+`<rootName>:<glob>`), `find_dead_code` lists what a link keeps alive
+(`keptAliveByLinks`), and android DI edges reach providers in a linked
+root. What still stops at the seam: search and `find_references`. An UNLINKED seam
 (different repository, worktree, unindexed subtree) still shows as
 `externalImports` with `unlinkedSiblings` and the reason; `graph.linkedRepos`
 links across repositories on purpose.

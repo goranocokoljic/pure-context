@@ -7,7 +7,12 @@ import { lineOfByte } from '../core/offsets.js';
 import {
   collectWalk,
   crossImportedLocalFiles,
+  displayNode,
+  nodeKey,
+  parseNodeKey,
   walkWorkspace,
+  workspaceAdjacency,
+  type FileNode,
   type LinkedFileGroup,
   type Workspace,
 } from './workspace-graph.js';
@@ -228,7 +233,17 @@ export interface FindCyclesResult {
   totalFound: number;
   /** true if maxCycles caused some results to be omitted. */
   truncated: boolean;
+  /**
+   * Phase 102: the search stopped at its WORK budget (`maxSteps` edge visits)
+   * before it had enumerated every cycle — more cycles may exist unseen.
+   * Simple-cycle enumeration is exponential on dense graphs (jenkins as five
+   * linked roots ran for hours unbounded); absent when the budget held.
+   */
+  budgetExhausted?: true;
 }
+
+/** Edge visits the cycle DFS may spend before it stops honestly (`budgetExhausted`). */
+export const DEFAULT_CYCLE_SEARCH_STEPS = 5_000_000;
 
 /**
  * Detect all import cycles in the repo's dependency graph.
@@ -247,6 +262,7 @@ export function findImportCycles(
   filePath?: string,
   maxCycles = 20,
   minLength = 2,
+  maxSteps = DEFAULT_CYCLE_SEARCH_STEPS,
 ): FindCyclesResult {
   // Build adjacency list from all dep_edges (all stored edges are internal imports).
   const allEdges = getAllDepEdges(db, repoId);
@@ -279,6 +295,125 @@ export function findImportCycles(
     targets.sort();
   }
 
+  return findCyclesInAdjacency(adj, filePath, maxCycles, minLength, maxSteps);
+}
+
+/**
+ * Strongly connected components (iterative Tarjan) over a prepared adjacency.
+ * Returns node → component id. A node whose component has a single member
+ * (and no self-loop) can be on no cycle at all — the cycle search below
+ * skips it as a start and never steps outside the start's component.
+ */
+export function stronglyConnectedComponents(adj: Map<string, string[]>): Map<string, number> {
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const comp = new Map<string, number>();
+  let idx = 0;
+  let compId = 0;
+  for (const root of adj.keys()) {
+    if (index.has(root)) continue;
+    const work: Array<[string, number]> = [[root, 0]];
+    index.set(root, idx);
+    low.set(root, idx);
+    idx++;
+    stack.push(root);
+    onStack.add(root);
+    while (work.length > 0) {
+      const top = work[work.length - 1]!;
+      const v = top[0];
+      const nbrs = adj.get(v) ?? [];
+      if (top[1] < nbrs.length) {
+        const w = nbrs[top[1]]!;
+        top[1]++;
+        if (!index.has(w)) {
+          index.set(w, idx);
+          low.set(w, idx);
+          idx++;
+          stack.push(w);
+          onStack.add(w);
+          work.push([w, 0]);
+        } else if (onStack.has(w)) {
+          low.set(v, Math.min(low.get(v)!, index.get(w)!));
+        }
+      } else {
+        work.pop();
+        if (work.length > 0) {
+          const u = work[work.length - 1]![0];
+          low.set(u, Math.min(low.get(u)!, low.get(v)!));
+        }
+        if (low.get(v) === index.get(v)) {
+          let w: string;
+          do {
+            w = stack.pop()!;
+            onStack.delete(w);
+            comp.set(w, compId);
+          } while (w !== v);
+          compId++;
+        }
+      }
+    }
+  }
+  return comp;
+}
+
+/**
+ * One shortest cycle through `start` inside its component (BFS over
+ * same-component neighbours). Used when the enumeration budget ran out
+ * before a component yielded anything, so every cyclic component is
+ * represented at least once. Null when no cycle of `minLength` exists.
+ */
+function shortestCycleThrough(
+  adj: Map<string, string[]>,
+  comp: Map<string, number>,
+  start: string,
+  minLength: number,
+): string[] | null {
+  const c = comp.get(start);
+  const parent = new Map<string, string | null>([[start, null]]);
+  const queue: string[] = [start];
+  while (queue.length > 0) {
+    const u = queue.shift()!;
+    for (const w of adj.get(u) ?? []) {
+      if (comp.get(w) !== c) continue;
+      if (w === start) {
+        const path: string[] = [];
+        for (let x: string | null = u; x !== null; x = parent.get(x) ?? null) path.push(x);
+        path.reverse();
+        return path.length >= minLength ? path : null;
+      }
+      if (!parent.has(w)) {
+        parent.set(w, u);
+        queue.push(w);
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * The cycle search over a prepared adjacency (node → SORTED neighbour keys).
+ * Shared by the local reader above and the workspace reader below (Phase
+ * 102, P2): any total order on the keys works for the "root at the smallest
+ * node" deduplication, so `(repoId, path)` keys need no special casing.
+ *
+ * Phase 102 bounds: the DFS is confined to the start node's strongly
+ * connected component (a path that leaves it can never close — on jenkins
+ * `core` the unpruned walk burned hours on exactly those paths) and to
+ * `maxSteps` edge visits in total. When the budget runs out, every cyclic
+ * component that produced nothing still gets one shortest cycle (rooted at
+ * its smallest node) and the result says `budgetExhausted`. On graphs where
+ * the unbounded walk finished, the output is identical: pruning removes only
+ * paths that could never have closed, and the closing order is unchanged.
+ */
+export function findCyclesInAdjacency(
+  adj: Map<string, string[]>,
+  filePath?: string,
+  maxCycles = 20,
+  minLength = 2,
+  maxSteps = DEFAULT_CYCLE_SEARCH_STEPS,
+): FindCyclesResult {
   // When a filePath filter is in play we need to find enough total cycles before
   // filtering. Use a generous internal cap (at least 500) to avoid missing matches
   // on modest repos. Without a filter we can stop as soon as we have maxCycles + 1
@@ -287,14 +422,25 @@ export function findImportCycles(
     filePath !== undefined ? Math.max(maxCycles * 20, 500) : maxCycles + 1;
 
   const found: CyclePath[] = [];
+  let steps = 0;
+  let exhausted = false;
 
-  const nodes = [...adj.keys()].sort();
+  const comp = stronglyConnectedComponents(adj);
+  const compSize = new Map<number, number>();
+  for (const c of comp.values()) compSize.set(c, (compSize.get(c) ?? 0) + 1);
+  const cyclic = (n: string) => (compSize.get(comp.get(n)!) ?? 0) >= 2;
+  const nodes = [...adj.keys()].filter(cyclic).sort();
+  const compsWithCycle = new Set<number>();
 
-  function dfs(start: string, path: string[], pathSet: Set<string>): void {
-    if (found.length >= internalCap) return;
+  function dfs(start: string, startComp: number, path: string[], pathSet: Set<string>): void {
+    if (found.length >= internalCap || exhausted) return;
     const current = path[path.length - 1]!;
     for (const next of adj.get(current) ?? []) {
       if (found.length >= internalCap) return;
+      if (++steps > maxSteps) {
+        exhausted = true;
+        return;
+      }
 
       if (next === start && path.length >= minLength) {
         // Cycle closes back to start — record it.
@@ -303,13 +449,14 @@ export function findImportCycles(
           length: path.length,
           severity: path.length <= 3 ? 'error' : 'warning',
         });
-      } else if (!pathSet.has(next) && next > start) {
+        compsWithCycle.add(startComp);
+      } else if (!pathSet.has(next) && next > start && comp.get(next) === startComp) {
         // Only extend through nodes that come after start lexicographically.
         // This guarantees each cycle is discovered exactly once (rooted at the
         // lexicographically smallest node in the cycle).
         pathSet.add(next);
         path.push(next);
-        dfs(start, path, pathSet);
+        dfs(start, startComp, path, pathSet);
         path.pop();
         pathSet.delete(next);
       }
@@ -317,8 +464,23 @@ export function findImportCycles(
   }
 
   for (const node of nodes) {
-    if (found.length >= internalCap) break;
-    dfs(node, [node], new Set([node]));
+    if (found.length >= internalCap || exhausted) break;
+    dfs(node, comp.get(node)!, [node], new Set([node]));
+  }
+
+  // Budget ran out: represent every cyclic component the walk never reached.
+  if (exhausted) {
+    const seenComp = new Set<number>();
+    for (const node of nodes) {
+      const c = comp.get(node)!;
+      if (compsWithCycle.has(c) || seenComp.has(c)) continue;
+      seenComp.add(c);
+      const cyc = shortestCycleThrough(adj, comp, node, minLength);
+      if (cyc) {
+        found.push({ files: cyc, length: cyc.length, severity: cyc.length <= 3 ? 'error' : 'warning' });
+        compsWithCycle.add(c);
+      }
+    }
   }
 
   // Apply filePath filter.
@@ -331,7 +493,52 @@ export function findImportCycles(
 
   // Phase 98 (Task 612): totalFound is the PRE-cap count — it used to equal
   // cycles.length and read as "exactly N exist".
-  return { cycles, totalFound: filtered.length, truncated };
+  return { cycles, totalFound: filtered.length, truncated, ...(exhausted ? { budgetExhausted: true as const } : {}) };
+}
+
+// ─── Phase 102 (Task 635): cycles across linked indexes ──────────────────────
+
+export interface WorkspaceCyclePath extends CyclePath {
+  /** Each member with its owning index (local members carry the local repo id). */
+  members: FileNode[];
+  /** true when at least one member lives in a LINKED index. */
+  crossIndex: boolean;
+}
+
+export interface FindWorkspaceCyclesResult {
+  cycles: WorkspaceCyclePath[];
+  totalFound: number;
+  truncated: boolean;
+  budgetExhausted?: true;
+}
+
+/**
+ * Cycles over the union graph of the workspace (local + every linked index,
+ * cross rows followed in both directions). `files` keeps the `get_graph`
+ * naming — local members bare, linked members `<repoId>:<path>` — so a
+ * workspace with no links yields exactly the local reader's paths.
+ */
+export function findWorkspaceCycles(
+  ws: Workspace,
+  filePath?: string,
+  maxCycles = 20,
+  minLength = 2,
+  maxSteps = DEFAULT_CYCLE_SEARCH_STEPS,
+): FindWorkspaceCyclesResult {
+  const { adj, nodes } = workspaceAdjacency(ws);
+  const startKey = filePath !== undefined ? nodeKey({ repoId: ws.local.repoId, path: filePath }) : undefined;
+  const raw = findCyclesInAdjacency(adj, startKey, maxCycles, minLength, maxSteps);
+  const cycles: WorkspaceCyclePath[] = raw.cycles.map((c) => {
+    const members = c.files.map((k) => nodes.get(k) ?? parseNodeKey(k));
+    return {
+      files: members.map((m) => displayNode(ws, m)),
+      length: c.length,
+      severity: c.severity,
+      members,
+      crossIndex: members.some((m) => m.repoId !== ws.local.repoId),
+    };
+  });
+  return { cycles, totalFound: raw.totalFound, truncated: raw.truncated, ...(raw.budgetExhausted ? { budgetExhausted: true as const } : {}) };
 }
 
 // ─── Class hierarchy ──────────────────────────────────────────────────────────

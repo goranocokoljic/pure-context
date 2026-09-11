@@ -18,6 +18,7 @@
 import { z } from 'zod';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { getCouplingMap } from '../../core/db/dep-store.js';
+import { openWorkspace, workspaceCouplingMap } from '../../graph/workspace-graph.js';
 import { buildMeta } from './_meta.js';
 import { graphCoverageWarning } from './graph-coverage.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -31,7 +32,9 @@ export const description =
   'instability = efferentCoupling / (efferentCoupling + afferentCoupling). ' +
   'A score near 0 means the file is a stable hub (risky to change). ' +
   'A score near 1 means it is a leaf (safe to change). ' +
-  'Use topN to surface the most coupled files in the repo, or filePath to inspect one file.';
+  'Use topN to surface the most coupled files in the repo, or filePath to inspect one file. ' +
+  'crossIndex:true (since 1.35.0) counts imports across LINKED indexes in both directions: ' +
+  'linked deps appear as `<linkedRepoId>:<path>` and each row adds crossEfferent / crossAfferent.';
 
 export const inputSchema = {
   repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
@@ -65,6 +68,10 @@ export const inputSchema = {
       '"afferent" — show only incoming deps (files that import this file); ' +
       '"both" (default) — show both. Restricting direction reduces response size.',
     ),
+  crossIndex: z
+    .boolean()
+    .optional()
+    .describe('Count dependencies across LINKED indexes too (default false — this index only).'),
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -76,11 +83,16 @@ interface FileCoupling {
   instability: number;
   efferentDeps: string[];
   afferentDeps: string[];
+  /** Phase 102: only with crossIndex — deps that live in a LINKED index. */
+  crossEfferent?: number;
+  crossAfferent?: number;
 }
 
 interface GetCouplingMapOutput {
   files: FileCoupling[];
   totalFiles: number;
+  crossIndex?: boolean;
+  links?: Array<{ repoId: string; rootPath: string }>;
   _tokenEstimate: number;
   _meta: ReturnType<typeof buildMeta>;
 }
@@ -93,9 +105,10 @@ export async function handler(args: {
   topN?: number;
   minScore?: number;
   direction?: 'efferent' | 'afferent' | 'both';
+  crossIndex?: boolean;
 }): Promise<CallToolResult> {
   const t0 = Date.now();
-  const { repoId, filePath, topN = 20, minScore, direction = 'both' } = args;
+  const { repoId, filePath, topN = 20, minScore, direction = 'both', crossIndex = false } = args;
 
   const db = openDatabase(repoId);
 
@@ -110,7 +123,20 @@ export async function handler(args: {
       };
     }
 
-    let rows = getCouplingMap(db, repoId, filePath);
+    // Phase 102 (Task 638): the workspace map counts cross rows both ways.
+    let rows: Array<FileCoupling>;
+    let crossFields: Pick<GetCouplingMapOutput, 'crossIndex' | 'links'> = {};
+    if (crossIndex) {
+      const ws = openWorkspace(db, repoId, repo.rootPath);
+      try {
+        rows = ws.links.length > 0 ? workspaceCouplingMap(ws, filePath) : getCouplingMap(db, repoId, filePath);
+        crossFields = { crossIndex: true, links: ws.links.map((m) => ({ repoId: m.repoId, rootPath: m.rootPath })) };
+      } finally {
+        ws.close();
+      }
+    } else {
+      rows = getCouplingMap(db, repoId, filePath);
+    }
 
     // Apply minScore filter (total coupling)
     if (minScore !== undefined) {
@@ -137,12 +163,14 @@ export async function handler(args: {
       instability: r.instability,
       efferentDeps: direction !== 'afferent' ? r.efferentDeps : [],
       afferentDeps: direction !== 'efferent' ? r.afferentDeps : [],
+      ...(r.crossEfferent !== undefined ? { crossEfferent: r.crossEfferent, crossAfferent: r.crossAfferent } : {}),
     }));
 
     const responseText = JSON.stringify(files);
     const output: GetCouplingMapOutput = {
       files,
       totalFiles: files.length,
+      ...crossFields,
       _tokenEstimate: Math.ceil(responseText.length / 4),
       ...(graphCoverageWarning(db, repoId) ?? {}),
       _meta: buildMeta({ timingMs: Date.now() - t0 }),

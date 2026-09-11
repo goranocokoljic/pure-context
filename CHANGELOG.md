@@ -11,6 +11,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.35.0] - 2026-09-11 — Phase 102: Cross-Index Completion (cycles, dead symbols, layers, coupling, renders, DI across links)
+
+Phase 99 made blast radius, importers, context bundle and risk centrality
+cross a link and documented the rest as "still per index": a cycle that
+passes through two roots (app → lib → app) was invisible, a symbol exported
+only for the sibling root showed up as dead, a layer rule (`ui` may not
+import `db`) was never checked across the seam, coupling and the renders
+stopped at it, and a Hilt module in `core/` providing a type consumed in
+`app/` produced no edge. This release closes that list. Everything is
+opt-in (`crossIndex: true`) except the two readers that already followed
+links (dead code, DI); a repo with no links answers byte-for-byte as before.
+
+### Added
+- **One workspace adjacency** (`workspaceAdjacency` in
+  `src/graph/workspace-graph.ts`): the union file graph over an index and
+  its linked indexes, nodes `(repoId, path)`, cross rows followed only into
+  members of the workspace, `di` rows excluded by default. Every reader
+  below consumes it — no tool builds its own cross walk.
+- **`find_cycles({ crossIndex: true })`** — cycles over the union graph;
+  linked members are named `<linkedRepoId>:<path>`, each cycle carries
+  `members[] {repoId, path}` and `crossIndex`; `links[]` echoed. The cycle
+  search itself is shared (`findCyclesInAdjacency`).
+- **`find_dead_code.keptAliveByLinks`** (when the repo has links): the
+  local files with NO local importer that a linked root imports, and per
+  symbol the linked files that NAME it (`referencedBy` — from `symbol_refs`
+  when the linked index has them, else the import record's names). An empty
+  `referencedBy` means "kept alive by the file import only". The dead list
+  itself stays file-level (parity with a one-root index).
+- **`get_layer_violations({ crossIndex: true })`** — this root's rules
+  applied to its edges INTO linked roots; a linked file is matched as
+  `<rootName>:<path>` (rootName = basename of the linked root, repo id on a
+  basename clash), so `{ name: "db", paths: ["lib:src/db/**"] }` + `ui → db`
+  disallowed catches `ui/…` importing `lib/src/db/…`. Plain globs match
+  local files only; a prefixed glob matches only that root (the glob applies
+  to the path inside it). Violations carry
+  `to_repo_id` / `to_root`. Edges FROM a linked root are judged by that
+  root's own rules (call the tool there). Shared detector
+  `detectLayerViolations`.
+- **`get_architecture_snapshot({ action: "create", crossIndex: true })`**
+  stores `crossCycles`, `crossLayerViolations` and the sorted `linkSet`;
+  **`compare_change_impact({ crossIndex: true })`** diffs them only against
+  a baseline taken with the SAME link set (`crossBaseline: compared |
+  no_baseline`) — a link-set change never reads as a regression; `diff`
+  reports `crossCycleCountDelta` under the same rule.
+- **`get_coupling_map({ crossIndex: true })`** — cross rows counted both
+  ways, linked deps as `<linkedRepoId>:<path>`, per row `crossEfferent` /
+  `crossAfferent`; **`render_import_graph`** draws linked targets as
+  `<rootName>:<file>` boundary nodes (`crossEdgeCount`);
+  **`render_dep_matrix`** adds the linked files the selected rows import as
+  `<rootName>:<path>` columns (at most `topN`).
+- **Cross-index DI edges (android)**: `buildDiEdges(db, repoId, linked)`
+  matches this root's consumed types against providers in linked roots
+  (same bare-name rule, `target_repo_id` set, importing side only); the
+  repo-wide rebuild (`rebuildDiEdges`) opens the stored links. A linked root
+  contributes providers only if its own android adapter recorded `di` meta.
+  Blast radius / importers / dead code see the wiring across the seam;
+  `find_cycles` still excludes `di`.
+- **Cycle search bounded** (`findCyclesInAdjacency`, shared by `find_cycles`
+  local and cross, snapshots, `detect_antipatterns`): the DFS is confined to
+  the start node's strongly connected component (iterative Tarjan) and to a
+  work budget of 5,000,000 edge visits; when the budget runs out every
+  cyclic component still reports one shortest cycle and the result carries
+  `budgetExhausted: true` + a `note` (`totalFound` is then a lower bound).
+  Found on jenkins: the unpruned simple-path walk ran for hours on `core`
+  alone (paths that could never close); pruned it answers in ~100 ms. On
+  graphs where the old walk finished the output is identical (nuxt: 485
+  cycles both ways, byte-identical).
+- **`get_task_context`** carries `graphCoverage` and `externalImports` on
+  every branch (AI, no-AI, associative, empty) — the Phase-98 carry.
+- `benchmarks/harness/phase102_parity.ts` — cycles / layer violations /
+  dead symbols, one root vs linked roots, plus adjacency timing per link count.
+
+### Verification
+- New `test/graph/cross-index-completion.test.ts` (14 tests: two TS roots
+  in one checkout with a cross-root cycle, a cross-root layer violation and
+  a sibling-only export; P1 shape guards; snapshot/compare link-set rule;
+  coupling/renders; the android fixture as `core/` + `app/` roots with the
+  DI edge crossing; parity one root == linked roots on cycles, layer
+  violations, dead symbols) + 3 linked-provider DI unit tests.
+- Real repos: see `dev-docs/PHASE-HISTORY.md` (Phase 102) for the nuxt
+  ten-root and jenkins five-root parity numbers.
+
+### Notes
+- No schema change, no re-index needed. Cross DI edges appear on an
+  android root's next `index_folder` run.
+
+---
+
 ## [1.34.0] - 2026-09-10 — Phase 101: Symbol-Level Edges (blast radius at the symbol, not the file)
 
 Every dependency edge was file → file, so a change to one private helper

@@ -27,6 +27,8 @@ import { VectorStore } from '../../semantic/vector-store.js';
 import { HybridSearcher } from '../../semantic/hybrid-search.js';
 import { expandWithContextLines } from '../../core/symbol-source-helper.js';
 import { buildMeta } from './_meta.js';
+import { graphCoverageWarning } from './graph-coverage.js';
+import { computeExternalImports } from './external-imports.js';
 import { logger } from '../../core/logger.js';
 import type { SymbolRecord, SymbolKind } from '../../core/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -613,6 +615,8 @@ export async function handler(args: GetTaskContextArgs): Promise<CallToolResult>
     }
 
     if (candidates.length === 0) {
+      // Phase 102 (Task 640): the honesty riders ride every branch.
+      const coverage = graphCoverageWarning(db, repoId);
       db.close();
       const emptyAssociative =
         mode === 'associative'
@@ -634,6 +638,7 @@ export async function handler(args: GetTaskContextArgs): Promise<CallToolResult>
             estimatedFiles: [],
             totalTokens: 0,
             ...emptyAssociative,
+            ...(coverage ?? {}),
             _meta: {
               ...buildMeta({ timingMs: Date.now() - t0 }),
               aiUsed: false,
@@ -777,6 +782,13 @@ export async function handler(args: GetTaskContextArgs): Promise<CallToolResult>
       }
     }
 
+    // Phase 102 (Task 640): graph coverage + the unlinked-seam signal for the
+    // files this context touches (the Phase-98 carry — every branch, AI or not).
+    const coverage = graphCoverageWarning(db, repoId);
+    const externalImports = computeExternalImports(db, repoId, [
+      ...new Set([...estimatedFiles, ...contextItems.map((item) => item.filePath)]),
+    ]);
+
     db.close();
 
     // ── Evidence gaps + suggested probes (associative mode only) ───────────────
@@ -829,6 +841,8 @@ export async function handler(args: GetTaskContextArgs): Promise<CallToolResult>
             estimatedFiles,
             totalTokens,
             ...associativeFields,
+            ...(coverage ?? {}),
+            ...(externalImports ? { externalImports } : {}),
             _meta: {
               ...buildMeta({ timingMs: Date.now() - t0 }),
               aiUsed,
