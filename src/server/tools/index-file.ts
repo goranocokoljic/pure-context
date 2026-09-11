@@ -115,6 +115,8 @@ export async function handler(
             filesSkipped: result.filesSkipped,
             symbolsFound: result.symbolsFound,
             edgesFound: result.edgesFound,
+            // Phase 101: symbol-level ref rows rebuilt for the touched files + their importers.
+            ...(result.symbolRefsBuilt !== undefined ? { symbolRefsBuilt: result.symbolRefsBuilt } : {}),
             totalSymbolsInDb: result.totalSymbolsInDb,
             totalFilesInDb: result.totalFilesInDb,
             durationMs: result.durationMs,

@@ -124,6 +124,11 @@ export async function handler(
             ...(result.linksUsed && result.linksUsed.length > 0
               ? { linksUsed: result.linksUsed, crossEdgesFound: result.crossEdgesFound ?? 0 }
               : {}),
+            // Phase 101: symbol-level ref rows written by this run (absent when
+            // the builder was skipped / disabled).
+            ...(result.symbolRefsBuilt !== undefined
+              ? { symbolRefsBuilt: result.symbolRefsBuilt, symbolRefsMs: result.symbolRefsMs ?? 0 }
+              : {}),
             ...(head ? { head } : {}),
             _meta: buildMeta({ timingMs: result.durationMs }),
           },
