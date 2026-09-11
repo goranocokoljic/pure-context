@@ -11,6 +11,7 @@ import {
   type LinkedFileGroup,
   type Workspace,
 } from './workspace-graph.js';
+import { refCallees, refCallers, symbolRefsAvailable } from './symbol-traversal.js';
 
 // ─── Return types ─────────────────────────────────────────────────────────────
 
@@ -645,6 +646,12 @@ export interface CallHierarchyResult {
   totalNodes: number;
   /** true when maxNodes or maxDepth cut the tree short. */
   truncated: boolean;
+  /**
+   * Phase 101: 'ref' when cross-file callers/callees came from symbol-level
+   * `ref` edges (same-file ones still by scan); 'scan' = the pre-1.34 whole-repo
+   * text scan (index without symbol edges).
+   */
+  edgeSource: 'ref' | 'scan';
 }
 
 // Symbol kinds that can contain function calls (skip type-only declarations).
@@ -710,6 +717,10 @@ export function buildCallHierarchy(
   const rootSymbol = getSymbolById(db, repoId, symbolId);
   if (!rootSymbol) return null;
 
+  // Phase 101: with symbol edges, cross-file callers/callees are read from
+  // `symbol_refs` and the text scan is confined to each symbol's OWN file.
+  const useRefs = symbolRefsAvailable(db, repoId);
+
   // Load all symbols in the repo once (no artificial limit — we need the full set
   // to resolve callee/caller names across the codebase).
   const allSymbols = getSymbolsByRepo(db, repoId, 1_000_000);
@@ -764,6 +775,12 @@ export function buildCallHierarchy(
         }
       }
     }
+    if (useRefs) {
+      // Cross-file callees come from the refs (which import brought the name
+      // in); the scan keeps only same-file candidates and self-calls.
+      const scanned = Array.from(result.values()).filter((c) => c.sym.filePath === sym.filePath);
+      return refCallees(db, repoId, sym, CALLABLE_KINDS, scanned);
+    }
     return Array.from(result.values());
   }
 
@@ -775,6 +792,9 @@ export function buildCallHierarchy(
     // Short name handles both `funcName(` and `ClassName.methodName(` callee lookups.
     const targetName = sym.name.includes('.') ? sym.name.split('.').pop()! : sym.name;
     const re = new RegExp(`\\b${escapeRe(targetName)}\\s*\\(`, 'g');
+    if (useRefs) {
+      return refCallers(db, repoId, sym, CALLABLE_KINDS, (n) => new RegExp(`\\b${escapeRe(n)}\\s*\\(`, 'g'));
+    }
     const result: Array<{ sym: SymbolRecord; count: number }> = [];
 
     for (const cand of allSymbols) {
@@ -888,5 +908,5 @@ export function buildCallHierarchy(
     expandCallers(root, rootSymbol, 0, rootAncestors);
   }
 
-  return { root, direction, totalNodes: state.totalNodes, truncated: state.truncated };
+  return { root, direction, totalNodes: state.totalNodes, truncated: state.truncated, edgeSource: useRefs ? 'ref' : 'scan' };
 }

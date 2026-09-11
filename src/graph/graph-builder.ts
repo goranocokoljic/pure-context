@@ -13,6 +13,7 @@ import { RUST_FAMILY_EXTENSIONS, type RustResolver } from './rust-resolver.js';
 import { DART_FAMILY_EXTENSIONS, type DartResolver } from './dart-resolver.js';
 import { resolvePrefilledTarget, type IndexedFileSet } from './prefilled-targets.js';
 import { isJsFamilyFile, type WorkspacePackageResolver } from './workspace-packages.js';
+import type { RefIndexView } from './symbol-edges.js';
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
@@ -62,6 +63,12 @@ export interface LinkedGraphTarget {
   families(): FamilyResolvers | undefined;
   /** Phase 100: the linked root's workspace packages (lazy; null = none). */
   workspacePackages?(): WorkspacePackageResolver | null;
+  /**
+   * Phase 101: the linked index as the symbol-edge builder sees it (its
+   * symbol tables, import records, file edges) — the target side of a cross
+   * `ref` edge and the far end of a re-export chain that crosses the seam.
+   */
+  refView?(): RefIndexView;
 }
 
 export interface FamilyResolvers {

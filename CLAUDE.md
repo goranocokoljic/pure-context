@@ -123,9 +123,9 @@ dev-docs/          # Phase task files, benchmark notes (gitignored, not public)
 
 ## Current Status
 
-- **Version:** 1.33.0. Phases 1–100 are COMPLETE (latest: Phase 100 — Index Economy: shared blob store, `index gc`, content-free worktree clones, npm-workspace package resolution).
-- **Next, in order:** Phase 101 Symbol-Level Edges (`dev-docs/PHASE101_TASKS.md`, tasks 628–634, 1.34.0) → 102 Cross-Index Completion → 103 Resolver Wave 3 → 104 Test-Mapper Redesign → 105 Search-Quality Sweep 3. Plan files: `dev-docs/PHASE10{1..5}_TASKS.md`.
-- **Re-index note:** none forced since 1.31.0; content migrates to the blob store on each repo's next whole-tree run.
+- **Version:** 1.34.0. Phases 1–101 are COMPLETE (latest: Phase 101 — Symbol-Level Edges: `symbol_refs` table (schema v14), lexical symbol → symbol `ref` edges built from import names + byte spans, `granularity: 'symbol'` on blast radius / context bundle, symbol centrality in risk, ref-fed call hierarchy, `directReferences` / `symbolRadius` in the change tools).
+- **Next, in order:** Phase 102 Cross-Index Completion (`dev-docs/PHASE102_TASKS.md`, 1.35.0) → 103 Resolver Wave 3 → 104 Test-Mapper Redesign → 105 Search-Quality Sweep 3. Plan files: `dev-docs/PHASE10{2..5}_TASKS.md`.
+- **Re-index note:** none forced since 1.31.0; symbol refs backfill on each repo's next whole-tree run (`list_repos.symbolRefs` = 0 until then); content migrates to the blob store the same way.
 - **History:** phase summaries for 75–100 are in `dev-docs/PHASE-HISTORY.md`; earlier phases in `dev-docs/PHASE*_TASKS.md`; the full decision log (167 rows) is in `dev-docs/DECISION-LOG.md`. Read those before making an architectural decision, and append new decisions to `dev-docs/DECISION-LOG.md`.
 
 **Working rules that came out of the history (keep these):**
@@ -171,7 +171,7 @@ PureContext is an indexed symbol graph of the repo. It is the right tool for som
 | Locate a symbol by name / by what it does | `search_symbols` / `search_semantic` | reading files to find it |
 | Read one symbol's code | `get_symbol_source` (or `get_symbols` for several) | whole-file reads |
 | Every call site of a symbol (a caller census) | `find_references` | a wide grep |
-| Impact before editing shared code | `get_blast_radius`, `find_importers`, `get_symbol_risk` | guessing |
+| Impact before editing shared code | `get_blast_radius` (`granularity: 'symbol'` for who mentions THIS symbol; `fileRadius` = upper bound), `find_importers`, `get_symbol_risk` | guessing |
 | Is the index fresh? | `list_repos` → `head`/`freshness`; `check_index_staleness` | assuming |
 | Disk full of old indexes? (removed worktrees, crashed runs) | `list_repos` → `store`; `gc_indexes({})` (dry run) then `apply: true` | deleting `.db` files by hand |
 | Prove NOTHING references X across a tree (absence proof) | `git grep` / `grep` | the index — it cannot prove absence |

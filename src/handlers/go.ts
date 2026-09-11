@@ -377,11 +377,19 @@ function extractImports(tree: Tree, _source: Buffer): ImportRecord[] {
       const isBlank = spec.children.some((c) => c.type === 'blank_identifier');
       if (isBlank) continue;
 
+      // Phase 101: the binding a file uses to reach the package. `import f "fmt"`
+      // → `* as f` (the symbol-edge builder matches `f.Println`); `import . "pkg"`
+      // → `*` (bare names). A plain import stays `[]` — the package's last path
+      // segment is the qualifier. The Go resolver ignores importedNames.
+      const aliasNode = spec.children.find((c) => c.type === 'package_identifier');
+      const isDot = spec.children.some((c) => c.type === 'dot');
+      const importedNames = isDot ? ['*'] : aliasNode ? [`* as ${aliasNode.text}`] : [];
+
       imports.push({
         sourceFile: '',
         specifier,
         resolvedPath: null, // Go uses module paths — resolution requires go.mod parsing
-        importedNames: [],  // Go imports are package-level, not named symbol imports
+        importedNames,
         isTypeOnly: false,
       });
     }

@@ -38,7 +38,17 @@ Two directions of traversal:
 - **Forward walk** — "what does X depend on?" (imports, transitively)
 - **Reverse walk** — "what depends on X?" (importers, transitively)
 
-Both walks are **file-granular** and depth-capped (default 3). `get_blast_radius` reports `granularity: "file"`, the effective `depth`, and `truncated: true` when the cap cut the walk short — treat a truncated result as a lower bound.
+Both walks are **file-granular by default** and depth-capped (default 3). `get_blast_radius` reports `granularity: "file"`, the effective `depth`, and `truncated: true` when the cap cut the walk short — treat a truncated result as a lower bound.
+
+### Symbol-level edges (v1.34.0)
+
+Next to the file edges the index stores **`ref` edges: symbol → symbol**, derived at index time from three stored facts — a file's import records (which names it imported from where), the target file's symbol table, and each symbol's byte span over the file bytes. One alternation regex runs over each importing file; every hit is attributed to the innermost enclosing symbol. No new parse. Rules per language live in `dev-docs/in-progress/phase101-design.md` §3 (named / default / namespace imports, Java and Kotlin wildcards, Go package qualifiers, Rust `m::f`, Python `pkg.mod.x`, barrel re-export chains up to 3 hops, `export … from` recorded as an import).
+
+- **Opt-in per call:** `granularity: "symbol"` on `get_blast_radius` (reverse: who mentions this symbol) and `get_context_bundle` (forward: what this symbol mentions). The response carries `depth` per symbol, `via` (the matched name), `refCount`, and the file-level answer as `fileRadius` / `fileBundle`.
+- **`confidence: "lexical"`**, always. A shadowed parameter, a string or a comment can produce a false positive; a name the importing file declares itself is never matched; a bare token right after `.` (member access on another object) is not matched; open imports (`*`, package/namespace imports) expand to at most `graph.maxWildcardFanout` names.
+- **Cross-file only.** A same-file call is never a `ref` (there is no import to derive it from). `get_call_hierarchy` and `trace_invocation_chain` use refs for cross-file callers/callees and scan only the symbol's own file for the rest (`edgeSource: "ref"`); an index without refs keeps the whole-repo scan (`edgeSource: "scan"`).
+- **Depth arithmetic.** A barrel's re-export is one symbol hop but two file hops, so at equal depth a symbol walk can reach a file the file walk reaches one hop later. The invariant that holds is "no ref without an import path".
+- **Availability.** Built on every index run (`graph.symbolEdges: "auto"`, env `PCTX_SYMBOL_EDGES=off|auto`, `skipSymbolEdges` per run). A pre-1.34 index gets them on its next whole-tree `index_folder` (one-time backfill); until then symbol-granularity calls answer at file level with a `note`, and `list_repos.symbolRefs` is 0. Cross-index refs follow the Phase-99 workspace; a linked root rebuilds all its refs on every whole-tree run because a chain through a sibling's barrel depends on the sibling's edges.
 
 ---
 
@@ -56,6 +66,7 @@ Both walks are **file-granular** and depth-capped (default 3). `get_blast_radius
 | `symbolId` | `string` | required | Starting symbol |
 | `maxDepth` | `number` | `3` | Traversal depth |
 | `maxTokens` | `number` | — | Stop collecting when estimate exceeds this |
+| `granularity` | `"file" \| "symbol"` | `"file"` | v1.34.0: `"symbol"` follows `ref` edges (what this symbol mentions) and reports `fileBundle` alongside |
 
 **Example:**
 
@@ -95,6 +106,7 @@ Both walks are **file-granular** and depth-capped (default 3). `get_blast_radius
 | `repoId` | `string` | required | Target repository |
 | `symbolId` | `string` | required | Symbol to analyze |
 | `maxDepth` | `number` | `5` | Traversal depth |
+| `granularity` | `"file" \| "symbol"` | `"file"` | v1.34.0: `"symbol"` walks `ref` edges (who mentions this symbol) and reports `fileRadius` alongside |
 
 **Example:**
 

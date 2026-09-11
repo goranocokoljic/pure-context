@@ -62,6 +62,7 @@ export interface ReindexChangedOptions
     | 'tenantId'
     | 'skipGit'
     | 'skipTestMapper'
+    | 'skipSymbolEdges'
     | 'excludePatterns'
     | 'maxFileSizeBytes'
     | 'cloneFromWorktree'
@@ -130,6 +131,7 @@ export async function reindexChanged(
       tenantId: options.tenantId,
       skipGit: options.skipGit,
       skipTestMapper: options.skipTestMapper,
+      skipSymbolEdges: options.skipSymbolEdges,
       excludePatterns: options.excludePatterns,
       maxFileSizeBytes: options.maxFileSizeBytes,
       cloneFromWorktree: options.cloneFromWorktree,

@@ -13,6 +13,7 @@ import { graphCoverageWarning } from './graph-coverage.js';
 import { computeExternalImports } from './external-imports.js';
 import { getRepo } from '../../core/db/schema.js';
 import { openWorkspace, workspaceRawBytes } from '../../graph/workspace-graph.js';
+import { getSymbolContextBundle, symbolRefsAvailable } from '../../graph/symbol-traversal.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'get_context_bundle';
@@ -25,7 +26,9 @@ export const description =
   'graph.linkedRepos): those files come back under `linked`, per index. ' +
   'When git co-change data exists (git.coChangeDepth > 0), also returns ' +
   'historicalNeighbors — files that historically change together with the ' +
-  'target but are not reachable via imports (e.g. a route and its test).';
+  'target but are not reachable via imports (e.g. a route and its test). ' +
+  'Since 1.34.0 granularity="symbol" follows symbol-level `ref` edges instead: only the symbols ' +
+  'this one actually mentions (transitively), with the file bundle size kept as `fileBundle`.';
 
 export const inputSchema = {
   repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
@@ -36,6 +39,13 @@ export const inputSchema = {
     .positive()
     .optional()
     .describe('Max dependency hops to follow (default 3)'),
+  granularity: z
+    .enum(['file', 'symbol'])
+    .optional()
+    .describe(
+      '"file" (default): every symbol of every transitively imported file. ' +
+      '"symbol": only the symbols this symbol references (symbol-level `ref` edges, 1.34.0).',
+    ),
 };
 
 // ─── historicalNeighbors (co-change enrichment) ──────────────────────────────
@@ -100,11 +110,18 @@ function buildHistoricalNeighbors(
   return neighbors;
 }
 
-export function handler(args: { repoId: string; symbolId: string; depth?: number }): CallToolResult {
+export function handler(args: {
+  repoId: string;
+  symbolId: string;
+  depth?: number;
+  granularity?: 'file' | 'symbol';
+}): CallToolResult {
   const t0 = Date.now();
   const db = openDatabase(args.repoId);
   const ws = openWorkspace(db, args.repoId, getRepo(db, args.repoId)?.rootPath ?? '');
   let result: ReturnType<typeof getContextBundle>;
+  let symbolResult: ReturnType<typeof getSymbolContextBundle> = null;
+  let symbolNote: string | undefined;
   let linkedRawBytes = 0;
   try {
     result = getContextBundle(args.symbolId, args.repoId, db, args.depth, ws);
@@ -112,6 +129,15 @@ export function handler(args: { repoId: string; symbolId: string; depth?: number
       ws,
       (result.linked ?? []).flatMap((g) => g.files.map((path) => ({ repoId: g.repoId, path }))),
     );
+    if (args.granularity === 'symbol') {
+      if (symbolRefsAvailable(db, args.repoId)) {
+        symbolResult = getSymbolContextBundle(args.symbolId, args.repoId, db, args.depth, ws);
+      } else {
+        symbolNote =
+          'This index has no symbol-level edges yet (indexed before 1.34.0, or graph.symbolEdges is off) - ' +
+          'run index_folder once; answering at file granularity.';
+      }
+    }
   } finally {
     ws.close();
   }
@@ -145,8 +171,54 @@ export function handler(args: { repoId: string; symbolId: string; depth?: number
       ),
     0,
   );
-  const tokenEstimate = result.tokenEstimate + neighborTokens;
+  const tokenEstimate = (symbolResult ? symbolResult.tokenEstimate : result.tokenEstimate) + neighborTokens;
   const responseBytes = tokenEstimate * BYTES_PER_TOKEN;
+
+  const shape = (s: { id: string; name: string; kind: string; filePath: string; signature: string; summary: string }) => ({
+    id: s.id,
+    name: s.name,
+    kind: s.kind,
+    filePath: s.filePath,
+    signature: s.signature,
+    summary: s.summary,
+  });
+  const groups = (list: NonNullable<typeof result.linked>) =>
+    list.map((g) => ({ repoId: g.repoId, rootPath: g.rootPath, files: [...g.files].sort(), symbols: g.symbols.map(shape) }));
+
+  // Phase 101: symbol granularity — the forward ref walk (what THIS symbol
+  // mentions), with the file bundle's size kept as the upper bound.
+  let body: Record<string, unknown>;
+  if (symbolResult) {
+    const sr = symbolResult;
+    const depthOf = new Map(sr.hops.map((h) => [`${h.repoId}\u0000${h.symbol.id}`, h.depth]));
+    const linkedFiles = (sr.linked ?? []).reduce((n, g) => n + g.files.length, 0);
+    const linkedSyms = (sr.linked ?? []).reduce((n, g) => n + g.symbols.length, 0);
+    body = {
+      granularity: 'symbol',
+      confidence: 'lexical',
+      truncated: sr.truncated,
+      fileCount: sr.files.length + linkedFiles,
+      symbolCount: sr.symbols.length + linkedSyms,
+      _tokenEstimate: tokenEstimate,
+      files: [...sr.files].sort(),
+      symbols: sr.symbols.map((s) => ({ ...shape(s), depth: depthOf.get(`${args.repoId}\u0000${s.id}`) ?? 0 })),
+      ...(links.length > 0 ? { links } : {}),
+      ...(sr.linked && sr.linked.length > 0 ? { linkedFiles, linked: groups(sr.linked) } : {}),
+      fileBundle: { fileCount: result.files.length + linkedFileCount, symbolCount: result.symbols.length + linkedSymbolCount },
+    };
+  } else {
+    body = {
+      granularity: 'file',
+      ...(symbolNote ? { note: symbolNote } : {}),
+      fileCount: result.files.length + linkedFileCount,
+      symbolCount: result.symbols.length + linkedSymbolCount,
+      _tokenEstimate: tokenEstimate,
+      files: result.files.sort(),
+      symbols: result.symbols.map(shape),
+      ...(links.length > 0 ? { links } : {}),
+      ...(result.linked && result.linked.length > 0 ? { linkedFiles: linkedFileCount, linked: groups(result.linked) } : {}),
+    };
+  }
 
   return {
     content: [
@@ -155,37 +227,7 @@ export function handler(args: { repoId: string; symbolId: string; depth?: number
         text: JSON.stringify(
           {
             symbolId: args.symbolId,
-            fileCount: result.files.length + linkedFileCount,
-            symbolCount: result.symbols.length + linkedSymbolCount,
-            _tokenEstimate: tokenEstimate,
-            files: result.files.sort(),
-            symbols: result.symbols.map((s) => ({
-              id: s.id,
-              name: s.name,
-              kind: s.kind,
-              filePath: s.filePath,
-              signature: s.signature,
-              summary: s.summary,
-            })),
-            ...(links.length > 0 ? { links } : {}),
-            ...(result.linked && result.linked.length > 0
-              ? {
-                  linkedFiles: linkedFileCount,
-                  linked: result.linked.map((g) => ({
-                    repoId: g.repoId,
-                    rootPath: g.rootPath,
-                    files: [...g.files].sort(),
-                    symbols: g.symbols.map((s) => ({
-                      id: s.id,
-                      name: s.name,
-                      kind: s.kind,
-                      filePath: s.filePath,
-                      signature: s.signature,
-                      summary: s.summary,
-                    })),
-                  })),
-                }
-              : {}),
+            ...body,
             ...(historicalNeighbors.length > 0 ? { historicalNeighbors } : {}),
             ...(coverage ?? {}),
             ...(externalImports ? { externalImports } : {}),

@@ -34,6 +34,8 @@ import { gatePrepareChange } from './gate-envelope.js';
 import { synthesizeChange, type ChangeSynthesis } from './change-synthesis.js';
 import { handler as searchSymbolsHandler } from './search-symbols.js';
 import { handler as findReferencesHandler } from './find-references.js';
+import { directReferencers, symbolRefsAvailable } from '../../graph/symbol-traversal.js';
+import { openWorkspace } from '../../graph/workspace-graph.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 export const name = 'prepare_change';
@@ -104,9 +106,23 @@ interface PrepareChangeOutput {
   coverageGaps?: ChangeSynthesis['coverageGaps'];
   architecturalFlags?: ChangeSynthesis['architecturalFlags'];
   signalQuality?: ChangeSynthesis['signalQuality'];
+  /**
+   * Phase 101: the symbols that reference the target directly (symbol-level
+   * `ref` edges, lexical) — the change set at SYMBOL granularity. Present when
+   * the index has symbol edges. `files` is a subset of the file-level importers.
+   */
+  directReferences?: {
+    confidence: 'lexical';
+    count: number;
+    files: string[];
+    symbols: Array<{ symbolId: string; name: string; kind: string; filePath: string; repoId?: string; refCount: number }>;
+    truncatedList: boolean;
+  };
   reasons: string[];
   _meta: ReturnType<typeof buildMeta>;
 }
+
+const MAX_DIRECT_REFERENCES_LISTED = 25;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -356,6 +372,36 @@ export async function handler(args: {
     }
     if (includeArchitectureFlags) out.architecturalFlags = syn.architecturalFlags;
     out.signalQuality = syn.signalQuality;
+
+    // Phase 101: who mentions the target, symbol by symbol (local + linked).
+    if (symbolRefsAvailable(db, repoId)) {
+      const ws = openWorkspace(db, repoId, getRepo(db, repoId)?.rootPath ?? '');
+      try {
+        const hops = directReferencers(db, repoId, target.symbolId, ws);
+        const files = [
+          ...new Set(hops.map((h) => (h.repoId === repoId ? h.symbol.filePath : `${h.repoId}:${h.symbol.filePath}`))),
+        ].sort();
+        out.directReferences = {
+          confidence: 'lexical',
+          count: hops.length,
+          files,
+          symbols: hops.slice(0, MAX_DIRECT_REFERENCES_LISTED).map((h) => ({
+            symbolId: h.symbol.id,
+            name: h.symbol.name,
+            kind: h.symbol.kind,
+            filePath: h.symbol.filePath,
+            ...(h.repoId !== repoId ? { repoId: h.repoId } : {}),
+            refCount: h.refCount,
+          })),
+          truncatedList: hops.length > MAX_DIRECT_REFERENCES_LISTED,
+        };
+        if (hops.length > 0) {
+          out.reasons.push(`${hops.length} symbol(s) reference ${target.name} directly (lexical symbol edges)`);
+        }
+      } finally {
+        ws.close();
+      }
+    }
 
     return emit(out, graphCoverageWarning(db, repoId)); // Phase 98 (Task 608)
   } finally {

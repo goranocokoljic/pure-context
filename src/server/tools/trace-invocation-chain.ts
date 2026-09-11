@@ -19,6 +19,7 @@ import { z } from 'zod';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { getSymbolsByRepo } from '../../core/db/symbol-store.js';
 import { getFileContent } from '../../core/db/file-store.js';
+import { refCallees, symbolRefsAvailable } from '../../graph/symbol-traversal.js';
 import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SymbolRecord } from '../../core/types.js';
@@ -162,6 +163,10 @@ export async function handler(args: {
       };
     }
 
+    // Phase 101: cross-file callees from `symbol_refs` when the index has them;
+    // the text scan then covers only same-file calls.
+    const useRefs = symbolRefsAvailable(db, repoId);
+
     // ── Load all symbols ─────────────────────────────────────────────────────
     const allSymbols = getSymbolsByRepo(db, repoId, 1_000_000);
 
@@ -243,6 +248,17 @@ export async function handler(args: {
         }
       }
 
+      if (useRefs) {
+        const sameFile = result.filter((c) => c.filePath === sym.filePath).map((c) => ({ sym: c, count: 1 }));
+        return refCallees(db, repoId, sym, CALLABLE_KINDS, sameFile)
+          .map((c) => c.sym)
+          .filter((cand) => {
+            if (cand.id === sym.id) return false;
+            if (includeDynamicCalls) return true;
+            const meta = cand.frameworkMeta as Record<string, unknown> | undefined;
+            return meta?.['dynamicDispatch'] !== true;
+          });
+      }
       return result;
     }
 
@@ -349,6 +365,7 @@ export async function handler(args: {
               totalChains: chains.length,
               truncated: overallTruncated,
               startSymbol,
+              edgeSource: useRefs ? 'ref' : 'scan',
               _tokenEstimate: tokenEstimate,
               _meta: buildMeta({ timingMs: Date.now() - t0 }),
             },

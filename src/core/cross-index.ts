@@ -16,6 +16,10 @@ import { join } from 'node:path';
 import type Database from 'better-sqlite3';
 import type { ImportRecord, IndexOptions, IndexResult } from './types.js';
 import { getIndexDir, openDatabase } from './db/schema.js';
+import { getSymbolsByFile } from './db/symbol-store.js';
+import { getImportRecordsByFile } from './db/import-store.js';
+import { getForwardDeps } from './db/dep-store.js';
+import { getFileContent } from './db/file-store.js';
 import { getAllFileHashes } from './db/file-store.js';
 import { getRepoLinks, replaceRepoLinks, recordReverseLink, type LinkRelation, type RepoLink } from './db/link-store.js';
 import { gitHeadSha } from './git-head.js';
@@ -157,6 +161,15 @@ export function prepareLinkedBuild(
         }
         return wsp;
       },
+      // Phase 101: symbol tables / import records / file edges of the linked
+      // index for the symbol-edge builder (same open handle; read-only).
+      refView: () => ({
+        repoId: link.repoId,
+        symbolsByFile: (path) => getSymbolsByFile(ldb, link.repoId, path),
+        importRecordsByFile: (path) => getImportRecordsByFile(ldb, link.repoId, path),
+        forwardDeps: (path) => getForwardDeps(ldb, link.repoId, path, undefined, true),
+        fileContent: (path) => getFileContent(ldb, link.repoId, path),
+      }),
       families: () => {
         if (!famsBuilt) {
           const t0 = Date.now();

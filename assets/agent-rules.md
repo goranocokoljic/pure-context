@@ -7,7 +7,7 @@ PureContext is an indexed symbol graph of the repo. It is the right tool for som
 | Locate a symbol by name / by what it does | `search_symbols` / `search_semantic` | reading files to find it |
 | Read one symbol's code | `get_symbol_source` (or `get_symbols` for several) | whole-file reads |
 | Every call site of a symbol (a caller census) | `find_references` | a wide grep |
-| Impact before editing shared code | `get_blast_radius`, `find_importers`, `get_symbol_risk` | guessing |
+| Impact before editing shared code | `get_blast_radius` (`granularity: 'symbol'` for who mentions THIS symbol; `fileRadius` = upper bound), `find_importers`, `get_symbol_risk` | guessing |
 | Is the index fresh? | `list_repos` → `head`/`freshness`; `check_index_staleness` | assuming |
 | Disk full of old indexes? (removed worktrees, crashed runs) | `list_repos` → `store`; `gc_indexes({})` (dry run) then `apply: true` | deleting `.db` files by hand |
 | Prove NOTHING references X across a tree (absence proof) | `git grep` / `grep` | the index — it cannot prove absence |

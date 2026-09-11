@@ -89,6 +89,12 @@ visible instead of silent.
 - **Did the harness use the index?** `get_savings_stats.calls` and the
   TaskCompleted line `PureContext this task: N calls (…)` come from the local
   usage ledger — read them at the end of a run.
+- **Symbol-level impact (1.34.0).** `prepare_change.directReferences` lists
+  the symbols that mention the target (lexical `ref` edges);
+  `analyze_diff.blastRadius.symbolRadius` is the same walk over a diff's
+  changed symbols; `get_blast_radius({ granularity: "symbol" })` gives the
+  N-hop version with `fileRadius` as the upper bound. All three are absent
+  or file-level on an index without refs — check `list_repos.symbolRefs`.
 
 ## 3. Greenfield loop (project built from scratch, issue by issue)
 

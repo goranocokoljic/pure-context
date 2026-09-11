@@ -343,6 +343,14 @@ export interface PureContextConfig {
      */
     maxLinkedRepos: number;
     /**
+     * Phase 101 — symbol-level `ref` edges (symbol → symbol, derived from
+     * import names + byte spans, `confidence: 'lexical'`). 'auto' (default):
+     * built after the file edges on every index run. 'off': never built;
+     * every tool answers at file granularity. Env override:
+     * `PCTX_SYMBOL_EDGES=off|auto`.
+     */
+    symbolEdges: 'auto' | 'off';
+    /**
      * Phase 100 (Task 627): resolve bare TS/JS specifiers that name an
      * npm / pnpm / yarn WORKSPACE package (`@nuxt/kit`) to that package's
      * source entry (`exports` → `main`/`module`/`types` → `src/index`,
@@ -622,6 +630,7 @@ export const DEFAULT_CONFIG: PureContextConfig = {
     linkedRepos: [],
     maxLinkedRepos: 8,
     workspacePackages: 'auto',
+    symbolEdges: 'auto',
   },
   transport: 'stdio',
   http: {
@@ -1066,6 +1075,9 @@ export function validateConfig(raw: unknown): ValidationResult {
       }
       if ('workspacePackages' in gr && !['auto', 'off'].includes(gr['workspacePackages'] as string)) {
         errors.push("graph.workspacePackages must be 'auto' or 'off'");
+      }
+      if ('symbolEdges' in gr && !['auto', 'off'].includes(gr['symbolEdges'] as string)) {
+        errors.push("graph.symbolEdges must be 'auto' or 'off'");
       }
       if ('maxLinkedRepos' in gr) {
         const v = gr['maxLinkedRepos'];

@@ -181,6 +181,8 @@ export function cloneIndex(source: CloneSource, newRepoId: string, newRoot: stri
       try {
         db.prepare('DELETE FROM repo_links WHERE repo_id = ?').run(newRepoId);
         db.prepare('DELETE FROM dep_edges WHERE repo_id = ? AND target_repo_id IS NOT NULL').run(newRepoId);
+        // Phase 101: cross symbol refs point into the same foreign indexes.
+        db.prepare("DELETE FROM symbol_refs WHERE repo_id = ? AND target_repo_id <> ''").run(newRepoId);
       } catch {
         /* pre-v12 sibling: no such column / table — nothing to drop */
       }

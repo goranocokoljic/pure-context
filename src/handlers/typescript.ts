@@ -369,6 +369,42 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string, tsOnly: bo
 
 // ─── Import extraction ────────────────────────────────────────────────────────
 
+/**
+ * `export … from '<specifier>'` → an ImportRecord, or null when the export
+ * statement has no source (a plain `export const x = …` / `export { x }`).
+ */
+function extractReExport(node: SyntaxNode, sourceStr: string): ImportRecord | null {
+  const stringNode = node.children.find((c) => c.type === 'string');
+  if (!stringNode) return null;
+  const specifier = getChildText(stringNode, sourceStr, 'string_fragment');
+  if (!specifier) return null;
+  const importedNames: string[] = [];
+  for (const child of node.children) {
+    if (child.type === '*') {
+      importedNames.push('*');
+    } else if (child.type === 'namespace_export') {
+      // `export * as ns from` — the identifier after `as`
+      const alias = child.children.find((c) => c.type === 'identifier');
+      importedNames.push(alias ? `* as ${sourceStr.slice(alias.startIndex, alias.endIndex)}` : '*');
+    } else if (child.type === 'export_clause') {
+      for (const spec of child.children) {
+        if (spec.type !== 'export_specifier') continue;
+        const idents = spec.children.filter((c) => c.type === 'identifier');
+        // idents[0] = the name as exported by the SOURCE module (before `as`)
+        if (idents[0]) importedNames.push(sourceStr.slice(idents[0].startIndex, idents[0].endIndex));
+      }
+    }
+  }
+  if (importedNames.length === 0) return null;
+  return {
+    sourceFile: '',
+    specifier,
+    resolvedPath: null,
+    importedNames,
+    isTypeOnly: node.children.some((c) => c.type === 'type'),
+  };
+}
+
 function extractImports(tree: Tree, source: Buffer): ImportRecord[] {
   const sourceStr = source.toString('utf8');
   const imports: ImportRecord[] = [];
@@ -378,6 +414,15 @@ function extractImports(tree: Tree, source: Buffer): ImportRecord[] {
   const sourceFile = '';
 
   for (const node of tree.rootNode.children) {
+    // Phase 101: `export { a, b as c } from './x'`, `export * from './x'`,
+    // `export * as ns from './x'` are imports too — a barrel's edge to its
+    // sources was missing, and a re-export chain could not be followed from
+    // the index. Recorded in the import-record shape (`*` = every name).
+    if (node.type === 'export_statement') {
+      const reExport = extractReExport(node, sourceStr);
+      if (reExport) imports.push(reExport);
+      continue;
+    }
     if (node.type !== 'import_statement') continue;
 
     // Detect `import type`

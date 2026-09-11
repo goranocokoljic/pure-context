@@ -293,9 +293,14 @@ SELECT COUNT(*) FROM files WHERE raw_content IS NULL;   -- rows served from blob
 
 ## Known limitations
 
-- **Edges are file-level, not symbol-level.** Every symbol in a file shares
-  the file's blast radius; `get_blast_radius` responses carry
-  `granularity: "file"` to say so.
+- **Import edges are file-level; symbol-level `ref` edges are lexical.**
+  By default every symbol in a file shares the file's blast radius
+  (`granularity: "file"`). Since v1.34.0 `granularity: "symbol"` walks the
+  `symbol_refs` table (symbol → symbol, derived from import names + byte
+  spans, `confidence: "lexical"` — never type-resolved, never same-file). An
+  index built before v1.34.0 has no rows until its next whole-tree
+  `index_folder`; `list_repos.symbolRefs` shows the count.
+  `graph.symbolEdges: "off"` / `PCTX_SYMBOL_EDGES=off` disables the builder.
 - **Edges cross LINKED index boundaries only** (v1.32.0: disjoint roots of
   one git checkout, or `graph.linkedRepos`). Across an unlinked seam
   `find_cross_repo_usages` spans indexes but is word-boundary text search,

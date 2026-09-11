@@ -82,3 +82,24 @@ export function getAllImportRecords(db: Database.Database, repoId: string): Impo
     isTypeOnly: row.is_type_only === 1,
   }));
 }
+
+/** Stored records of ONE source file (Phase 101: the symbol-edge builder reads per file). */
+export function getImportRecordsByFile(
+  db: Database.Database,
+  repoId: string,
+  sourceFile: string,
+): ImportRecord[] {
+  const rows = db
+    .prepare<[string, string], ImportRow>(
+      `SELECT source_file, specifier, resolved_path, imported_names, is_type_only
+       FROM import_records WHERE repo_id = ? AND source_file = ?`,
+    )
+    .all(repoId, sourceFile);
+  return rows.map((row) => ({
+    sourceFile: row.source_file,
+    specifier: row.specifier,
+    resolvedPath: row.resolved_path,
+    importedNames: JSON.parse(row.imported_names) as string[],
+    isTypeOnly: row.is_type_only === 1,
+  }));
+}

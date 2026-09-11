@@ -232,6 +232,11 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
       linkedRepos: partial.graph?.linkedRepos ?? DEFAULT_CONFIG.graph.linkedRepos,
       maxLinkedRepos: partial.graph?.maxLinkedRepos ?? DEFAULT_CONFIG.graph.maxLinkedRepos,
       workspacePackages: partial.graph?.workspacePackages ?? DEFAULT_CONFIG.graph.workspacePackages,
+      // PCTX_SYMBOL_EDGES=off|auto (Phase 101 kill switch / A-B measurement).
+      symbolEdges:
+        process.env['PCTX_SYMBOL_EDGES'] === 'off' || process.env['PCTX_SYMBOL_EDGES'] === 'auto'
+          ? (process.env['PCTX_SYMBOL_EDGES'] as 'off' | 'auto')
+          : (partial.graph?.symbolEdges ?? DEFAULT_CONFIG.graph.symbolEdges),
     },
     transport: partial.transport ?? DEFAULT_CONFIG.transport,
     http: {

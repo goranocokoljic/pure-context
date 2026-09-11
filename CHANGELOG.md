@@ -11,6 +11,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.34.0] - 2026-09-10 — Phase 101: Symbol-Level Edges (blast radius at the symbol, not the file)
+
+Every dependency edge was file → file, so a change to one private helper
+marked every importer of its file as affected, `get_symbol_risk` centrality
+was file coupling, and the call-hierarchy tools scanned every symbol's text
+per hop. The index already knew the three facts a symbol → symbol edge needs
+(import records with names, each target's symbol table, each symbol's byte
+span over the file bytes); this release joins them — no new parse.
+
+### Added
+- **`symbol_refs` table (schema v14, additive)** — one row per
+  `(source symbol, target symbol)`: "symbol S in file A mentions, inside its
+  byte span, a name A imported from file B, where the name is symbol T".
+  Built by `src/graph/symbol-edges.ts` right after the file edges, per file,
+  one alternation regex over the importing file, each hit attributed to the
+  INNERMOST enclosing symbol. Per-language rules (TS named / default /
+  `* as ns`, Java `*`, Kotlin wildcard, Go `pkg.Name` / alias, Rust
+  `m::f`, Python bare + `pkg.mod.x`, C#/Ruby/Dart open imports, barrel
+  re-export chains up to 3 hops) in `dev-docs/in-progress/phase101-design.md`.
+  Every row is `confidence: 'lexical'`; a name the importing file declares
+  itself is never matched; member access on another object (`obj.run`) is
+  not matched; open imports are capped by `graph.maxWildcardFanout`.
+  Cross-index rows carry `target_repo_id` and follow the Phase-99 workspace.
+- **`granularity: 'symbol'`** on `get_blast_radius` (who mentions this
+  symbol, N hops, `depth` / `via` / `refCount` per symbol, `fileRadius`
+  alongside) and `get_context_bundle` (what this symbol mentions,
+  `fileBundle` alongside). Default stays `'file'`. An index without refs
+  answers at file granularity with a `note`; `list_repos.symbolRefs`.
+- **`get_symbol_risk`**: when the index has refs, centrality is the
+  percentile of distinct referencing SYMBOLS (`factors.centrality.symbolRefs`);
+  `raw` keeps the afferent file count.
+- **`get_call_hierarchy` / `trace_invocation_chain`**: cross-file callers
+  and callees come from refs (`edgeSource: 'ref'`); the text scan is confined
+  to the symbol's own file. Without refs the whole-repo scan stays
+  (`edgeSource: 'scan'`).
+- **`prepare_change.directReferences`** (the symbols that mention the
+  target, capped list of 25) and **`analyze_diff.blastRadius.symbolRadius`**.
+- Config `graph.symbolEdges: 'auto' | 'off'`, env `PCTX_SYMBOL_EDGES`,
+  `IndexOptions.skipSymbolEdges`; `IndexResult.symbolRefsBuilt / symbolRefsMs`.
+- TS/JS `export { a } from`, `export * from`, `export * as ns from` are now
+  import records (barrel → source file edges: nuxt +87, excalidraw +139).
+- Handler import records: Kotlin `import a.b.*` → `['*']` (was the
+  package's last segment); Go `import u "pkg"` → `* as u`, `import . "pkg"`
+  → `*` (resolvers ignore names — file edges unchanged).
+- `benchmarks/harness/phase101_parity.ts` — cost, P4 gate, shrink, split
+  roots.
+
+### Changed
+- Whole-tree runs of a LINKED root rebuild all their refs (a chain through a
+  sibling's barrel depends on the sibling's edges). Targeted runs rebuild the
+  touched files + their direct importers and drop rows whose target id
+  vanished.
+- Worktree clones drop cross `symbol_refs` with the cross edges.
+
+### Measured (`phase101_parity.ts`, isolated data dirs)
+- nuxt: 1220 refs vs 1035 file edges; builder 0.22 s vs test mapper 0.64 s
+  (0.34); median symbol/file radius ratio **0.17**; P4 0/400 violations
+  (13 equal-depth "barrel collapse" cases, all absorbed at depth 12).
+- jenkins: 89 483 refs vs 7966 file edges (per-method attribution); builder
+  2.4 s vs test mapper 32.8 s (0.07); ratio 0.90 (one class per file); P4
+  0/300; split `core`+`cli` vs whole 315 compared, 0 mismatches. Disk: ≈ 34 MB
+  of refs on a 28 MB index — `graph.symbolEdges: 'off'` if that matters.
+- Search sweep (nuxt, kurirfe, excalidraw, jenkins): scores byte-identical
+  to `phase100-post`.
+
+### Re-index note
+- None forced. Refs appear on each repo's next whole-tree `index_folder`
+  (one-time backfill); until then symbol-granularity calls fall back to the
+  file answer with a `note`.
+
+---
+
 ## [1.33.0] - 2026-09-10 — Phase 100: Index Economy (shared content, gc, workspace packages)
 
 Every index used to carry the full source text of every file it indexed —

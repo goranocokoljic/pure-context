@@ -309,6 +309,32 @@ export function getCrossAfferentCounts(
   return out;
 }
 
+// ─── Symbol-id-bearing edges (Phase 85 DI rows) ───────────────────────────────
+// Phase 101 reads these next to `symbol_refs` so a symbol walk sees DI wiring
+// too. Local rows only; both ids set (import rows never set them).
+
+/** Edges whose TARGET symbol is `symbolId` (DI consumers of a provider). */
+export function getSymbolEdgesTo(db: Database.Database, repoId: string, symbolId: string): DepEdge[] {
+  return db
+    .prepare<[string, string], DbEdgeRow>(
+      `SELECT * FROM dep_edges WHERE repo_id = ? AND target_symbol_id = ? AND source_symbol_id IS NOT NULL
+       AND target_repo_id IS NULL`,
+    )
+    .all(repoId, symbolId)
+    .map(rowToEdge);
+}
+
+/** Edges whose SOURCE symbol is `symbolId` (what a DI consumer is wired to). */
+export function getSymbolEdgesFrom(db: Database.Database, repoId: string, symbolId: string): DepEdge[] {
+  return db
+    .prepare<[string, string], DbEdgeRow>(
+      `SELECT * FROM dep_edges WHERE repo_id = ? AND source_symbol_id = ? AND target_symbol_id IS NOT NULL
+       AND target_repo_id IS NULL`,
+    )
+    .all(repoId, symbolId)
+    .map(rowToEdge);
+}
+
 // ─── Coupling map ─────────────────────────────────────────────────────────────
 
 export interface CouplingRow {

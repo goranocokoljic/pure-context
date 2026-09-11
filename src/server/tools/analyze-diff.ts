@@ -15,6 +15,7 @@ import { openDatabase } from '../../core/db/schema.js';
 import { getSymbolsByFile } from '../../core/db/symbol-store.js';
 import { getFileContent } from '../../core/db/file-store.js';
 import { getBlastRadius } from '../../graph/graph-traversal.js';
+import { getSymbolBlastRadius, symbolRefsAvailable } from '../../graph/symbol-traversal.js';
 import {
   parseDiff,
   getChangedNewRanges,
@@ -101,6 +102,18 @@ interface AnalyzeDiffOutput {
     filesImpacted: number;
     symbolsImpacted: number;
     impactedFiles: string[];
+    /**
+     * Phase 101: the same walk over symbol-level `ref` edges — only symbols
+     * that actually mention a changed symbol (lexical). Present when the
+     * index has symbol edges; always a subset of the file radius.
+     */
+    symbolRadius?: {
+      granularity: 'symbol';
+      confidence: 'lexical';
+      symbolsImpacted: number;
+      filesImpacted: number;
+      impactedFiles: string[];
+    };
   };
   risk?: ChangeSynthesis['aggregateRisk'];
   missingCoChange?: ChangeSynthesis['missingCoChange'];
@@ -388,25 +401,45 @@ export async function handler(args: {
   }
 
   // ── 3. Blast radius ────────────────────────────────────────────────────────
-  let blastRadiusResult:
-    | { filesImpacted: number; symbolsImpacted: number; impactedFiles: string[] }
-    | undefined;
+  let blastRadiusResult: NonNullable<AnalyzeDiffOutput['blastRadius']> | undefined;
 
   if (includeBlastRadius) {
     const impactedFileSet = new Set<string>();
     const impactedSymbolSet = new Set<string>();
+    // Phase 101: the symbol-level walk beside the file walk (same depth).
+    const useRefs = symbolRefsAvailable(db, repoId);
+    const symFileSet = new Set<string>();
+    const symSymbolSet = new Set<string>();
 
     for (const cs of changedSymbols) {
       if (!cs.symbolId || cs.changeType === 'deleted') continue;
       const br = getBlastRadius(cs.symbolId, repoId, db, blastRadiusDepth);
       for (const f of br.files) impactedFileSet.add(f);
       for (const s of br.symbols) impactedSymbolSet.add(s.id);
+      if (useRefs) {
+        const sr = getSymbolBlastRadius(cs.symbolId, repoId, db, blastRadiusDepth);
+        for (const h of sr?.hops ?? []) {
+          symSymbolSet.add(h.symbol.id);
+          symFileSet.add(h.symbol.filePath);
+        }
+      }
     }
 
     blastRadiusResult = {
       filesImpacted: impactedFileSet.size,
       symbolsImpacted: impactedSymbolSet.size,
       impactedFiles: [...impactedFileSet].sort(),
+      ...(useRefs
+        ? {
+            symbolRadius: {
+              granularity: 'symbol' as const,
+              confidence: 'lexical' as const,
+              symbolsImpacted: symSymbolSet.size,
+              filesImpacted: symFileSet.size,
+              impactedFiles: [...symFileSet].sort(),
+            },
+          }
+        : {}),
     };
   }
 

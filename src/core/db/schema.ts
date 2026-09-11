@@ -25,7 +25,12 @@ type DatabaseConstructor = new (filename: string) => SqliteDatabase;
 // shared blob store (<dataDir>/blobs.db), keyed by content_hash". No DDL
 // change; inline rows keep reading inline. A pre-v13 index moves its inline
 // content to the store on its next whole-tree `index_folder` (no re-parse).
-export const SCHEMA_VERSION = 13;
+// v14 (Phase 101): additive — the `symbol_refs` table (symbol → symbol
+// `ref` edges derived from import names + byte spans). Created by the base
+// DDL (a new TABLE is safe on old DBs; no ALTER, no index on a new column —
+// the v9/v12 lesson). Old indexes hold no rows until their next whole-tree
+// run; every reader falls back to the file answer when a repo has none.
+export const SCHEMA_VERSION = 14;
 
 const DDL = `
 PRAGMA journal_mode = WAL;
@@ -140,6 +145,29 @@ CREATE TABLE IF NOT EXISTS import_records (
   FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_import_records_source ON import_records(repo_id, source_file);
+
+-- v14 (Phase 101): symbol-level 'ref' edges. Separate from dep_edges on
+-- purpose: the twelve file-level readers stay byte-identical (P1) and the
+-- 5-20x larger ref volume never sits inside their index scans. target_repo_id
+-- is '' for a local edge (NOT NULL so it can take part in the primary key);
+-- the store maps '' <-> null at the API boundary.
+CREATE TABLE IF NOT EXISTS symbol_refs (
+  repo_id          TEXT    NOT NULL,
+  source_file      TEXT    NOT NULL,
+  source_symbol_id TEXT    NOT NULL,
+  target_file      TEXT    NOT NULL,
+  target_symbol_id TEXT    NOT NULL,
+  target_repo_id   TEXT    NOT NULL DEFAULT '',
+  name             TEXT    NOT NULL,
+  confidence       TEXT    NOT NULL DEFAULT 'lexical',
+  ref_count        INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (repo_id, source_symbol_id, target_repo_id, target_symbol_id),
+  FOREIGN KEY (repo_id) REFERENCES repos(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_symbol_refs_target      ON symbol_refs(repo_id, target_repo_id, target_symbol_id);
+CREATE INDEX IF NOT EXISTS idx_symbol_refs_source_file ON symbol_refs(repo_id, source_file);
+-- No target_file index on purpose (jenkins: 6.9 MB for two per-file DELETEs
+-- that a scan serves in milliseconds); the primary key covers the upsert.
 
 CREATE TABLE IF NOT EXISTS provider_metadata (
   repo_id       TEXT    NOT NULL,
@@ -438,6 +466,10 @@ function runMigrations(db: InstanceType<DatabaseConstructor>): void {
 
   // Migration v12 → v13 (Phase 100): no DDL. `raw_content` was always
   // nullable; v13 gives NULL a meaning (blob store). Nothing to run.
+
+  // Migration v13 → v14 (Phase 101): `symbol_refs` is a NEW table created by
+  // the base DDL above (CREATE TABLE IF NOT EXISTS runs before migrations), so
+  // there is nothing to run here. Rows appear on the next whole-tree build.
 }
 
 // ─── Repo operations ──────────────────────────────────────────────────────────

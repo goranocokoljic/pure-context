@@ -376,11 +376,16 @@ function extractImports(tree: Tree, source: Buffer): ImportRecord[] {
       const specifier = nodeText(identifierNode, src);
       const parts = specifier.split('.');
       const lastName = parts[parts.length - 1] ?? '';
+      // `import com.acme.libs.*` — the grammar keeps `.*` OUTSIDE the identifier
+      // node, so the specifier is the package and the wildcard must be read from
+      // the header text. Phase 101 records it as `*` (every name of the target);
+      // the JVM resolver ignores importedNames, so edges are unchanged.
+      const isWildcard = /\*\s*$/.test(nodeText(node, src).trim());
       imports.push({
         sourceFile: '',
         specifier,
         resolvedPath: null,
-        importedNames: lastName && lastName !== '*' ? [lastName] : [],
+        importedNames: isWildcard ? ['*'] : lastName && lastName !== '*' ? [lastName] : [],
         isTypeOnly: false,
       });
     } else {

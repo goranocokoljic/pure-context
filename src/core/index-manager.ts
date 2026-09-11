@@ -52,6 +52,8 @@ import { buildFamilyResolvers } from '../graph/family-resolvers.js';
 import { buildDiEdges } from '../graph/di-edges.js';
 import { workspaceResolverFor } from '../graph/workspace-packages.js';
 import { linksChangedSince, prepareLinkedBuild } from './cross-index.js';
+import { rebuildSymbolRefs, symbolEdgesEnabled } from './symbol-ref-build.js';
+import { deleteSymbolRefsByFile } from './db/symbol-ref-store.js';
 import { getRepoLinks } from './db/link-store.js';
 import { join } from 'path';
 import { track } from './telemetry.js';
@@ -226,6 +228,7 @@ export async function indexFolder(
       deleteByFile(db, repoId, path);
       deleteEdgesByFile(db, repoId, path); // truly gone → both directions
       deleteImportRecordsByFile(db, repoId, path);
+      deleteSymbolRefsByFile(db, repoId, path);
       deleteFile(db, repoId, path);
       filesPruned++;
     }
@@ -453,6 +456,7 @@ export async function indexFolder(
   }
   const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, graphImports);
   let edges: DepEdge[];
+  let symbolRefStats: ReturnType<typeof rebuildSymbolRefs> = null;
   try {
     const indexedFiles = buildIndexedFileSet(getAllFileHashes(db, repoId).keys());
     edges = buildGraph(graphImports, resolver, repoId, familyResolvers, {
@@ -465,6 +469,22 @@ export async function indexFolder(
       insertEdges(db, edges);
     }
     linked.commit(db, repoId);
+    // ── 10'. Symbol-level ref edges (Phase 101) — same scope as the file
+    //        edges (all when the whole graph was re-resolved, else the
+    //        reprocessed files + their importers); the linked handles are
+    //        still open so cross refs see the same workspace. A LINKED root
+    //        always rebuilds everything: a ref that chains through a
+    //        sibling's re-export depends on the sibling's EDGES (nuxt: vite →
+    //        nuxt/schema.js → @nuxt/schema), which can change without any
+    //        file of this root changing.
+    if (symbolEdgesEnabled(options.skipSymbolEdges)) {
+      symbolRefStats = rebuildSymbolRefs(
+        db,
+        repoId,
+        reresolveAll || linked.links.length > 0 ? 'all' : toProcess.map((e) => e.relPath),
+        linked.targets,
+      );
+    }
   } finally {
     linked.close();
   }
@@ -648,6 +668,7 @@ export async function indexFolder(
     edgesFound: edges.length,
     crossEdgesFound,
     linksUsed,
+    ...(symbolRefStats ? { symbolRefsBuilt: symbolRefStats.refs, symbolRefsMs: symbolRefStats.ms } : {}),
     durationMs: Date.now() - start,
     errors,
     warnings,
@@ -756,7 +777,7 @@ export async function reindexFiles(
   repoId: string,
   changedPaths: string[],
   deletedPaths: string[] = [],
-  options?: Pick<IndexOptions, 'adapters' | 'aiSummarizer' | 'semanticIndexer' | 'crossIndex' | 'linkedRepos' | 'maxLinkedRepos'> & {
+  options?: Pick<IndexOptions, 'adapters' | 'aiSummarizer' | 'semanticIndexer' | 'crossIndex' | 'linkedRepos' | 'maxLinkedRepos' | 'skipSymbolEdges'> & {
     /**
      * Phase 99: re-run the workspace link rule and re-resolve the WHOLE graph
      * from stored import records against the fresh link set. Used after a
@@ -790,6 +811,7 @@ export async function reindexFiles(
     deleteByFile(db, repoId, relPath);
     deleteEdgesByFile(db, repoId, relPath);
     deleteImportRecordsByFile(db, repoId, relPath);
+    deleteSymbolRefsByFile(db, repoId, relPath);
     deleteFile(db, repoId, relPath);
     logger.debug(`Removed ${relPath} from index`);
   }
@@ -867,6 +889,8 @@ export async function reindexFiles(
   let edgesBuilt = 0;
   let crossEdgesFound = 0;
   let linksUsed: IndexResult['linksUsed'];
+  let symbolRefStats: ReturnType<typeof rebuildSymbolRefs> = null;
+  const processedPaths = changedPaths.filter((p) => !errors.some((e) => e.file === p));
   const fullReresolve =
     (newFiles.length > 0 && repo.schemaVersion >= 10) || options?.refreshLinks === true;
   if (fullReresolve) {
@@ -897,6 +921,9 @@ export async function reindexFiles(
         insertEdges(db, rebuilt);
       }
       linked.commit(db, repoId);
+      if (symbolEdgesEnabled(options?.skipSymbolEdges)) {
+        symbolRefStats = rebuildSymbolRefs(db, repoId, 'all', linked.targets);
+      }
     } finally {
       linked.close();
     }
@@ -930,6 +957,10 @@ export async function reindexFiles(
       });
       if (edges.length > 0) {
         insertEdges(db, edges);
+      }
+      // Phase 101: the touched files + their importers (design note §2.5).
+      if (symbolEdgesEnabled(options?.skipSymbolEdges)) {
+        symbolRefStats = rebuildSymbolRefs(db, repoId, processedPaths, linked.targets);
       }
     } finally {
       linked.close();
@@ -1026,6 +1057,7 @@ export async function reindexFiles(
     edgesFound: edgesBuilt,
     crossEdgesFound,
     linksUsed,
+    ...(symbolRefStats ? { symbolRefsBuilt: symbolRefStats.refs, symbolRefsMs: symbolRefStats.ms } : {}),
     durationMs: Date.now() - start,
     errors,
     warnings: [],

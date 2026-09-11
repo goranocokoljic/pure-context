@@ -8,6 +8,16 @@ import { describeLinkDrift, formatLinkDriftLine } from '../../core/workspace-lin
 import { blobFileBytes, getBlobDbPath, contentStoreMode } from '../../core/db/blob-store.js';
 import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { countSymbolRefs } from '../../core/db/symbol-ref-store.js';
+
+/** Phase 101: rows in `symbol_refs` (0 on a pre-v14 index or with graph.symbolEdges off). */
+function countSymbolRefsSafe(db: Parameters<typeof countSymbolRefs>[0], repoId: string): number {
+  try {
+    return countSymbolRefs(db, repoId);
+  } catch {
+    return 0;
+  }
+}
 
 export const name = 'list_repos';
 
@@ -64,6 +74,8 @@ export function handler(args: { workspaceId?: string } = {}): CallToolResult {
       const db = openDatabase(repoId);
       const meta = getRepo(db, repoId);
       const storedLinks = meta ? getRepoLinks(db, repoId) : [];
+      // Phase 101: 0 → granularity="symbol" answers fall back to file level.
+      const symbolRefs = meta ? countSymbolRefsSafe(db, repoId) : 0;
       db.close();
       if (!meta) {
         orphanIndexes++;
@@ -88,6 +100,7 @@ export function handler(args: { workspaceId?: string } = {}): CallToolResult {
           workspaceId: meta.tenantId ?? 'local',
           sizeBytes,
           rootExists: existsSync(meta.rootPath),
+          symbolRefs,
           ...(head ? { head, freshness: formatDriftLine(head) } : {}),
           ...(links.length > 0 ? { links } : {}),
         });

@@ -29,12 +29,20 @@ import { getCoChange, type CoChangeResult } from './co-change.js';
 import { getConfig } from '../../config/config-loader.js';
 import { isTestFilePath as isTestFile } from '../../core/test-paths.js';
 import { getAllFilesWithContent } from '../../core/db/file-store.js';
+import { countSymbolRefs, getAfferentSymbolCounts, getCrossAfferentSymbolCounts } from '../../core/db/symbol-ref-store.js';
 
 export interface RiskFactor {
   /** Repo-relative normalized value in [0,1] (percentile rank or binary). */
   value: number;
   /** The raw underlying measurement (commits, dependents, complexity, …). */
   raw: number;
+  /**
+   * Phase 101 (centrality only): distinct symbols that reference this one
+   * through symbol-level `ref` edges. Present when the index has refs; the
+   * percentile (`value`) is then computed over the SYMBOL distribution and
+   * `raw` keeps the afferent FILE count as the second factor.
+   */
+  symbolRefs?: number;
 }
 
 export interface SymbolRiskResult {
@@ -129,6 +137,13 @@ export interface RiskContext {
   afferentByFile: Map<string, number>;
   /** afferent coupling across all files (the centrality percentile basis). */
   centralityDist: number[];
+  /**
+   * Phase 101: symbol id → distinct referencing symbols (local + linked), and
+   * the distribution over EVERY symbol of the repo (zeros included). null when
+   * the index has no `ref` rows — scoring then uses the file basis exactly as
+   * before (byte-identical).
+   */
+  symbolCentrality: { bySymbol: Map<string, number>; dist: number[] } | null;
   /** cyclomatic complexity across all symbols (the complexity percentile basis). */
   complexityDist: number[];
   /** decoded UTF-8 contents of every test file (the test-ref scan basis). */
@@ -182,6 +197,27 @@ export function buildRiskContext(db: Database.Database, repoId: string): RiskCon
   }
   const centralityDist = ws.links.length > 0 ? [...afferentByFile.values()] : coupling.map((c) => c.afferentCoupling);
 
+  // ── Phase 101: symbol-level centrality (only when refs exist). ──────────────
+  let symbolCentrality: RiskContext['symbolCentrality'] = null;
+  if (countSymbolRefs(db, repoId) > 0) {
+    const bySymbol = getAfferentSymbolCounts(db, repoId);
+    const ws2 = openWorkspace(db, repoId);
+    try {
+      for (const m of ws2.links) {
+        for (const [id, n] of getCrossAfferentSymbolCounts(m.db, m.repoId, repoId)) {
+          bySymbol.set(id, (bySymbol.get(id) ?? 0) + n);
+        }
+      }
+    } finally {
+      ws2.close();
+    }
+    const total =
+      db.prepare<[string], { n: number }>('SELECT COUNT(*) AS n FROM symbols WHERE repo_id = ?').get(repoId)?.n ?? 0;
+    const dist = [...bySymbol.values()];
+    for (let i = dist.length; i < total; i++) dist.push(0);
+    symbolCentrality = { bySymbol, dist };
+  }
+
   // ── Complexity distribution across all symbols. ─────────────────────────────
   const complexityRows = db
     .prepare<[string], { cyclomatic_complexity: number | null }>(
@@ -204,6 +240,7 @@ export function buildRiskContext(db: Database.Database, repoId: string): RiskCon
     churnDist,
     afferentByFile,
     centralityDist,
+    symbolCentrality,
     complexityDist,
     testFileContents,
     windowCommits: countCommits(db, repoId),
@@ -266,8 +303,14 @@ export function computeSymbolRiskWithContext(
 
   // ── Centrality ───────────────────────────────────────────────────────────
   const afferent = ctx.afferentByFile.get(sym.file_path) ?? 0;
-  const centralityNorm = percentileRank(ctx.centralityDist, afferent);
+  // Phase 101: with symbol edges, centrality is how many SYMBOLS reference
+  // this one (percentile over all symbols); the file count stays reported.
+  const symbolRefs = ctx.symbolCentrality ? (ctx.symbolCentrality.bySymbol.get(sym.id) ?? 0) : undefined;
+  const centralityNorm = ctx.symbolCentrality
+    ? percentileRank(ctx.symbolCentrality.dist, symbolRefs ?? 0)
+    : percentileRank(ctx.centralityDist, afferent);
   const blast = getBlastRadius(symbolId, repoId, db, 3);
+  if (symbolRefs !== undefined && symbolRefs > 0) reasons.push(`${symbolRefs} symbol(s) reference ${sym.name}`);
   if (afferent > 0) reasons.push(`${afferent} file(s) import ${sym.file_path}`);
   if (blast.files.length > 1) reasons.push(`${blast.files.length} files in reverse blast radius`);
 
@@ -325,7 +368,7 @@ export function computeSymbolRiskWithContext(
     band: band(riskScore),
     factors: {
       churn: { value: round2(churnNorm), raw: churnRaw },
-      centrality: { value: round2(centralityNorm), raw: afferent },
+      centrality: { value: round2(centralityNorm), raw: afferent, ...(symbolRefs !== undefined ? { symbolRefs } : {}) },
       complexity: { value: round2(complexityNorm), raw: cc },
       testGap: { value: testGapNorm, raw: tested ? 1 : 0 },
       coChange: { value: round2(coChangeNorm), raw: coChangeRaw },

@@ -206,6 +206,12 @@ export interface IndexOptions {
    */
   skipTestMapper?: boolean;
   /**
+   * Skip the symbol-edge builder (Phase 101 `ref` rows) for this run. Same
+   * intent as skipTestMapper: benchmark / A-B runs. Config `graph.symbolEdges`
+   * and `PCTX_SYMBOL_EDGES` switch it off globally.
+   */
+  skipSymbolEdges?: boolean;
+  /**
    * Bare filenames (no extension) to discover and index.
    * e.g. ["functions"] to pick up dokku plugin `functions` files.
    * Routed to handlers via shebang detection in the file processor.
@@ -283,6 +289,12 @@ export interface IndexResult {
   linksUsed?: Array<{ repoId: string; rootPath: string; source: 'auto' | 'config'; relation: string }>;
   /** Phase 99: cross-index edges stored by this run. */
   crossEdgesFound?: number;
+  /**
+   * Phase 101: symbol-level `ref` rows written by this run (and the wall time
+   * the builder took). Absent when the builder was skipped or disabled.
+   */
+  symbolRefsBuilt?: number;
+  symbolRefsMs?: number;
 }
 
 export interface DiscoveredFile {
