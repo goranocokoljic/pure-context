@@ -1,4 +1,5 @@
 import { PYTHON_STDLIB_MODULES } from '../core/python-stdlib.js';
+import { RUBY_STDLIB_MODULES } from '../core/ruby-stdlib.js';
 import { homedir, cpus } from 'os';
 import { join } from 'path';
 
@@ -375,6 +376,13 @@ export interface PureContextConfig {
      * a repo that genuinely owns a stdlib-named package.
      */
     reservedPythonModules: string[];
+    /**
+     * Ruby reserved (stdlib / default-gem) `require` names (Phase 103,
+     * Task 641): a `require` whose first path segment is listed resolves to
+     * nothing — external — so no repo file can shadow `require "json"`.
+     * Defaults to Ruby 3.3's default + bundled gems. [] disables.
+     */
+    reservedRubyModules: string[];
   };
   /**
    * Which transport(s) to start.
@@ -626,6 +634,7 @@ export const DEFAULT_CONFIG: PureContextConfig = {
     ],
     pythonSourceRoots: ['src', 'lib'],
     reservedPythonModules: [...PYTHON_STDLIB_MODULES],
+    reservedRubyModules: [...RUBY_STDLIB_MODULES],
     crossIndex: 'auto',
     linkedRepos: [],
     maxLinkedRepos: 8,
@@ -1062,7 +1071,7 @@ export function validateConfig(raw: unknown): ValidationResult {
           );
         }
       }
-      for (const key of ['pythonSourceRoots', 'reservedPythonModules', 'linkedRepos'] as const) {
+      for (const key of ['pythonSourceRoots', 'reservedPythonModules', 'reservedRubyModules', 'linkedRepos'] as const) {
         if (key in gr) {
           const v = gr[key];
           if (!Array.isArray(v) || v.some((n) => typeof n !== 'string' || n.length === 0)) {

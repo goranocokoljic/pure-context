@@ -159,9 +159,9 @@ export function graphCoverageWarning(
     graphCoverageNote:
       'This repo has ZERO resolvable import edges — empty results here mean the dependency graph is missing, ' +
       'NOT that nothing depends on the symbol. Import resolution may not cover this language mix ' +
-      '(unresolved: Ruby and the long tail — see LANGUAGE-SUPPORT.md). Use find_references ' +
+      '(unresolved: Protobuf, SQL/dbt, GDScript, Gleam, Lua, R — see LANGUAGE-SUPPORT.md). Use find_references ' +
       '(content scan) and get_co_change (git history) instead, and re-index if the repo was indexed ' +
       'before the version that added its resolver (JVM v1.15.0, C# v1.16.0, Python/Go v1.17.0, ' +
-      'PHP/Haskell/Elixir/Erlang/Fortran v1.19.0, Rust v1.20.0).',
+      'PHP/Haskell/Elixir/Erlang/Fortran v1.19.0, Rust v1.20.0, Dart v1.31.0, Ruby v1.36.0).',
   };
 }

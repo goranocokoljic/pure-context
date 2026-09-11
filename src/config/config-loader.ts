@@ -223,6 +223,8 @@ function mergeConfig (partial: Partial<PureContextConfig>): PureContextConfig {
         partial.graph?.pythonSourceRoots ?? DEFAULT_CONFIG.graph.pythonSourceRoots,
       reservedPythonModules:
         partial.graph?.reservedPythonModules ?? DEFAULT_CONFIG.graph.reservedPythonModules,
+      reservedRubyModules:
+        partial.graph?.reservedRubyModules ?? DEFAULT_CONFIG.graph.reservedRubyModules,
       // PCTX_CROSS_INDEX=off|auto overrides the file (operator kill switch; the
       // test suite sets `off` because every fixture lives in ONE checkout).
       crossIndex:

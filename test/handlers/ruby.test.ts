@@ -260,6 +260,95 @@ describe('Ruby handler — extractImports', () => {
   });
 });
 
+// ─── extractImports — Phase 103 (Task 641) ────────────────────────────────────
+
+describe('Ruby handler — extractImports (Phase 103: requires anywhere, Zeitwerk constants)', () => {
+  const specs = async (src: string) => {
+    const { tree, buf } = await parse(src);
+    return rubyHandler.extractImports(tree, buf).map((i) => i.specifier);
+  };
+
+  it('normalises require_relative to ./x and finds requires in begin blocks and method bodies', async () => {
+    expect(await specs(`require_relative 'base'
+begin
+  require 'a/b'
+rescue LoadError
+end
+`))
+      .toEqual(['./base', 'a/b']);
+    expect(await specs(`class X
+  def go
+    require 'lazy'
+  end
+end
+`)).toEqual(['lazy']);
+  });
+
+  it('skips dynamic require arguments', async () => {
+    expect(await specs(`require File.expand_path('x', __dir__)
+require "#{dir}/y"
+`)).toEqual([]);
+  });
+
+  it('emits the superclass, mixins and association constants at class-body level', async () => {
+    const src = [
+      'module Admin',
+      '  class User < ::ApplicationRecord',
+      '    include Searchable',
+      '    extend Foo::Bar',
+      '    prepend Baz',
+      '    belongs_to :account',
+      '    belongs_to :owner, class_name: "Org::Person"',
+      '    belongs_to :subject, polymorphic: true',
+      '    has_many :line_items',
+      '    has_many :categories',
+      '    has_one :profile',
+      '    has_and_belongs_to_many :statuses',
+      '    def call',
+      '      Other.run',
+      '      include Never',
+      '    end',
+      '  end',
+      'end',
+      'class Foo::Bar < Struct.new(:a); end',
+    ].join('\n') + '\n';
+    expect(await specs(src)).toEqual([
+      'ApplicationRecord', 'Searchable', 'Foo::Bar', 'Baz', 'Account', 'Org::Person',
+      'LineItem', 'Category', 'Profile', 'Status',
+    ]);
+  });
+
+  it('emits each specifier once per file (per lexical scope)', async () => {
+    expect(await specs(`require 'a'
+require 'a'
+class X < Y; end
+class Z < Y; end
+`)).toEqual(['a', 'Y']);
+  });
+
+  it('carries the lexical nesting of a constant reference in importedNames', async () => {
+    const { tree, buf } = await parse(
+      [
+        'module Cask',
+        '  class DSL < Base',
+        '    include Helpers',
+        '    class Inner < ::Top',
+        '    end',
+        '  end',
+        'end',
+        'class Foo::Bar < Baz; end',
+      ].join('\n') + '\n',
+    );
+    const recs = rubyHandler.extractImports(tree, buf).map((i) => [i.specifier, i.importedNames]);
+    expect(recs).toEqual([
+      ['Base', ['Cask']],            // superclass: scope OUTSIDE the class
+      ['Helpers', ['Cask', 'DSL']],  // mixin: inside the class
+      ['Top', []],                   // ::Top is explicit top level
+      ['Baz', []],                   // compact class head at top level
+    ]);
+  });
+});
+
 // ─── Handler metadata ─────────────────────────────────────────────────────────
 
 describe('Ruby handler — metadata', () => {

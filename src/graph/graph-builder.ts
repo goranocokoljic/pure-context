@@ -11,6 +11,7 @@ import { ERLANG_FAMILY_EXTENSIONS, type ErlangResolver } from './erlang-resolver
 import { FORTRAN_FAMILY_EXTENSIONS, type FortranResolver } from './fortran-resolver.js';
 import { RUST_FAMILY_EXTENSIONS, type RustResolver } from './rust-resolver.js';
 import { DART_FAMILY_EXTENSIONS, type DartResolver } from './dart-resolver.js';
+import { RUBY_FAMILY_EXTENSIONS, type RubyResolver } from './ruby-resolver.js';
 import { resolvePrefilledTarget, type IndexedFileSet } from './prefilled-targets.js';
 import { isJsFamilyFile, type WorkspacePackageResolver } from './workspace-packages.js';
 import type { RefIndexView } from './symbol-edges.js';
@@ -82,6 +83,7 @@ export interface FamilyResolvers {
   fortran?: FortranResolver;
   rust?: RustResolver;
   dart?: DartResolver;
+  ruby?: RubyResolver;
 }
 
 type FamilyResolveFn = (rec: ImportRecord) => string[];
@@ -134,6 +136,11 @@ function buildDispatch(families: FamilyResolvers): Map<string, FamilyResolveFn> 
   }
   if (families.dart) {
     add(DART_FAMILY_EXTENSIONS, (r) => families.dart!.resolve(r.specifier, r.sourceFile));
+  }
+  if (families.ruby) {
+    add(RUBY_FAMILY_EXTENSIONS, (r) =>
+      families.ruby!.resolve(r.specifier, r.sourceFile, r.importedNames),
+    );
   }
   return byExt;
 }
