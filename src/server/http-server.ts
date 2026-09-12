@@ -569,9 +569,12 @@ async function handleRestApi(
     const t0 = Date.now();
     try {
       const { openDatabase } = await import('../core/db/schema.js');
-      const { getSymbolCoverage, getAllCoverageForRepo } = await import('../core/test-mapper.js');
+      const { getSymbolCoverage, getAllCoverageForRepo, ensureTestMappings, coverageRider } =
+        await import('../core/test-mapper.js');
       const db = openDatabase(coverageParams['id']!);
       let payload: string;
+      // Phase 104: a `skipTestMapper` index gets its mapping built here, once.
+      const rider = coverageRider(ensureTestMappings(coverageParams['id'] ?? '', db));
       if (symbolId) {
         const mapping = getSymbolCoverage(coverageParams['id']!, symbolId, db);
         db.close();
@@ -579,11 +582,11 @@ async function handleRestApi(
           sendJson(res, 404, { error: `No coverage data for symbol: ${symbolId}` });
           return;
         }
-        payload = JSON.stringify({ mapping, _meta: { timingMs: Date.now() - t0 } });
+        payload = JSON.stringify({ mapping, ...rider, _meta: { timingMs: Date.now() - t0 } });
       } else {
         const mappings = getAllCoverageForRepo(coverageParams['id']!, db);
         db.close();
-        payload = JSON.stringify({ mappings, _meta: { timingMs: Date.now() - t0 } });
+        payload = JSON.stringify({ mappings, ...rider, _meta: { timingMs: Date.now() - t0 } });
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(payload);

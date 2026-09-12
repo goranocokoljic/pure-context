@@ -9,7 +9,9 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
+import { createHash } from 'crypto';
 import { buildTestMappings, getSymbolCoverage, getAllCoverageForRepo } from '../../src/core/test-mapper.js';
+import { TEST_TOKEN_DDL } from '../../src/core/db/test-token-store.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -67,6 +69,7 @@ CREATE TABLE IF NOT EXISTS provider_metadata (
 function openTestDb(): InstanceType<typeof Database> {
   const db = new Database(':memory:');
   db.exec(MINIMAL_DDL);
+  db.exec(TEST_TOKEN_DDL);
   return db;
 }
 
@@ -97,10 +100,13 @@ function insertFile(
   path: string,
   content: string,
 ) {
+  // Phase 104: token rows are keyed by content hash — a real one, so a
+  // re-inserted file with new content is re-tokenized.
+  const hash = createHash('sha256').update(content).digest('hex');
   db.prepare(`
     INSERT OR REPLACE INTO files (repo_id, path, content_hash, raw_content)
-    VALUES (?, ?, 'hash', ?)
-  `).run(REPO_ID, path, content);
+    VALUES (?, ?, ?, ?)
+  `).run(REPO_ID, path, hash, content);
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -171,7 +177,7 @@ describe('buildTestMappings', () => {
     insertSymbol(db, 'sym011', 'beta',  'function', 'src/b.ts');
     insertSymbol(db, 'sym012', 'gamma', 'function', 'test/a.test.ts');
 
-    const count = buildTestMappings(REPO_ID, db);
+    const count = buildTestMappings(REPO_ID, db).symbols;
     // Only 2 production symbols (sym010, sym011); sym012 is a test symbol.
     expect(count).toBe(2);
   });
@@ -179,7 +185,7 @@ describe('buildTestMappings', () => {
   it('handles repos with no test files gracefully', () => {
     insertSymbol(db, 'sym013', 'noTests', 'function', 'src/lonely.ts');
 
-    const count = buildTestMappings(REPO_ID, db);
+    const count = buildTestMappings(REPO_ID, db).symbols;
     expect(count).toBe(1);
 
     const mapping = getSymbolCoverage(REPO_ID, 'sym013', db);
@@ -188,7 +194,7 @@ describe('buildTestMappings', () => {
   });
 
   it('handles repos with no symbols gracefully', () => {
-    const count = buildTestMappings(REPO_ID, db);
+    const count = buildTestMappings(REPO_ID, db).symbols;
     expect(count).toBe(0);
   });
 

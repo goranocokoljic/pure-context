@@ -78,6 +78,12 @@ export interface ChangeSynthesis {
     layerViolations: { from: string; to: string }[];
   };
   signalQuality: 'ok' | 'low';
+  /**
+   * Phase 104: present only when the test mapping was built on demand
+   * during this call (the repo was indexed with `skipTestMapper`, or the
+   * mapping was stale) — `coverage: 'built on demand (N ms, …)'`.
+   */
+  coverage?: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -104,7 +110,9 @@ interface ChangedSymbolRow {
 /**
  * Synthesize the impact report for a set of changed symbols + files.
  *
- * Pure with respect to the DB (reads only). Builds ONE {@link RiskContext} and
+ * Reads only — except that an absent / stale test mapping is built and
+ * stored on first use (Phase 104 lazy build, reported in `coverage`).
+ * Builds ONE {@link RiskContext} and
  * scores up to `maxSymbolsScored` symbols against it. Never throws on missing
  * data — sparse repos degrade to empty sections + `signalQuality: 'low'`.
  */
@@ -285,5 +293,6 @@ export function synthesizeChange(
     coverageGaps,
     architecturalFlags,
     signalQuality,
+    ...ctx.coverageRider,
   };
 }

@@ -5,6 +5,7 @@ import { join } from 'path';
 import type { RepoMetadata } from '../types.js';
 import { EMBEDDINGS_DDL } from './embedding-store.js';
 import { CO_CHANGE_DDL } from './co-change-store.js';
+import { TEST_TOKEN_DDL } from './test-token-store.js';
 import { getSqliteFactory, type SqliteDatabase } from './sqlite-loader.js';
 
 // ─── SQLite backend ───────────────────────────────────────────────────────────
@@ -30,7 +31,11 @@ type DatabaseConstructor = new (filename: string) => SqliteDatabase;
 // DDL (a new TABLE is safe on old DBs; no ALTER, no index on a new column —
 // the v9/v12 lesson). Old indexes hold no rows until their next whole-tree
 // run; every reader falls back to the file answer when a repo has none.
-export const SCHEMA_VERSION = 14;
+// v15 (Phase 104): additive — the `test_file_tokens` table (per test file:
+// content hash + deflated word-token set) that makes the test mapper
+// incremental. Created by the base DDL; a pre-v15 index builds its rows on
+// its next whole-tree run or on the first coverage-needing tool call.
+export const SCHEMA_VERSION = 15;
 
 const DDL = `
 PRAGMA journal_mode = WAL;
@@ -249,6 +254,7 @@ export function initializeDatabase(db: InstanceType<DatabaseConstructor>): void 
   db.exec(DDL);
   db.exec(EMBEDDINGS_DDL);
   db.exec(CO_CHANGE_DDL);
+  db.exec(TEST_TOKEN_DDL);
   runMigrations(db);
   // Ensure source column exists — added after v7, using try-catch for existing DBs
   // (SQLite does not support ALTER TABLE ... ADD COLUMN IF NOT EXISTS)
@@ -470,6 +476,10 @@ function runMigrations(db: InstanceType<DatabaseConstructor>): void {
   // Migration v13 → v14 (Phase 101): `symbol_refs` is a NEW table created by
   // the base DDL above (CREATE TABLE IF NOT EXISTS runs before migrations), so
   // there is nothing to run here. Rows appear on the next whole-tree build.
+
+  // Migration v14 → v15 (Phase 104): `test_file_tokens` is likewise a NEW
+  // table created by the base DDL. Nothing to run; the test mapper fills it
+  // on the next whole-tree run or the first coverage-needing tool call.
 }
 
 // ─── Repo operations ──────────────────────────────────────────────────────────

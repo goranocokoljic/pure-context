@@ -46,8 +46,8 @@ function repoRow(db: ReturnType<typeof openInMemoryDatabase>, version = SCHEMA_V
 }
 
 describe('schema v12 migration', () => {
-  it("SCHEMA_VERSION is 14 (v12 + Phase 100 blob semantics + Phase 101 symbol_refs)", () => {
-    expect(SCHEMA_VERSION).toBe(14);
+  it("SCHEMA_VERSION is 15 (v12 + Phase 100 blob semantics + Phase 101 symbol_refs + Phase 104 test_file_tokens)", () => {
+    expect(SCHEMA_VERSION).toBe(15);
   });
 
   it('a v11 database gains target_repo_id (NULL on old rows) and repo_links; old rows read as local edges', () => {

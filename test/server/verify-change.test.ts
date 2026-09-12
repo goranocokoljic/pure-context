@@ -21,6 +21,7 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 import { openDatabase, computeRepoId } from '../../src/core/db/schema.js';
+import { TEST_MAPPER_ALGO } from '../../src/core/test-mapper.js';
 import { insertSymbols } from '../../src/core/db/symbol-store.js';
 import { upsertFile } from '../../src/core/db/file-store.js';
 import { insertCommitFiles } from '../../src/core/db/co-change-store.js';
@@ -90,6 +91,12 @@ beforeAll(() => {
     `INSERT OR REPLACE INTO provider_metadata (repo_id, provider_name, entity_key, metadata, updated_at)
      VALUES (?, 'test-mapper', ?, ?, ?)`,
   ).run(REPO_ID, 'sym-alpha', JSON.stringify({ testFiles: ['test/a.test.ts'], testSymbolIds: [], coverageStatus: 'tested' }), NOW);
+  // Phase 104: a hand-built mapping needs the mapper's meta row, or the lazy
+  // build treats it as absent and rebuilds from the (fixture-less) files.
+  db.prepare(
+    `INSERT OR REPLACE INTO provider_metadata (repo_id, provider_name, entity_key, metadata, updated_at)
+     VALUES (?, 'test-mapper-meta', 'repo', ?, ?)`,
+  ).run(REPO_ID, JSON.stringify({ algo: TEST_MAPPER_ALGO, builtAt: NOW, mode: 'full', testFiles: 0, symbols: 1, ms: 0, tokenBytes: 0 }), NOW);
 
   const commits: RepoCommit[] = [];
   for (let i = 0; i < 6; i++) commits.push({ sha: `pair${i}`, date: 1000 + i, files: ['src/a.ts', 'src/shared.ts'] });

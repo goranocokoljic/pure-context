@@ -8,12 +8,19 @@
  * are not referenced in any test file.
  *
  * Detection strategy (static heuristic):
- *   1. Identify test files by path convention:
- *      - Path segment is "test", "tests", "spec", "specs", or "__tests__"
- *      - Filename ends with .test.*, .spec.*, _test.*, or _spec.*
- *   2. Extract all identifiers referenced in those test files.
- *   3. Any non-test symbol whose name does NOT appear in the test identifier
- *      set is considered "untested".
+ *   1. Identify test files by path convention (`isTestFilePath`: test /
+ *      tests / spec / specs / __tests__ segments, .test.* / .spec.* /
+ *      _test.* / _spec.* suffixes, test_ / spec_ prefixes, .NET *.Tests/).
+ *   2. Read the stored test mapping (Phase 104: `src/core/test-mapper.ts`,
+ *      built incrementally at index time — one tokenizing pass per test
+ *      file; `NAME` semantics). A repo indexed with `skipTestMapper`
+ *      gets its mapping built here on first use (`coverage` rider).
+ *   3. Any non-test symbol that no test file mentions is "untested".
+ *
+ * Before 1.37 this tool rescanned every test file per call (identifier
+ * regex `[A-Za-z_$][A-Za-z0-9_$]*`); the store's word-boundary match
+ * differs only for names with `$` or a separator (`Foo.bar` can now be
+ * tested) and for names under 3 chars (never tested).
  *
  * Limitations:
  *   - Name-based matching only; dynamic dispatch, aliases, and indirect calls
@@ -35,7 +42,8 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { SymbolKind } from '../../core/types.js';
 import { isTestFilePath as isTestFile } from '../../core/test-paths.js';
 import { byteOffsetToLine } from './symbol-lines.js';
-import { getAllFilesWithContent, getFileContent } from '../../core/db/file-store.js';
+import { getAllFileHashes, getFileContent } from '../../core/db/file-store.js';
+import { coverageRider, ensureTestMappings, getCoverageStatusMap } from '../../core/test-mapper.js';
 
 export const name = 'find_untested_symbols';
 
@@ -133,18 +141,6 @@ interface UntestedSymbol {
 // private copies). Imported at the top of the file.
 
 /**
- * Extract all identifier tokens from source text.
- * Returns a Set for O(1) membership checks.
- */
-function extractIdentifiers(text: string): Set<string> {
-  const ids = new Set<string>();
-  for (const m of text.matchAll(/\b([A-Za-z_$][A-Za-z0-9_$]*)\b/g)) {
-    ids.add(m[1]);
-  }
-  return ids;
-}
-
-/**
  * Assign a priority to an untested symbol based on its complexity and size.
  */
 function computePriority(cc: number, lineCount: number): 'high' | 'medium' | 'low' {
@@ -193,27 +189,12 @@ export async function handler(args: {
       };
     }
 
-    // ── Load all indexed files (with content) ─────────────────────────────────
-    const allFiles = getAllFilesWithContent(db, repoId);
-
-    // ── Partition files: test vs source ───────────────────────────────────────
-    const testFiles: typeof allFiles = [];
-    for (const f of allFiles) {
-      if (isTestFile(f.path)) testFiles.push(f);
-    }
-
-    // ── Build identifier sets per test file ───────────────────────────────────
-    // identifiersByTestFile[i] = Set of identifiers in testFiles[i]
-    const identifiersByTestFile: Array<{ path: string; ids: Set<string> }> = [];
-    // Global union for fast "is this symbol name referenced at all?" check
-    const allTestIdentifiers = new Set<string>();
-
-    for (const tf of testFiles) {
-      if (!tf.rawContent) continue;
-      const text = tf.rawContent.toString('utf8');
-      const ids = extractIdentifiers(text);
-      identifiersByTestFile.push({ path: tf.path, ids });
-      for (const id of ids) allTestIdentifiers.add(id);
+    // ── Test mapping (stored; built on demand when absent / stale) ───────────
+    const ensured = ensureTestMappings(repoId, db);
+    const coverage = getCoverageStatusMap(repoId, db);
+    const testFilePaths = new Set<string>();
+    for (const path of getAllFileHashes(db, repoId).keys()) {
+      if (isTestFile(path)) testFilePaths.add(path);
     }
 
     // ── Load candidate symbols ────────────────────────────────────────────────
@@ -236,20 +217,8 @@ export async function handler(args: {
       params.push(args.filePath);
     }
 
-    const sql = `
-      SELECT id, name, kind, file_path, start_byte, signature, summary,
-             COALESCE(line_count, 1)           AS line_count,
-             COALESCE(cyclomatic_complexity, 1) AS cyclomatic_complexity
-      FROM symbols
-      WHERE ${conditions.join(' AND ')}
-        AND file_path NOT IN (SELECT path FROM files WHERE repo_id = ? AND path IN (
-          ${allFiles.filter(f => isTestFile(f.path)).map(() => '?').join(',') || 'SELECT NULL'}
-        ))
-      ORDER BY cyclomatic_complexity DESC, line_count DESC
-    `;
-
-    // Avoid building a huge IN clause for test-file exclusion — instead
-    // filter in JS after the query (simpler and still fast for typical repos).
+    // Test-file symbols are excluded in JS (no IN clause over every test
+    // path — simpler and still fast for typical repos).
     const sqlSimple = `
       SELECT id, name, kind, file_path, start_byte, signature, summary,
              COALESCE(line_count, 1)           AS line_count,
@@ -258,14 +227,12 @@ export async function handler(args: {
       WHERE ${conditions.join(' AND ')}
       ORDER BY cyclomatic_complexity DESC, line_count DESC
     `;
-    void sql; // suppress unused-variable warning for the filtered version above
 
     const allSymbols = db
       .prepare<unknown[], SymbolRow>(sqlSimple)
       .all(params);
 
     // Exclude symbols that live in test files
-    const testFilePaths = new Set(testFiles.map((f) => f.path));
     const sourceSymbols = allSymbols.filter((s) => !testFilePaths.has(s.file_path));
 
     // ── Classify each symbol ──────────────────────────────────────────────────
@@ -282,7 +249,10 @@ export async function handler(args: {
     };
 
     for (const sym of sourceSymbols) {
-      const isTested = allTestIdentifiers.has(sym.name);
+      // A structural kind (interface) is 'unknown' in the store but still
+      // records the files that mention it — the tool's "tested" is "some
+      // test file mentions the name", for every kind.
+      const isTested = (coverage.get(sym.id)?.testFiles.length ?? 0) > 0;
 
       if (isTested) {
         testedCount++;
@@ -350,7 +320,8 @@ export async function handler(args: {
             testedCount,
             untestedCount,
             testCoverageRate,
-            testFilesScanned: testFiles.length,
+            testFilesScanned: testFilePaths.size,
+            ...coverageRider(ensured),
             truncated,
             untestedSymbols: visibleUntested,
             summary: {

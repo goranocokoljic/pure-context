@@ -61,7 +61,7 @@ import { isGitRepo, readRepoFileHistories, readRepoCommitFiles } from './git-log
 import { updateFileGitMeta } from './db/file-store.js';
 import { insertGitCommits, deleteGitMetadataForFile } from './db/git-metadata-store.js';
 import { insertCommitFiles, deleteCommitFilesForRepo } from './db/co-change-store.js';
-import { buildTestMappings } from './test-mapper.js';
+import { buildTestMappings, getTestMapperMeta, TEST_MAPPER_ALGO } from './test-mapper.js';
 import { setGitTreeSha } from './db/schema.js';
 import { gitHeadSha } from './git-head.js';
 import { maybeCloneWorktreeIndex } from './worktree-clone.js';
@@ -562,12 +562,18 @@ export async function indexFolder(
   // ── 10e. Test coverage mapping ────────────────────────────────────────────
   // Heuristic: find which production symbols are referenced in test files.
   // Runs after symbols are indexed; errors never abort indexing.
+  // Phase 104: incremental — unchanged test files are never re-read, and a
+  // run that processed nothing skips the mapper outright when a build exists
+  // (the P1 no-op; a `skipTestMapper` index has no meta row and still builds).
+  let testMapper: IndexResult['testMapper'] = { ms: 0, testFiles: 0, symbols: 0, mode: 'skipped' };
   if (!options.skipTestMapper) {
-    try {
-      const mappedCount = buildTestMappings(repoId, db);
-      logger.info(`Test mapper: ${mappedCount} production symbols mapped`);
-    } catch (err) {
-      logger.warn(`Test mapper failed: ${err}`);
+    const nothingMoved = toProcess.length === 0 && filesPruned === 0;
+    if (!(nothingMoved && getTestMapperMeta(repoId, db)?.algo === TEST_MAPPER_ALGO)) {
+      try {
+        testMapper = buildTestMappings(repoId, db);
+      } catch (err) {
+        logger.warn(`Test mapper failed: ${String(err)}`);
+      }
     }
   }
 
@@ -668,6 +674,7 @@ export async function indexFolder(
     errors,
     warnings,
     filesPruned,
+    testMapper,
     limitReached: limitSkipped > 0,
     totalBeforeLimit,
     batchesCommitted,
@@ -772,7 +779,7 @@ export async function reindexFiles(
   repoId: string,
   changedPaths: string[],
   deletedPaths: string[] = [],
-  options?: Pick<IndexOptions, 'adapters' | 'aiSummarizer' | 'semanticIndexer' | 'crossIndex' | 'linkedRepos' | 'maxLinkedRepos' | 'skipSymbolEdges'> & {
+  options?: Pick<IndexOptions, 'adapters' | 'aiSummarizer' | 'semanticIndexer' | 'crossIndex' | 'linkedRepos' | 'maxLinkedRepos' | 'skipSymbolEdges' | 'skipTestMapper'> & {
     /**
      * Phase 99: re-run the workspace link rule and re-resolve the WHOLE graph
      * from stored import records against the fresh link set. Used after a
@@ -1020,6 +1027,19 @@ export async function reindexFiles(
     }
   }
 
+  // ── Test mapping (Phase 104) — the same incremental path as indexFolder ──
+  // Re-tokenizes the touched test files, maps the new symbols, drops the
+  // rows of deleted ones. Closes the documented "index_file skips the
+  // mapper" gap. Never aborts the run.
+  let testMapper: IndexResult['testMapper'] = { ms: 0, testFiles: 0, symbols: 0, mode: 'skipped' };
+  if (!options?.skipTestMapper) {
+    try {
+      testMapper = buildTestMappings(repoId, db);
+    } catch (err) {
+      logger.warn(`Test mapper failed: ${String(err)}`);
+    }
+  }
+
   // Update repo metadata counts
   const totalSymbols =
     db.prepare<[string], { c: number }>('SELECT COUNT(*) AS c FROM symbols WHERE repo_id = ?')
@@ -1049,6 +1069,7 @@ export async function reindexFiles(
     crossEdgesFound,
     linksUsed,
     ...(symbolRefStats ? { symbolRefsBuilt: symbolRefStats.refs, symbolRefsMs: symbolRefStats.ms } : {}),
+    testMapper,
     durationMs: Date.now() - start,
     errors,
     warnings: [],

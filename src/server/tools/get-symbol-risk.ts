@@ -13,7 +13,7 @@
 
 import { z } from 'zod';
 import { openDatabase, getRepo } from '../../core/db/schema.js';
-import { computeSymbolRisk } from './symbol-risk.js';
+import { buildRiskContext, computeSymbolRiskWithContext } from './symbol-risk.js';
 import { buildMeta } from './_meta.js';
 import { graphCoverageWarning } from './graph-coverage.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -49,7 +49,10 @@ export async function handler(args: { repoId: string; symbolId: string }): Promi
       };
     }
 
-    const risk = computeSymbolRisk(db, repoId, symbolId);
+    // Phase 104: the context carries the `coverage` rider when the test
+    // mapping had to be built on demand (a `skipTestMapper` index).
+    const ctx = buildRiskContext(db, repoId);
+    const risk = computeSymbolRiskWithContext(db, repoId, symbolId, ctx);
     if (!risk) {
       return {
         content: [{ type: 'text', text: JSON.stringify({ error: `Symbol "${symbolId}" not found.` }) }],
@@ -61,7 +64,12 @@ export async function handler(args: { repoId: string; symbolId: string }): Promi
       content: [{
         type: 'text',
         text: JSON.stringify(
-          { ...risk, ...(graphCoverageWarning(db, repoId) ?? {}), _meta: buildMeta({ timingMs: Date.now() - t0 }) },
+          {
+            ...risk,
+            ...ctx.coverageRider,
+            ...(graphCoverageWarning(db, repoId) ?? {}),
+            _meta: buildMeta({ timingMs: Date.now() - t0 }),
+          },
           null,
           2,
         ),

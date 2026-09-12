@@ -57,8 +57,8 @@ function ref(over: Partial<SymbolRef>): SymbolRef {
 }
 
 describe('schema v14', () => {
-  it('SCHEMA_VERSION is 14 and a fresh DB has symbol_refs + its two indexes', () => {
-    expect(SCHEMA_VERSION).toBe(14);
+  it('SCHEMA_VERSION is 15 (v14 symbol_refs + Phase 104 test_file_tokens) and a fresh DB has symbol_refs + its two indexes', () => {
+    expect(SCHEMA_VERSION).toBe(15);
     const d = db();
     const tables = (d.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((t) => t.name);
     expect(tables).toContain('symbol_refs');

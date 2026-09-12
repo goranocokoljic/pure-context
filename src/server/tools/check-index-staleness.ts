@@ -7,6 +7,7 @@ import { getFileHash } from '../../core/db/file-store.js';
 import { getRepoLinks } from '../../core/db/link-store.js';
 import { describeLinkDrift, formatLinkDriftLine } from '../../core/workspace-links.js';
 import { computeHash } from '../../core/hash-cache.js';
+import { getTestMapperFreshness } from '../../core/test-mapper.js';
 import { buildMeta } from './_meta.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
@@ -95,6 +96,11 @@ export function handler(args: { repoId: string; filePaths?: string[] }): CallToo
           })
         : [];
       const linksStale = links.filter((l) => l.status === 'moved' || l.status === 'missing' || l.status === 'pending');
+      // Phase 104: is the stored test mapping current? 'absent' = indexed
+      // with skipTestMapper (or pre-1.37); 'stale' = a test file or symbol
+      // moved since the last build. Either way the first coverage-needing
+      // tool builds it on demand — this is information, not a gate.
+      const testMapper = repo ? getTestMapperFreshness(args.repoId, db) : 'absent';
       return {
         content: [
           {
@@ -109,6 +115,7 @@ export function handler(args: { repoId: string; filePaths?: string[] }): CallToo
                 symbolCount: repo?.symbolCount ?? 0,
                 ...(schemaWarning ? { schemaWarning } : {}),
                 ...(head ? { head, freshness: formatDriftLine(head) } : {}),
+                testMapper,
                 ...(links.length > 0
                   ? {
                       links,

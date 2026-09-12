@@ -94,9 +94,17 @@ Useful `index_folder` options:
 
 - `fileLimit: 0` — unlimited within the root (default 10,000; truncation is
   reported via `limitReached` / `totalBeforeLimit`).
-- `skipTestMapper: true` — the test mapper can dominate wall-clock on big
-  trees; skip it unless you need `find_untested_symbols` or the `testGap`
-  axis of `get_symbol_risk`.
+- `skipTestMapper: true` — skip the test mapper for this run. Since 1.37.0
+  this is rarely worth it: the mapper tokenizes each test file ONCE
+  (stored by content hash in `test_file_tokens`) and re-maps only what
+  moved — a no-op run costs 0 ms, a full first build is ~25-40x cheaper
+  than before (novu 25 s → 0.7 s, jenkins see CHANGELOG 1.37.0). A repo
+  indexed with the flag gets its mapping built on the first call to
+  `find_untested_symbols` / `get_symbol_risk` / `analyze_diff` /
+  `prepare_change` (the response carries `coverage: 'built on demand (N
+  ms, …)'`); `check_index_staleness` reports `testMapper: fresh | stale |
+  absent`. `IndexResult.testMapper` / the `index_folder` response show
+  `{ ms, testFiles, symbols, mode: full | incremental | skipped }`.
 - `onlyChanged: true` — after the first index, re-index from git's change
   list instead of walking the tree (see Branch discipline).
 

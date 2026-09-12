@@ -13,6 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Database } from 'better-sqlite3';
 import { openInMemoryDatabase, upsertRepo, SCHEMA_VERSION } from '../../src/core/db/schema.js';
+import { TEST_MAPPER_ALGO } from '../../src/core/test-mapper.js';
 import { insertCommitFiles } from '../../src/core/db/co-change-store.js';
 import { synthesizeChange } from '../../src/server/tools/change-synthesis.js';
 import type { RepoCommit } from '../../src/core/git-log-reader.js';
@@ -64,6 +65,12 @@ function insertCoverage(
     `INSERT OR REPLACE INTO provider_metadata (repo_id, provider_name, entity_key, metadata, updated_at)
      VALUES (?, 'test-mapper', ?, ?, ?)`,
   ).run(REPO, symbolId, JSON.stringify({ testFiles, testSymbolIds: [], coverageStatus }), NOW);
+  // Phase 104: a hand-built mapping needs the mapper's meta row, or the lazy
+  // build treats it as absent and rebuilds from the (fixture-less) files.
+  db.prepare(
+    `INSERT OR REPLACE INTO provider_metadata (repo_id, provider_name, entity_key, metadata, updated_at)
+     VALUES (?, 'test-mapper-meta', 'repo', ?, ?)`,
+  ).run(REPO, JSON.stringify({ algo: TEST_MAPPER_ALGO, builtAt: NOW, mode: 'full', testFiles: 0, symbols: 1, ms: 0, tokenBytes: 0 }), NOW);
 }
 
 /** A healthy co-change window: target+partner share `n` commits, plus padding. */

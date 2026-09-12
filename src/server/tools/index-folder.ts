@@ -129,6 +129,9 @@ export async function handler(
             ...(result.symbolRefsBuilt !== undefined
               ? { symbolRefsBuilt: result.symbolRefsBuilt, symbolRefsMs: result.symbolRefsMs ?? 0 }
               : {}),
+            // Phase 104: test-mapper accounting (mode 'skipped' = nothing to
+            // map or skipTestMapper; the mapping is then built on first use).
+            ...(result.testMapper ? { testMapper: result.testMapper } : {}),
             ...(head ? { head } : {}),
             _meta: buildMeta({ timingMs: result.durationMs }),
           },

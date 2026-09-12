@@ -27,8 +27,12 @@ import { getBlastRadius } from '../../graph/graph-traversal.js';
 import { countCommits } from '../../core/db/co-change-store.js';
 import { getCoChange, type CoChangeResult } from './co-change.js';
 import { getConfig } from '../../config/config-loader.js';
-import { isTestFilePath as isTestFile } from '../../core/test-paths.js';
-import { getAllFilesWithContent } from '../../core/db/file-store.js';
+import {
+  coverageRider,
+  ensureTestMappings,
+  getCoverageStatusMap,
+  type CoverageStatus,
+} from '../../core/test-mapper.js';
 import { countSymbolRefs, getAfferentSymbolCounts, getCrossAfferentSymbolCounts } from '../../core/db/symbol-ref-store.js';
 
 export interface RiskFactor {
@@ -91,20 +95,10 @@ function band(score: number): SymbolRiskResult['band'] {
 }
 
 // ─── Test-coverage heuristic ──────────────────────────────────────────────────
-// Shared predicate (Task 549 — was one of five private copies).
-
-/**
- * True when any of the pre-collected test-file contents contains a
- * word-boundary-anchored reference to `symbolName`. Operates on the
- * RiskContext's prebuilt content list so we never re-read all files per symbol.
- */
-function contentsHaveTestRef(testFileContents: string[], symbolName: string): boolean {
-  const re = new RegExp(`\\b${symbolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
-  for (const c of testFileContents) {
-    if (re.test(c)) return true;
-  }
-  return false;
-}
+// Phase 104: read from the stored test mapping (built incrementally at index
+// time; built here on first use when absent / stale) instead of loading every
+// test file's content per call and running one regex per symbol. Same
+// `NAME` semantics; a name under 3 chars is never tested (was: regex).
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
@@ -146,8 +140,10 @@ export interface RiskContext {
   symbolCentrality: { bySymbol: Map<string, number>; dist: number[] } | null;
   /** cyclomatic complexity across all symbols (the complexity percentile basis). */
   complexityDist: number[];
-  /** decoded UTF-8 contents of every test file (the test-ref scan basis). */
-  testFileContents: string[];
+  /** symbol id → stored test mapping (the test-gap basis). */
+  coverage: Map<string, { status: CoverageStatus; testFiles: string[] }>;
+  /** Present when this context had to build the mapping on demand (P4). */
+  coverageRider: { coverage?: string };
   /** distinct commits captured for co-change (0 ⇒ no co-change data). */
   windowCommits: number;
   /** mega-commit exclusion threshold for co-change scoring. */
@@ -226,14 +222,9 @@ export function buildRiskContext(db: Database.Database, repoId: string): RiskCon
     .all(repoId);
   const complexityDist = complexityRows.map((r) => r.cyclomatic_complexity ?? 0);
 
-  // ── Test-file content set (scanned once, not per symbol). ───────────────────
-  const fileRows = getAllFilesWithContent(db, repoId);
-  const testFileContents: string[] = [];
-  for (const f of fileRows) {
-    if (isTestFile(f.path) && f.rawContent) {
-      testFileContents.push(f.rawContent.toString('utf8'));
-    }
-  }
+  // ── Test mapping (stored; on-demand build only when absent / stale). ───────
+  const ensured = ensureTestMappings(repoId, db);
+  const coverage = getCoverageStatusMap(repoId, db);
 
   return {
     fileCommitCounts,
@@ -242,7 +233,8 @@ export function buildRiskContext(db: Database.Database, repoId: string): RiskCon
     centralityDist,
     symbolCentrality,
     complexityDist,
-    testFileContents,
+    coverage,
+    coverageRider: coverageRider(ensured),
     windowCommits: countCommits(db, repoId),
     megaCommitThreshold: getConfig().git?.megaCommitThreshold ?? 30,
     weights: getConfig().risk.weights,
@@ -320,7 +312,9 @@ export function computeSymbolRiskWithContext(
   if (cc >= 5) reasons.push(`cyclomatic complexity ${cc}`);
 
   // ── Test gap ─────────────────────────────────────────────────────────────
-  const tested = contentsHaveTestRef(ctx.testFileContents, sym.name);
+  // "Some test file mentions the name" — for every kind (a structural
+  // symbol is 'unknown' in the store but still lists its files).
+  const tested = (ctx.coverage.get(sym.id)?.testFiles.length ?? 0) > 0;
   const testGapNorm = tested ? 0 : 1;
   if (!tested) reasons.push('no direct test reference');
 

@@ -152,10 +152,16 @@ analysis.
 | Tool | Purpose | Needs git history? | Needs embeddings? |
 |------|---------|--------------------|-------------------|
 | `index_file` | Targeted single-file re-index (mid-run freshness) | no | no |
-| `check_index_staleness` | Cheap per-file fresh/stale check | no | no |
+| `check_index_staleness` | Cheap per-file fresh/stale check (+ `testMapper` freshness of the stored test mapping, 1.37.0) | no | no |
 | `check_consistency` | Pre-write dedup / drift / pattern-fit (greenfield front door) | no | no (structural) |
 | `merge_readiness` | Composite pre-merge go/no-go | optional | no |
 
 All other loop tools (`get_task_context`, `prepare_change`, `verify_change`,
 `compare_change_impact`, `get_architecture_snapshot`, `find_untested_symbols`,
 `get_context_bundle`) predate Phase 80; see `AGENT_REFERENCE.md`.
+
+Since 1.37.0 `index_file` also keeps the test mapping current (the touched
+test files are re-tokenized, new symbols mapped), so `find_untested_symbols`
+/ `prepare_change` after a write see the write. A repo indexed with
+`skipTestMapper` gets its mapping on the first coverage-needing call —
+the response carries `coverage: 'built on demand (N ms, …)'`.

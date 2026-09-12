@@ -295,6 +295,21 @@ export interface IndexResult {
    */
   symbolRefsBuilt?: number;
   symbolRefsMs?: number;
+  /**
+   * Phase 104 (Task 647): what the test mapper did on this run. `mode` is
+   * 'skipped' when `skipTestMapper` was set or nothing needed mapping,
+   * 'full' on a first build / rebuild, 'incremental' when only changed test
+   * files and new symbols were mapped. Absent only on remote paths.
+   */
+  testMapper?: TestMapperStats;
+}
+
+/** Per-run test-mapper accounting (Phase 104). */
+export interface TestMapperStats {
+  ms: number;
+  testFiles: number;
+  symbols: number;
+  mode: 'full' | 'incremental' | 'skipped';
 }
 
 export interface DiscoveredFile {

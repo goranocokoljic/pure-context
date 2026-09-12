@@ -11,6 +11,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.37.0] - 2026-09-12 — Phase 104: Test-Mapper Redesign (incremental, one pass per test file, lazy)
+
+Reporter Issue D, carried since Phase 89 with `skipTestMapper` as the
+interim answer: the test mapper rescanned EVERY test file against EVERY
+production symbol name on EVERY whole-tree run — one regex per name, O(test
+bytes × symbol names) — even when nothing had changed. Measured fresh on
+this machine before the change: novu 25.0 s, jenkins 35.7 s, saleor 111.6 s
+per run; a NO-OP `index_folder` on jenkins took 34.4 s of which 33.0 s
+(96%) was the mapper.
+
+### Changed
+
+- **One tokenizing pass per test file, stored** (Task 648). A test file is
+  split ONCE into its set of `[A-Za-z0-9_]+` runs; the sorted, deduped set
+  is deflated into the new `test_file_tokens` table keyed by the file's
+  content hash (schema **v15**, additive — a new table, no ALTER; old
+  indexes open unchanged). A name made only of word chars matches the
+  legacy `NAME` exactly when it is one of those runs — a set lookup.
+  A composite name (`Foo.bar`, `A::B::c`, `User#valid?`, `$col-width`; the
+  audit found 42% of all 977k names across the benchmark corpus are
+  composite) can only match a file whose token set holds EVERY word run
+  of the name, so the token sets prefilter the candidate files and only
+  those files' content is read, checked with an exact boundary-aware
+  `indexOf` walk. Match semantics are the legacy regex's, byte for byte:
+  20,000 fuzz cases and the audit corpus agree, and the legacy mapper is
+  kept for one release as the oracle (`test/core/oracles/`).
+- **Incremental by self-detection** (Task 649). `buildTestMappings`
+  compares `files.content_hash` with the stored token hashes and anti-joins
+  symbols against mapping rows: only test files whose hash moved are
+  re-tokenized (deleted ones dropped), only production symbols without a
+  row are mapped when no test file changed, only rows whose value changed
+  are written, orphan rows of deleted symbols are removed. `indexFolder`
+  skips the mapper outright when nothing was processed and a build exists.
+  `reindexFiles` — the `index_file` path — runs the same step, closing the
+  documented "index_file skips the mapper" gap. Mapping arrays are sorted
+  (files by path, test symbol ids by file then start byte), so a full and
+  an incremental build produce the same bytes.
+- **Lazy build + honesty** (Task 650). An index built with `skipTestMapper`
+  (or by a pre-1.37 mapper) carries no mapping meta; the first call to
+  `find_untested_symbols`, `get_symbol_risk`, `analyze_diff`,
+  `prepare_change` or the Web UI coverage endpoint builds it and says so —
+  `coverage: 'built on demand (N ms, full; index had no test mapping)'`.
+  `check_index_staleness` reports `testMapper: fresh | stale | absent`.
+  `IndexResult.testMapper` / the `index_folder` and `index_file` responses
+  carry `{ ms, testFiles, symbols, mode: full | incremental | skipped }`.
+- **The tools read the store.** `find_untested_symbols` no longer re-scans
+  every test file per call (it loaded all file content and regex-tokenized
+  it each time); the risk context no longer holds every test file's text
+  and runs one regex per scored symbol. Known deltas against those per-tool
+  scans: a name under 3 chars is never "tested" (risk used to regex it);
+  `Foo.bar` / `$x` names can now be tested in `find_untested_symbols`
+  (its identifier regex could not match them).
+- **One deliberate semantic change.** The test-file universe is every
+  indexed test file (`isTestFilePath`), not only test files that happen to
+  carry an indexed symbol. The legacy mapper derived its file list from the
+  symbols table, so a spec file with no extracted symbol was never scanned
+  (novu 147 of 331 test files, jenkins 763 of 853, saleor 1,439 of 1,823).
+  `find_untested_symbols` and `get_symbol_risk` already scanned every test
+  file; the store now agrees with them.
+
+### Measured (Task 651 — `benchmarks/harness/phase104_parity.mts`, legacy oracle vs new on the same index)
+
+| repo | test files | symbols | legacy | new (full) | no-op | 50 new symbols | 1 test file changed | tokens stored |
+|------|-----------:|--------:|-------:|-----------:|------:|---------------:|--------------------:|--------------:|
+| novu | 331 | 33,392 | 25.3 s | 0.72 s (35×) | 146 ms (0 ms via `index_folder`) | 345 ms | 534 ms | 169 KB |
+| jenkins | 853 | 11,977 | 35.7 s | 1.90 s (19×) | 92 ms | 233 ms | 893 ms | 680 KB |
+| saleor | 1,823 | 12,251 | 111.6 s | 1.66 s (67×) | 138 ms | 410 ms | 584 ms | 1,165 KB |
+| flutter | 2,415 | 72,242 | 862.0 s | 10.7 s (81×) | 352 ms | 1,051 ms | 5,084 ms | 1,633 KB |
+
+Parity: every mapping row value-identical to the legacy oracle once the
+new rows are restricted to the legacy file universe (novu 1,027 raw
+differences, jenkins 487, saleor 75 — all explained by the wider universe,
+0 unexplained). The incremental paths (symbol side, token side) produce
+rows identical to a forced full rebuild on every repo.
+
+### Fixed
+
+- `index_file` after editing a test file (or adding a production symbol)
+  now updates the test mapping; before 1.37 the mapping went stale until
+  the next whole-tree run.
+
+### Notes
+
+- No forced re-index. A pre-1.37 index builds its token rows and mapping
+  on its next whole-tree run (full, once) or on the first coverage-needing
+  tool call.
+- `skipTestMapper` still works; it is now rarely worth setting.
+- Carried: a token-side change re-maps every symbol in memory (jenkins
+  0.9 s, flutter 5.1 s) — restricting it to names whose word runs intersect the token
+  delta is the next lever; Phase 101 `ref` edges could narrow
+  `testSymbolIds` to the test symbols that actually reference the
+  production symbol (changes the answer, so not in a parity phase).
+
+---
+
 ## [1.36.0] - 2026-09-12 — Phase 103: Resolver Wave 3 (Ruby edges, Swift targets, Elixir `defp`, C++ private members)
 
 Four gaps the gap-analysis MEDIUM list left standing after Phases 82–98:

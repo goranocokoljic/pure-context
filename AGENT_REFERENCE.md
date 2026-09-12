@@ -108,7 +108,7 @@ Targeted re-index of one or a few specific files WITHOUT the full-tree discovery
 The PostToolUse hook uses this automatically when installed.
 
 ### `check_index_staleness`
-Cheaply check whether the index is current — no discovery pass. Pass `filePaths` for a per-file `fresh`/`stale` verdict (compares stored content hash vs disk); omit them for a repo-level summary (indexed? + last-indexed time + counts). Use at task start to decide cold `index_folder` vs targeted `index_file`.
+Cheaply check whether the index is current — no discovery pass. Pass `filePaths` for a per-file `fresh`/`stale` verdict (compares stored content hash vs disk); omit them for a repo-level summary (indexed? + last-indexed time + counts + `testMapper: fresh | stale | absent` — the stored test mapping; `absent` = indexed with `skipTestMapper`, `stale` = a test file or symbol moved since the last build; either way the first coverage-needing tool builds it on demand, so this is information, not a gate). Use at task start to decide cold `index_folder` vs targeted `index_file`.
 
 - `repoId` (required)
 - `filePaths` (optional)
@@ -573,9 +573,9 @@ Type dependency graph — which types reference which other types.
 - `direction`: `"uses"`, `"usedBy"`, or `"both"`
 
 ### `find_untested_symbols`
-Exported symbols with no corresponding test coverage (import-based heuristics, not runtime coverage).
+Exported symbols that no test file mentions (name-based heuristic, not runtime coverage). Reads the stored test mapping (1.37.0: built incrementally at index time — every test file tokenized once, keyed by content hash; a production symbol is "tested" when a test file contains its name with word boundaries on both sides). If the repo was indexed with `skipTestMapper` (or the mapping is stale), the tool builds it on first use and says so: `coverage: 'built on demand (N ms, full; index had no test mapping)'`. The same store feeds the `testGap` factor of `get_symbol_risk` and the `coverageGaps` / `recommendedTests` of `analyze_diff` / `prepare_change`.
 
-- `filePath` (optional), `kind` (optional), `limit` (optional, default 50)
+- `scope` (optional), `filePath` (optional), `kinds` (optional), `minLineCount` (optional, default 3), `includeTestRefs` (optional), `limit` (optional, default 50)
 
 ### `get_test_coverage_map`
 Per-file coverage map with `coverageRatio` per file and aggregated totals.
