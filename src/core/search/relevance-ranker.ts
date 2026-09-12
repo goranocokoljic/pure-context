@@ -706,8 +706,31 @@ function score(
     // components displaced the asked-for fetch function on a multi-word query
     // (infisical gt-22). A component named by one word of a long query is
     // exactly the context-mention pattern this scaling exists for.
-    const DATA_KINDS = new Set<string>(['const', 'type', 'interface', 'enum', 'property', 'component']);
-    if (DATA_KINDS.has(symbol.kind) && queryWords.length > 1) {
+    // 'struct' and 'macro' added in Phase 105 (Task 655, airodump replay):
+    // both kinds are emitted by the C/C++ handlers only — a one-word C
+    // struct (`packet`, `channel`, `network`) or object-like macro (`WPA`,
+    // `ESSID`, `IVS`) named by one query word took the full +60 on 9/25
+    // queries whose targets are all functions.
+    const DATA_KINDS = new Set<string>(['const', 'type', 'interface', 'enum', 'property', 'component', 'struct', 'macro']);
+    // Phase 105 (Task 653, dotty-bot diagnosis): Scala `case class` and
+    // `object` symbols are stored as kind 'class' but ARE data definitions /
+    // namespaces — `Commit`, `Status`, `Issue`, `object Github` took the full
+    // +60 from one context word of a 15-word method query and displaced the
+    // asked-for method on 9/25 queries. Gated on the handler's frameworkMeta
+    // (only the Scala handler sets these keys), so no other language moves.
+    // Task 654 (vapor replay) adds Swift `extension Foo` rows (kind 'class',
+    // `swift_extension`): an extension is not the type's definition — the
+    // `protocol Middleware` row already gets the scaled 40/N as an interface
+    // while each of its extensions took the full +60 and outranked it.
+    // Task 655 (listmonk replay) adds Go structs (`go_struct`): `Campaign`,
+    // `Subscriber`, `User`, `Session` are data records named by one word of
+    // nearly every query, and all 25 listmonk targets are methods.
+    const declFm = symbol.frameworkMeta;
+    const isDataDecl =
+      !!declFm &&
+      (!!declFm['scala_case_class'] || !!declFm['scala_object'] ||
+        !!declFm['swift_extension'] || !!declFm['go_struct']);
+    if ((DATA_KINDS.has(symbol.kind) || isDataDecl) && queryWords.length > 1) {
       identityExact = Math.max(10, Math.round(40 / queryWords.length));
     } else {
       const rawFreq = rawQueryFreq.get(identityMatchWord) ?? 1;
@@ -724,6 +747,22 @@ function score(
     // carry no identity at all. The ≥3-word gate keeps short queries ("run",
     // "execute task") targeting the generic name unaffected.
     if (queryWords.length >= 3 && GENERIC_METHOD_NAMES.has(nameLower)) {
+      identityExact = Math.round(identityExact / 3);
+    } else if (
+      // Phase 105 (Task 653, zio + dotty-bot replay): Scala one-word members
+      // and functions (`commit`, `post`, `take`, `offerAll`→no, `empty`,
+      // `service`, `log`, `instant`) took the full identity from ONE word of
+      // a ≥8-word descriptive query and held rank 1 on 23/25 zio queries
+      // and 9/25 dotty-bot queries — the generic-verb failure shape, but the
+      // names are domain words no global list can carry. Same ⅓ scaling,
+      // gated on the file extension + member kinds: type definitions
+      // (class/trait/enum/type) keep their identity because a one-word
+      // TYPE named by the query (Queue, Scope, Cached) is the target.
+      queryWords.length >= 8 &&
+      SCALA_MEMBER_KINDS.has(symbol.kind) &&
+      /\.scala$/i.test(symbol.filePath) &&
+      splitNameParts(symbol.name).length === 1
+    ) {
       identityExact = Math.round(identityExact / 3);
     }
     total += identityExact;
@@ -854,8 +893,24 @@ function score(
       // stay untouched (per-language gate precedent, Phase 88).
       const isTsField =
         symbol.kind === 'property' && /\.(ts|tsx)$/i.test(symbol.filePath);
-      if (wordOverlap > 0 && dotIdx > 0 && (isVueMember || isTsField)) {
-        const memberParts = new Set(splitNameParts(symbol.name.slice(dotIdx + 1)));
+      // Phase 105 (Task 654, SparkleShare-iOS replay): Objective-C members
+      // are stored class-qualified too — `SSFile.content` (property) and
+      // `SSFile:loadContent` / `SSRootFolder:initWithConnection:` (method) —
+      // and ObjC headers carry no doc text, so the class row has nothing but
+      // its own name parts while every member has those AND its selector
+      // words; 11/25 queries put a member above the asked-for class. Same
+      // qualifier-half damp. Methods are gated on the ObjC handler's own
+      // `isClassMethod` meta (C/C++ `Class::method` rows in .h files never
+      // carry it); properties on .h/.m/.mm — the C/C++ handlers emit no
+      // 'property' kind. The member segment is the selector after the first
+      // ':' (instance) or '::' (class method).
+      const isObjcFile = /\.(h|m|mm)$/i.test(symbol.filePath);
+      const isObjcMethod = symbol.kind === 'method' && !!fm && fm['isClassMethod'] !== undefined;
+      const objcColonIdx = isObjcMethod ? symbol.name.indexOf(':') : -1;
+      const isObjcMember = (isObjcFile && symbol.kind === 'property' && dotIdx > 0) || objcColonIdx > 0;
+      const memberSepIdx = isObjcMember && objcColonIdx > 0 ? objcColonIdx : dotIdx;
+      if (wordOverlap > 0 && memberSepIdx > 0 && (isVueMember || isTsField || isObjcMember)) {
+        const memberParts = new Set(splitNameParts(symbol.name.slice(memberSepIdx + 1).replace(/^:+/, '')));
         for (const p of [...memberParts]) addStemsOf(p, memberParts);
         for (const w of queryWords) {
           if (!memberParts.has(w) && namePartsSet.has(w)) wordOverlap -= 5;
@@ -1048,6 +1103,20 @@ function score(
     if (symbol.kind === 'struct') kindHintBoost = 35;
   } else if (queryWords.includes('enum')) {
     if (symbol.kind === 'enum') kindHintBoost = 35;
+  } else if (
+    // Phase 105 (Task 654, vapor replay): "protocol …" (Swift / ObjC) and
+    // "trait …" (Scala / Rust) announce kind 'interface' exactly the way
+    // "class …" announces a class — 13/25 vapor queries and 7/25 zio queries
+    // open with the word, and the asked-for protocol sat at rank 2–14 behind
+    // a same-named struct or extension. Strict to 'interface' (no loose
+    // class/struct side, unlike "interface"), no negative side, gated to the
+    // file types whose handlers store protocol/trait as 'interface' — an
+    // Erlang "protocol version" query or a tRPC "WebSocket protocol" query
+    // (P5 audit) never sees it.
+    (queryWords.includes('protocol') && /\.(swift|m|mm|h)$/i.test(symbol.filePath)) ||
+    (queryWords.includes('trait') && /\.(scala|rs)$/i.test(symbol.filePath))
+  ) {
+    if (symbol.kind === 'interface') kindHintBoost = 35;
   }
 
   // ── Hook / composable kind hints (Phase 92, Task 572a) ─────────────────────
@@ -1328,6 +1397,12 @@ function score(
  *   filter  — the universal collection verb (JS/Java streams/SQL/Python)
  * Rejected (single-query evidence): nuxt, trigger, route, calculate.
  */
+/**
+ * Symbol kinds the Phase-105 Scala one-word identity damp applies to — members
+ * and functions, never type definitions (see the identityExact block).
+ */
+const SCALA_MEMBER_KINDS: ReadonlySet<string> = new Set(['function', 'method', 'const', 'property']);
+
 const GENERIC_METHOD_NAMES: ReadonlySet<string> = new Set([
   'run', 'execute', 'call', 'invoke', 'apply', 'main', 'start', 'stop',
   'init', 'close', 'open', 'get', 'set', 'add', 'remove', 'create', 'delete',

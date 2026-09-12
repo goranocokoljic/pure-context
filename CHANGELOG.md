@@ -11,6 +11,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.38.0] - 2026-09-12 — Phase 105: Search-Quality Sweep 3 (the repos PureContext did not win)
+
+The 16-row "non-win" table in the plan was rebuilt from the stored result
+files first (Task 652 — `benchmarks/harness/phase105_losers.mjs`): eight of
+its rows were already wins, two were stale 1.4.0-era losses that a fresh
+1.37.0 baseline turned into wins (terragrunt 0.08 → 0.80, mojo 0.20 → 0.24),
+and airodump had quietly regressed (0.20 → 0.12) since its 1.2.0 row. Every
+replay of what remained showed ONE failure shape: the ground-truth queries
+are ~16-word descriptions, and a one-word symbol named by a single context
+word of the query (`Commit`, `Campaign`, `packet`, `extension Middleware`)
+took the full +60 identity and beat the compound-named target. The fix is
+the existing data-definition identity scaling (40/N, min 10) extended per
+language through handler metadata, kinds and file extensions — no global
+weight moved (rule P3).
+
+### Fixed
+
+- **Scala companion objects overwrote their classes** (Task 653). `object
+  Foo` and `class Foo` shared `SHA-256(file:Foo:class)`, and `INSERT OR
+  REPLACE` kept only the object — zio lost `Fiber`, `ZLayer`, `Ref`,
+  `Promise`, `Chunk`, `Hub` and every scaladoc on them (10,560 → 13,217
+  symbols after the fix). The object's id is now seeded with the JVM module
+  name `Foo$`; the symbol name stays `Foo`.
+- **Scala class/trait-level `val`/`var` (and abstract declarations) are
+  indexed** as kind `property` (they were skipped; dotty-bot's
+  `val prService = HttpService {…}` was unreachable).
+
+### Changed — ranking (each lever gated; `test/core/phase105-ranking.test.ts`)
+
+- Scala `case class` / `object` rows (`frameworkMeta.scala_case_class` /
+  `scala_object`) get the data-definition identity scaling.
+- Scala one-word members and functions (`commit`, `post`, `take`, `empty`,
+  `service`, `log`) get identity ÷3 on ≥8-word queries — `.scala` files,
+  kinds function/method/const/property only; a one-word TYPE named by the
+  query keeps its identity (`Queue`, `Scope`, `Cached` are the targets).
+- Swift `extension Foo` rows (`swift_extension`) get the data-definition
+  scaling; the `protocol Foo` row already had it and was being outranked
+  by its own extensions on 6/25 vapor queries.
+- **`protocol …` / `trait …` kind hint**: +35 for kind `interface` only, no
+  negative side — Swift/ObjC files for "protocol", Scala/Rust for "trait".
+  The P5 audit found 66 ground-truth queries opening with the word; the
+  Erlang and tRPC uses ("protocol version", "WebSocket protocol") never see
+  it because of the extension gate.
+- Objective-C class-qualified members (`SSFile.content`, `SSFile:loadContent`)
+  get the Phase-94 qualifier-half wordOverlap damp (methods gated on the
+  ObjC handler's `isClassMethod` meta, so C/C++ `Class::method` rows in
+  `.h` files are untouched).
+- Go structs are tagged `frameworkMeta.go_struct` and get the
+  data-definition scaling (all 25 listmonk targets are methods; `Campaign`
+  / `Subscriber` / `User` held rank 1 on 11 of them). Go repos need a
+  re-index to carry the tag.
+- Kinds `struct` and `macro` (emitted by the C/C++ handlers only) join the
+  data-definition set.
+
+### Results (P@1 / P@3 / R@5; fresh 1.37.0 baseline → 1.38.0; JC)
+
+| repo | before | after | JC | |
+|---|---|---|---|---|
+| dotty-bot | 0.16 / 0.44 / 0.56 | 0.52 / 0.64 / 0.68 | 0.36 / 0.52 / 0.76 | won |
+| listmonk | 0.04 / 0.40 / 0.52 | 0.24 / 0.48 / 0.64 | 0.20 / 0.40 / 0.48 | won — the Phase-84/88/95 saga closes |
+| SparkleShare-iOS | 0.12 / 0.28 / 0.36 | 0.28 / 0.40 / 0.44 | 0.16 / 0.20 / 0.28 | won |
+| neovim | 0.28 / 0.76 / 0.84 | 0.44 / 0.76 / 0.84 | 0.32 / 0.44 / 0.48 | won (C struct/macro side effect) |
+| vapor | 0.28 / 0.40 / 0.52 | 0.32 / 0.64 / 0.80 | 0.32 / 0.48 / 0.56 | P@1 tie, P@3/R@5 won |
+| zio | 0.04 / 0.16 / 0.24 | 0.12 / 0.36 / 0.48 | 0.24 / 0.28 / 0.28 | improved; P@1 residue is one-word class identity (`Fiber`) — needs a global rule, out of scope |
+| airodump | 0.12 / 0.28 / 0.40 | 0.16 / 0.36 / 0.44 | 0.24 / 0.36 / 0.48 | improved; residue is the C# example library under `lib/csharp/` |
+| jcodemunch, trpc | unchanged | unchanged | tie / tie | recorded gaps (pytest name packing; 11/25 tRPC targets outside the pool) |
+
+### Guard (Task 657)
+
+Non-win set + per-lever guard set + the Phase-95 and Phase-98 sets, all
+against fresh 1.37.0 baselines (`benchmarks/harness/phase105_diff.mjs`):
+no repo lost more than 4pp P@1; the one −4pp row (libs-base, `NSLock`
+behind the `NSLocking` protocol) is the P5-audit prediction and comes with
+P@3/R@5 doubling. Untouched languages are byte-identical. Side-effects on
+guard repos are all upward: vlc-ios 0.12 → 0.20, swift-composable-
+architecture 0.16 → 0.36, serde 0.20 → 0.27, swift-nio 0.04 → 0.08,
+mitsuba3 0.12 → 0.16. Generated scorecard (BENCHMARK-RESULTS §3, now a
+script output): **PC 65/79 P@1 wins** (was 60/79), 71/79 P@3, 68/79 R@5.
+
+### Tooling
+
+- `benchmarks/harness/phase105_losers.mjs` — rebuilds the non-win table from
+  the newest result file per repo (the stale-row class ends here).
+- `benchmarks/harness/phase105_sweep.ps1` — `-Set losers|guard105|guard95|guard98`,
+  `-Code <baseline tree>`, retries a run that returns 0 symbols.
+- `benchmarks/harness/phase105_gt_audit.py` — the P5 ground-truth word audit.
+
+### Removed
+
+- `test/core/oracles/test-mapper-legacy.ts` and its parity test — the Phase-104
+  oracle, kept for one release as planned.
+
+---
+
 ## [1.37.0] - 2026-09-12 — Phase 104: Test-Mapper Redesign (incremental, one pass per test file, lazy)
 
 Reporter Issue D, carried since Phase 89 with `skipTestMapper` as the

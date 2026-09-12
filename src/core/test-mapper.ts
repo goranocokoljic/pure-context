@@ -4,8 +4,8 @@
  * incremental by construction, one tokenizing pass per test file, lazy
  * fallback for indexes built with `skipTestMapper`.
  *
- * Matching semantics are UNCHANGED from the pre-1.37 mapper (the legacy
- * oracle in test/core/oracles/): a production symbol is "tested" when some
+ * Matching semantics are UNCHANGED from the pre-1.37 mapper (kept as an
+ * oracle for one release, deleted in 1.38): a production symbol is "tested" when some
  * test file contains its name with a word boundary on both sides
  * (`\bNAME\b`, ASCII word chars). Names shorter than 3 chars are never
  * matched; types / interfaces / enums are 'unknown' (structural, not

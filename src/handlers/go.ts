@@ -251,6 +251,13 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
       if (typeBody?.type === 'struct_type') kind = 'class';
       else if (typeBody?.type === 'interface_type') kind = 'interface';
 
+      // Phase 105 (Task 655): tag structs so the ranker can treat them as
+      // data definitions (identity scaling — listmonk `Campaign`/`Subscriber`
+      // /`User` took the full +60 from one query word on 11/25 queries).
+      const typeMeta: Record<string, unknown> = {
+        ...(visibilityMeta(name) ?? {}),
+        ...(kind === 'class' ? { go_struct: true } : {}),
+      };
       symbols.push({
         id: makeId(filePath, name, kind),
         name,
@@ -260,7 +267,7 @@ function extractSymbols(tree: Tree, source: Buffer, filePath: string): SymbolRec
         endByte: node.endIndex,
         signature: buildTypeSignature(node, source),
         summary: extractDocstring(node) ?? '',
-        ...(visibilityMeta(name) ? { frameworkMeta: visibilityMeta(name) } : {}),
+        ...(Object.keys(typeMeta).length > 0 ? { frameworkMeta: typeMeta } : {}),
       });
 
       // Extract individual method specs from interface bodies

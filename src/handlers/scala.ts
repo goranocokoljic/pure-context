@@ -185,6 +185,9 @@ const TOP_LEVEL_DEF_TYPES = new Set([
   'function_definition',
   'function_declaration',
   'val_definition',
+  'var_definition',
+  'val_declaration',
+  'var_declaration',
   'type_definition',
   'enum_definition',
   'given_definition',
@@ -271,8 +274,13 @@ function walkNodes(
         const name = getName(node);
         if (!name) continue;
         const caseObj = isCaseNode(node);
+        // Phase 105 (Task 653): a companion `object Foo` used to share the id
+        // of `class Foo` (same file:name:kind) and INSERT OR REPLACE kept only
+        // the object — zio lost `Fiber`, `ZLayer`, `Ref`, `Promise`, `Chunk`
+        // and their scaladoc. Seed the id with the JVM module-class name
+        // (`Foo$`) so both rows survive; the symbol name stays `Foo`.
         symbols.push({
-          id: makeId(filePath, name, 'class'),
+          id: makeId(filePath, `${name}$`, 'class'),
           name,
           kind: 'class',
           filePath,
@@ -313,21 +321,30 @@ function walkNodes(
         break;
       }
 
-      case 'val_definition': {
+      case 'val_definition':
+      case 'var_definition':
+      case 'val_declaration':
+      case 'var_declaration': {
         if (isPrivateUnqualified(node)) continue;
-        // Only top-level or object-level vals
+        // Top-level / object-level vals are consts; class- and trait-level
+        // vals/vars are members (kind 'property', Phase 105 Task 653 — they
+        // were skipped before, so dotty-bot's `val prService = HttpService {…}`
+        // was unreachable by any query).
         const enclosing = getEnclosingKind(node);
-        if (enclosing === 'class_definition' || enclosing === 'trait_definition') continue;
+        const isMember = enclosing === 'class_definition' || enclosing === 'trait_definition';
         const patternNode = node.childForFieldName?.('pattern') ??
+          node.childForFieldName?.('name') ??
           node.children.find((c) => c.isNamed && c.type !== 'modifiers');
         const name = patternNode?.text ?? '';
         if (!name) continue;
+        const kw = node.type.startsWith('var') ? 'var' : 'val';
         const typeNode = node.childForFieldName?.('type');
-        const sig = typeNode ? `val ${name}: ${typeNode.text}` : `val ${name}`;
+        const sig = typeNode ? `${kw} ${name}: ${typeNode.text}` : `${kw} ${name}`;
+        const kind: SymbolKind = isMember ? 'property' : 'const';
         symbols.push({
-          id: makeId(filePath, name, 'const'),
+          id: makeId(filePath, name, kind),
           name,
-          kind: 'const',
+          kind,
           filePath,
           startByte: node.startIndex,
           endByte: node.endIndex,

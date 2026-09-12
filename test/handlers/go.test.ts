@@ -122,10 +122,26 @@ describe('Go handler — extractSymbols', () => {
     const src = `package main\ntype Exported struct {}\ntype unexported struct {}\n`;
     const { tree, buf } = await parse(src);
     const syms = goHandler.extractSymbols(tree, buf, 'a.go');
-    expect(syms.find((s) => s.name === 'Exported')?.frameworkMeta).toBeUndefined();
+    // Phase 105: structs carry go_struct (ranker data-definition gate); an
+    // exported struct has no visibility key.
+    expect(syms.find((s) => s.name === 'Exported')?.frameworkMeta).toEqual({ go_struct: true });
     expect(syms.find((s) => s.name === 'unexported')?.frameworkMeta).toMatchObject({
       visibility: 'unexported',
+      go_struct: true,
     });
+  });
+
+  it('tags structs with go_struct but not interfaces or aliases (Phase 105)', async () => {
+    const src = `package main
+type S struct {}
+type I interface {}
+type A = string
+`;
+    const { tree, buf } = await parse(src);
+    const syms = goHandler.extractSymbols(tree, buf, 'a.go');
+    expect(syms.find((s) => s.name === 'S')?.frameworkMeta).toEqual({ go_struct: true });
+    expect(syms.find((s) => s.name === 'I')?.frameworkMeta).toBeUndefined();
+    expect(syms.find((s) => s.name === 'A')?.frameworkMeta).toBeUndefined();
   });
 
   it('extracts a single exported const', async () => {

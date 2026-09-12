@@ -1208,7 +1208,10 @@ describe('rankSymbols — kind-hint boost', () => {
 
 describe('rankSymbols — identityExact boost', () => {
   it('identityExact fires +60 when a query word exactly matches the symbol name', () => {
-    const s = sym('Builder', { kind: 'struct' });
+    // Phase 105 (Task 655): 'struct' joined the data-definition kinds (40/N
+    // scaling), so the full-identity example is a class now; the ordering
+    // tests below (struct Builder above method build) are unchanged.
+    const s = sym('Builder', { kind: 'class' });
     const results = rankSymbols([s], 'builder struct', true);
     expect(results[0].debugScore?.identityExact).toBe(60);
   });
@@ -1267,7 +1270,7 @@ describe('rankSymbols — identityExact boost', () => {
   it('identityExact fires when query is longer but contains the exact name as a token', () => {
     // query "find Builder implementation" → queryWords includes "builder"
     // symbol "Builder" → nameLower = "builder" matches
-    const s = sym('Builder', { kind: 'struct' });
+    const s = sym('Builder', { kind: 'class' });
     const results = rankSymbols([s], 'find Builder implementation', true);
     expect(results[0].debugScore?.identityExact).toBe(60);
   });
