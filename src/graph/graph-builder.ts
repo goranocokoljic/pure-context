@@ -12,6 +12,7 @@ import { FORTRAN_FAMILY_EXTENSIONS, type FortranResolver } from './fortran-resol
 import { RUST_FAMILY_EXTENSIONS, type RustResolver } from './rust-resolver.js';
 import { DART_FAMILY_EXTENSIONS, type DartResolver } from './dart-resolver.js';
 import { RUBY_FAMILY_EXTENSIONS, type RubyResolver } from './ruby-resolver.js';
+import { SWIFT_FAMILY_EXTENSIONS, type SwiftResolver } from './swift-resolver.js';
 import { resolvePrefilledTarget, type IndexedFileSet } from './prefilled-targets.js';
 import { isJsFamilyFile, type WorkspacePackageResolver } from './workspace-packages.js';
 import type { RefIndexView } from './symbol-edges.js';
@@ -84,6 +85,7 @@ export interface FamilyResolvers {
   rust?: RustResolver;
   dart?: DartResolver;
   ruby?: RubyResolver;
+  swift?: SwiftResolver;
 }
 
 type FamilyResolveFn = (rec: ImportRecord) => string[];
@@ -141,6 +143,9 @@ function buildDispatch(families: FamilyResolvers): Map<string, FamilyResolveFn> 
     add(RUBY_FAMILY_EXTENSIONS, (r) =>
       families.ruby!.resolve(r.specifier, r.sourceFile, r.importedNames),
     );
+  }
+  if (families.swift) {
+    add(SWIFT_FAMILY_EXTENSIONS, (r) => families.swift!.resolve(r.specifier, r.sourceFile));
   }
   return byExt;
 }

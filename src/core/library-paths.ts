@@ -50,6 +50,7 @@ export const FOREIGN_PATH_SEGMENTS: ReadonlySet<string> = new Set([
   'third_party',
   'deps',
   '_build',
+  '.build',
   '.venv',
   'venv',
   'site-packages',

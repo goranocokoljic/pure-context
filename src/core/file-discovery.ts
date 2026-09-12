@@ -33,6 +33,8 @@ const BUILT_IN_EXCLUDES = [
   'Pods',
   '_build',
   '__pycache__',
+  // Phase 103 (Task 642): SwiftPM build output + dependency checkouts.
+  '.build',
 ];
 
 /** Higher number = higher priority (indexed first). */

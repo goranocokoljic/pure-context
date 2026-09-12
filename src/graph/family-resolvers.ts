@@ -22,6 +22,7 @@ import { createFortranResolver, isFortranSourceFile } from './fortran-resolver.j
 import { createRustResolver, isRustSourceFile } from './rust-resolver.js';
 import { createDartResolver, isDartSourceFile } from './dart-resolver.js';
 import { createRubyResolver, isRubySourceFile } from './ruby-resolver.js';
+import { createSwiftResolver, isSwiftSourceFile } from './swift-resolver.js';
 
 interface FamilyDef {
   key: keyof FamilyResolvers;
@@ -45,6 +46,7 @@ const FAMILY_DEFS: FamilyDef[] = [
   { key: 'rust', isFile: isRustSourceFile, build: (db, id, root) => createRustResolver(db, id, root) },
   { key: 'dart', isFile: isDartSourceFile, build: (db, id, root) => createDartResolver(db, id, root) },
   { key: 'ruby', isFile: isRubySourceFile, build: (db, id, root) => createRubyResolver(db, id, root) },
+  { key: 'swift', isFile: isSwiftSourceFile, build: (db, id, root) => createSwiftResolver(db, id, root) },
 ];
 
 export function buildFamilyResolvers(
