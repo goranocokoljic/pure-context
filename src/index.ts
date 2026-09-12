@@ -134,6 +134,22 @@ async function bootstrap(): Promise<void> {
   await initParser();
 }
 
+// ─── Exit helper ──────────────────────────────────────────────────────────────
+
+/**
+ * process.exit() does not wait for piped stdout/stderr to drain — on macOS
+ * and Linux a pipe write is async, so any output past the first 8 KB is lost
+ * (e.g. `purecontext-mcp config | jq` truncated at byte 8192). Drain both
+ * streams first, then exit. Never resolves.
+ */
+function flushAndExit(code: number): Promise<never> {
+  return new Promise(() => {
+    process.stdout.write('', () => {
+      process.stderr.write('', () => process.exit(code));
+    });
+  });
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -142,17 +158,17 @@ async function main(): Promise<void> {
   // ── Version / help / health flags (before bootstrap) ────────────────────
   if (args.includes('--version') || args.includes('-v')) {
     process.stdout.write(`${NAME} v${VERSION}\n`);
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   if (args.includes('--help') || args.includes('-h')) {
     printHelp();
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   if (args.includes('--health')) {
     const ok = cmdHealth();
-    process.exit(ok ? 0 : 1);
+    await flushAndExit(ok ? 0 : 1);
   }
 
   // ── keys sub-command ─────────────────────────────────────────────────────
@@ -208,7 +224,7 @@ async function main(): Promise<void> {
   // ── install sub-command ───────────────────────────────────────────────────
   if (args[0] === 'install') {
     await runInstallCommand(args.slice(1));
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── config sub-command ────────────────────────────────────────────────────
@@ -217,95 +233,95 @@ async function main(): Promise<void> {
 
     if (flag === '--init') {
       await cmdInit();
-      process.exit(0);
+      await flushAndExit(0);
     }
 
     if (flag === '--check') {
       // --check needs grammars path, which requires bootstrap
       await bootstrap();
       const ok = await cmdCheck();
-      process.exit(ok ? 0 : 1);
+      await flushAndExit(ok ? 0 : 1);
     }
 
     // Default: show effective config (no bootstrap needed)
     cmdShow();
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── export sub-command ────────────────────────────────────────────────────
   if (args[0] === 'export') {
     await bootstrap();
     await cmdExport(args.slice(1));
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── import sub-command ────────────────────────────────────────────────────
   if (args[0] === 'import') {
     await bootstrap();
     await cmdImport(args.slice(1));
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── fetch sub-command (download from public registry) ─────────────────────
   if (args[0] === 'fetch') {
     await bootstrap();
     await cmdFetch(args.slice(1));
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── list-public sub-command ───────────────────────────────────────────────
   if (args[0] === 'list-public') {
     await cmdListPublic();
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── index-folder sub-command (CI / GitHub Actions) ────────────────────────
   if (args[0] === 'index-folder') {
     await bootstrap();
     await cmdIndexFolder(args.slice(1));
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── index-file sub-command (PostToolUse hook: cheap targeted re-index) ─────
   if (args[0] === 'index-file') {
     await bootstrap();
     await cmdIndexFile(args.slice(1));
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── index-changed sub-command (git hooks / onlyChanged — Phase 97) ────────
   if (args[0] === 'index-changed') {
     await bootstrap();
     await cmdIndexChanged(args.slice(1));
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── git-hook runner (post-checkout / post-merge / post-rewrite shims) ─────
   if (args[0] === 'git-hook') {
     await initSqliteBackend();
     cmdGitHook(args.slice(1));
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── analyze-diff sub-command (CI / GitHub Actions) ───────────────────────
   if (args[0] === 'analyze-diff') {
     await bootstrap();
     await cmdAnalyzeDiff(args.slice(1));
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── detect-antipatterns sub-command (CI / GitHub Actions) ─────────────────
   if (args[0] === 'detect-antipatterns') {
     await bootstrap();
     await cmdDetectAntipatterns(args.slice(1));
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── index gc sub-command (Phase 100) ──────────────────────────────────────
   if ((args[0] === 'index' && args[1] === 'gc') || args[0] === 'gc') {
     await initSqliteBackend();
     const code = cmdIndexGc(args.slice(args[0] === 'gc' ? 1 : 2));
-    process.exit(code);
+    await flushAndExit(code);
   }
 
   // ── delete-index sub-command ──────────────────────────────────────────────
@@ -318,12 +334,12 @@ async function main(): Promise<void> {
     if (!result) {
       process.stderr.write(`No index found for: ${targetPath}\n`);
       process.stderr.write(`(repoId: ${repoId})\n`);
-      process.exit(1);
+      return flushAndExit(1);
     }
     process.stdout.write(`Deleted index for: ${result.repoPath}\n`);
     process.stdout.write(`  Symbols removed: ${result.symbolsDeleted}\n`);
     process.stdout.write(`  Files removed:   ${result.filesDeleted}\n`);
-    process.exit(0);
+    await flushAndExit(0);
   }
 
   // ── Parse server flags ────────────────────────────────────────────────────
@@ -345,7 +361,7 @@ async function main(): Promise<void> {
   if (remainingArgs.length > 0) {
     process.stderr.write(`Unknown command: ${remainingArgs[0]}\n`);
     process.stderr.write(`Run 'purecontext-mcp --help' for usage.\n`);
-    process.exit(1);
+    await flushAndExit(1);
   }
 
   // ── Resolve flags ─────────────────────────────────────────────────────────
@@ -394,7 +410,7 @@ async function main(): Promise<void> {
     });
   } catch (err) {
     printFatalError(err);
-    process.exit(1);
+    await flushAndExit(1);
   }
 }
 
