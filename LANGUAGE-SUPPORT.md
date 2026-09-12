@@ -16,15 +16,15 @@ This page is the user-facing tour: what's supported, what gets pulled out, and w
 | JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | functions, classes, methods, exported consts |
 | Python | `.py` | functions, classes, methods, module-level consts — docstrings used as summaries; dependency edges since v1.17.0 |
 | PHP | `.php` | functions, classes, interfaces, traits, enums, methods, properties, constants — PHP 8 attributes supported |
-| Ruby | `.rb` | functions, classes, methods, modules, constants |
+| Ruby | `.rb` | functions, classes, methods, modules, constants; dependency edges since v1.36.0 |
 | Go | `.go` | functions, methods (bare names, no receiver prefix), structs, interfaces, consts, types — unexported names indexed with visibility metadata since v1.17.0; dependency edges via `go.mod` since v1.17.0 |
 | Java | `.java` | classes, interfaces, enums, methods, constructors, fields, inner classes — everything except `private` since v1.31.0; package-private and `protected` declarations carry `frameworkMeta.visibility` |
 | Kotlin | `.kt`, `.kts` | functions, extension functions, classes, interfaces, objects, enums, typealiases — KDoc summaries |
 | C# | `.cs` | classes, interfaces, enums, structs, records, methods, properties, consts — `internal` and modifier-less types included with visibility metadata |
 | Scala | `.scala`, `.sc` | classes, traits, objects, case classes, functions, methods, types, enums — `protected` and `private[pkg]` included since v1.31.0 with `frameworkMeta.visibility`; only unqualified `private` is skipped |
 | Dart | `.dart` | classes, mixins, extensions, enums, functions, methods — `_`-prefixed (library-private) names included since v1.31.0 with `frameworkMeta.visibility: 'library'`; `package:` imports resolve to edges via `pubspec.yaml` |
-| Swift | `.swift` | classes, structs, protocols, actors, extensions, methods, enums — `private`/`fileprivate` TYPES and EXTENSIONS (and their members) included since v1.31.0 with `frameworkMeta.visibility: 'file'`; private members stay skipped |
-| Elixir | `.ex`, `.exs` | modules, functions, macros, structs, protocols |
+| Swift | `.swift` | classes, structs, protocols, actors, extensions, methods, enums — `private`/`fileprivate` TYPES and EXTENSIONS (and their members) included since v1.31.0 with `frameworkMeta.visibility: 'file'`; private members stay skipped; cross-target dependency edges since v1.36.0 |
+| Elixir | `.ex`, `.exs` | modules, functions, macros, structs, protocols; `defp`/`defmacrop` since v1.36.0 (`frameworkMeta.visibility: 'private'`) |
 | Haskell | `.hs`, `.lhs` | functions, data types, typeclasses, instances, type aliases, newtypes |
 | Lua | `.lua` | functions, methods, consts |
 | R | `.r`, `.R`, `.Rmd` | functions, consts, S3/S4/R6 classes — Roxygen2 doc comments |
@@ -38,7 +38,7 @@ This page is the user-facing tour: what's supported, what gets pulled out, and w
 | Language | Extensions | What you get |
 |----------|-----------|-------------|
 | C | `.c`, `.h` | functions, structs, enums, macros, types — `static` functions skipped (translation-unit internal) |
-| C++ | `.cpp`, `.cxx`, `.cc`, `.hpp`, `.hxx`, `.hh` | All C kinds plus namespaces, templates, template classes with export macros; anonymous-namespace members since v1.31.0 (`frameworkMeta.visibility: 'file'`) |
+| C++ | `.cpp`, `.cxx`, `.cc`, `.hpp`, `.hxx`, `.hh` | All C kinds plus namespaces, templates, template classes with export macros; anonymous-namespace members since v1.31.0 (`frameworkMeta.visibility: 'file'`); `private:` and label-less class members since v1.36.0 (`'private'`) |
 | Rust | `.rs` | functions, methods (bare names), structs, enums, traits, consts, types — everything indexed since v1.20.0; non-`pub` items carry `frameworkMeta.visibility` (`crate` for `pub(crate)`/`pub(super)`/`pub(in …)`, `module` for no modifier) |
 | Fortran | `.f90`, `.f95`, `.for`, `.f` | functions, subroutines, modules |
 | Objective-C | `.m`, `.h` | functions, classes, methods |
@@ -112,8 +112,10 @@ Symbol extraction and search work for all 34 languages. **Import / dependency ed
 | Module-symbol resolver (`USE module_name` → files declaring that MODULE, case-insensitive) | Fortran |
 | Mod-tree resolver (`use crate::a::b::Item` → module map derived from the `src/` file layout per Cargo crate; `self::`/`super::` relative to the source file's module; workspace crates by `Cargo.toml` name) | Rust |
 | `pubspec.yaml` resolver (`package:<name>/<path>` → that package's `lib/<path>`; nested packages in monorepos) | Dart (v1.31.0) |
+| Load-path + Zeitwerk resolver (`require 'a/b'` → `<root>/a/b.rb` for discovered load-path roots; `require_relative` → importer-relative; class-body constant references — superclass, `include`/`extend`/`prepend`, ActiveRecord associations — → `<root>/<underscored path>.rb` replayed through the lexical nesting, symbol-table fallback when unique) | Ruby (v1.36.0) |
+| SwiftPM target resolver (`Package.swift` targets → directories; `import X` → every indexed file of target X, the Go package rule; `Sources/<X>` / `Tests/<X>` stand in without a manifest) | Swift (v1.36.0) |
 | Imports are literal file paths, VALIDATED against the index since v1.31.0 (sibling / include-root / suffix / stylesheet-partial / Lua module / Terraform directory probes; a target that names no indexed file is dropped, never stored as a dangling edge) | C, C++, Objective-C, Lua, SCSS/LESS/CSS, Terraform/HCL, Protobuf, Nix, Perl, XML, Bash, R, Gleam |
-| **Not yet resolved — symbols only, no dependency edges** | Ruby and the long tail without a clear module→file rule (GDScript, …) |
+| **Not yet resolved — symbols only, no dependency edges** | Protobuf `import` chains beyond the literal path, SQL/dbt `ref()`, GDScript, Gleam beyond literal paths, Lua beyond the module forms, R beyond `source()` |
 
 Every resolver above also runs **across linked indexes** since v1.32.0: when a local lookup finds nothing, the same family resolver is asked over each linked index's files in turn (declared JVM packages, Python source roots of THAT root, `go.mod` modules, …), and TypeScript/JavaScript relative paths that leave the root are matched against the linked root's files. Indexes link automatically when their roots are disjoint directories of one git checkout; see [Index boundaries](AGENT_REFERENCE.md) for what still stays per index.
 
@@ -130,6 +132,10 @@ Python notes (v1.17.0, hygiene v1.31.0): module identity is the file path, so no
 Go notes (v1.17.0): resolution parses every `go.mod` above an indexed `.go` file (`module` directive → directory; nested modules / workspaces supported, longest prefix wins). An import path resolves to **every** indexed `.go` file of the target package directory — that's the true Go package semantic, not over-approximation. `_test.go` files are included; stdlib and third-party imports produce no edge; edges are never emitted into `vendor/`. Build tags and cgo are ignored. Re-index a repo indexed before v1.17.0 to build the edges.
 
 Rust notes (v1.20.0): the module map is derived from the file layout under each crate's `src/` (`src/a/b.rs` and `src/a/b/mod.rs` both answer to `a::b`; both 2015 and 2018 layouts work) — `#[path]` overrides and `build.rs`-generated modules are not followed (v1 limitation; layout and `mod` declarations agree in almost all real code). Crate boundaries come from the nearest ancestor `Cargo.toml`; crate names (`[package] name`, dash→underscore) let same-workspace crates resolve by name. `crate::`/`self::`/`super::` resolve against the source file's own module position; grouped uses are flattened (one edge target per leaf); globs (`use x::*`) expand to the module subtree, capped by `graph.maxWildcardFanout`; leaf items check the symbol table scoped to the resolved module's files, falling back to the module file itself (inline `mod` blocks, macro-generated items). `std` and crates.io imports produce no edge. A repo with no `Cargo.toml` still resolves a plain root `src/` layout. Re-index a repo indexed before v1.20.0 to build the edges.
+
+Ruby notes (v1.36.0): `$LOAD_PATH` is assembled at runtime, so load-path roots are DISCOVERED — by convention (the repo root, every `lib/`, every `app/<x>/` and `app/<x>/concerns/`) and by evidence (a directory A is a root when a Ruby file below it does `require 'x/y'` and `A/x/y.rb` is indexed; this is how Homebrew's `Library/Homebrew/` earns its edges). `require 'a/b'` resolves to `<root>/a/b.rb`; stdlib and default-gem names are reserved (`graph.reservedRubyModules`, `[]` to disable) so `active_support/json.rb` can never capture `require "json"`; `require_relative` resolves against the importer's directory; dynamic arguments make no record. Zeitwerk constant references are taken at CLASS-BODY level only (superclass, `include`/`extend`/`prepend`, `belongs_to`/`has_one`/`has_many`/`has_and_belongs_to_many` with `class_name:` honoured and `polymorphic: true` skipped) — never from method bodies — and resolved the way Ruby looks constants up: innermost lexical scope first (`A::B::C`, then `A::C`, then `C`), as a path (`admin/user.rb` under every root, ActiveSupport `underscore` per segment) and then as a symbol-table match that must be unique over the whole index with every segment declared in the one file. A constant the importer declares itself, a name declared in several files, core constants (`StandardError`, `Enumerable`) and gem constants (`ActiveRecord::Base` in an app) make no edge. Production files never resolve into `spec/` or `test/`. Re-index a repo indexed before v1.36.0 to build the edges.
+
+Swift notes (v1.36.0): every `Package.swift` in the index is parsed for its target declarations (`.target` / `.executableTarget` / `.macro` / `.testTarget` / `.plugin` / `.systemLibrary`, `path:` or the `Sources/<name>` / `Tests/<name>` / `Plugins/<name>` default; `.binaryTarget` has no sources; a `.target(name:)` nested in another target's `dependencies:` is a reference, not a declaration). `import X` (and `@testable import X`, `import struct X.Y`) resolves to **every** indexed file of target X — the module IS the directory, the same package semantic Go uses, so a large module means a large fan-out (swift-composable-architecture: 546 importers × 536 files). When nested packages declare the same module name, the importer's own package wins. Without a manifest, `Sources/<X>/` and `Tests/<X>/` directories stand in (Xcode projects with the SPM layout). `Foundation`, `UIKit` and dependency packages produce no edge; `.build/` is excluded from indexing. Production files never resolve into a test target. Re-index a repo indexed before v1.36.0 to build the edges.
 
 Resolver hygiene (v1.31.0, gap-analysis follow-up): every family resolver applies two rules — a first-party importer never resolves INTO a foreign directory (`node_modules/`, `vendor/`, `third_party/`, `deps/`, `_build/`, `.venv/`, `site-packages/`, `Pods/`, `testdata/`; an importer that itself lives there keeps resolving its siblings, which is how rabbitmq-server lays out its components), and a non-test importer never resolves to a test file. Language specifics: Haskell never registers a one-segment path suffix (`**/Types.hs` used to answer `import Types` repo-wide); PHP ignores `composer.json` files under `vendor/` and serves `autoload-dev` PSR-4 entries to test-file importers only; Erlang prefers the header sharing the most leading directories with the importer; Fortran treats intrinsic modules (`iso_fortran_env`, `iso_c_binding`, `ieee_*`, `omp_lib`, `mpi`, …) as external; Go includes a package's `_test.go` files only for same-directory importers.
 
@@ -152,7 +158,7 @@ It also respects language-level visibility:
 - **Go**: nothing skipped since v1.17.0 — unexported names (lowercase first letter) ARE indexed with `frameworkMeta.visibility: 'unexported'` recorded, because they are package-visible and the package sits inside the indexed unit
 - **Rust**: nothing skipped since v1.20.0 — Rust has no true `private` keyword, so everything is indexed: `pub` items carry no metadata, `pub(crate)`/`pub(super)`/`pub(in …)` record `frameworkMeta.visibility: 'crate'`, and no-modifier items (module-private, but visible to child modules and the same file) record `'module'`
 - **C**: `static` functions (translation-unit internal)
-- **C++**: label-less (default-private) class members; anonymous `namespace { }` members ARE indexed since v1.31.0 with `frameworkMeta.visibility: 'file'`
+- **C++**: nothing skipped since v1.36.0 — members under `private:` and label-less members of a `class` (private by default; `struct` members stay public) are indexed with `frameworkMeta.visibility: 'private'`; anonymous `namespace { }` members since v1.31.0 with `'file'`
 - **Java**: only `private` since v1.31.0 — package-private types (previously dropped WITH all their members), constructors, fields and methods, and `protected` declarations are indexed with `frameworkMeta.visibility: 'package'` / `'protected'`
 - **Scala**: only unqualified `private` since v1.31.0 — `protected` (`'protected'`) and `private[pkg]` (`'package'`) are indexed with metadata
 - **PHP**: `private` members
@@ -160,13 +166,15 @@ It also respects language-level visibility:
 - **Dart**: nothing skipped since v1.31.0 — `_`-prefixed names are library-private (visible to every file of the library, and the core Flutter idiom `_MyHomePageState`) and are indexed with `frameworkMeta.visibility: 'library'`
 - **Swift**: `private`/`fileprivate` MEMBERS; a private/fileprivate TYPE or EXTENSION (and everything inside it) IS indexed since v1.31.0 with `frameworkMeta.visibility: 'file'`
 
-Public API tools (`get_public_api`) rely on these rules being applied consistently — they assume the index already reflects what is externally visible. The ranker applies a mild −20 to `visibility` values `unexported`, `module`, `package`, `file` and `library` (findable, but not first on a natural-language query); `protected`, `internal` and `crate` are unpenalized API surface.
+- **Elixir**: nothing skipped since v1.36.0 — `defp` / `defmacrop` are indexed with `frameworkMeta.visibility: 'private'`
+
+Public API tools (`get_public_api`) rely on these rules being applied consistently — they assume the index already reflects what is externally visible. The ranker applies a mild −20 to `visibility` values `unexported`, `module`, `package`, `file`, `library` and `private` (findable, but not first on a natural-language query); `protected`, `internal` and `crate` are unpenalized API surface.
 
 ---
 
 ## Known limitations
 
-- **Import resolution is not universal** — Ruby (plus the long tail without a clear module→file rule) indexes symbols but produces **no dependency edges** today, so graph tools return empty results there. See [Which languages get dependency edges](#which-languages-get-dependency-edges) above.
+- **Import resolution is not universal** — a long tail without a clear module→file rule (Protobuf, SQL/dbt, GDScript, Gleam, Lua, R beyond literal paths) indexes symbols but produces few or **no dependency edges**, so graph tools return empty results there. See [Which languages get dependency edges](#which-languages-get-dependency-edges) above.
 - **TypeScript `.tsx`** uses a separate `tree-sitter-tsx` grammar from `.ts`. Both are bundled.
 - **Python stubs** (`.pyi`) are not indexed — only `.py` files.
 - **Terraform** `dynamic` blocks with complex expressions may not be fully extracted.

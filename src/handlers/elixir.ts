@@ -218,16 +218,22 @@ function processCall(
       break;
     }
 
-    // ── def (public function) ──────────────────────────────────────────────────
-    case 'def': {
+    // ── def (public function) / defp (private — Phase 103, Task 643) ─────────
+    // `defp` used to be skipped. A private function is still the thing an
+    // agent searches for inside its module (the Kotlin `internal` / Go
+    // unexported / Java package-private bug class: a false `no_match` becomes a
+    // confident wrong answer). Indexed with `visibility: 'private'`; the ranker
+    // applies its -20 "findable but not first" penalty.
+    case 'def':
+    case 'defp': {
       if (!argsNode) break;
       const fnName = getFunctionName(argsNode);
       if (!fnName) break;
       const qualName = modulePath ? `${modulePath}.${fnName}` : fnName;
       const spec = findSpec(node);
       const head = getFunctionHead(argsNode);
-      const signature = spec ? trunc(spec) : trunc(`def ${head}`);
-      symbols.push({
+      const signature = spec ? trunc(spec) : trunc(`${kw} ${head}`);
+      const sym: SymbolRecord = {
         id: makeId(filePath, qualName, 'function'),
         name: qualName,
         kind: 'function',
@@ -236,16 +242,15 @@ function processCall(
         endByte: node.endIndex,
         signature,
         summary: extractDocstring(node) ?? '',
-      });
+      };
+      if (kw === 'defp') sym.frameworkMeta = { visibility: 'private' };
+      symbols.push(sym);
       break;
     }
 
-    // ── defp (private function) — skip ────────────────────────────────────────
-    case 'defp':
-      break;
-
-    // ── defmacro ───────────────────────────────────────────────────────────────
-    case 'defmacro': {
+    // ── defmacro / defmacrop (private macro indexed since Phase 103) ─────────
+    case 'defmacro':
+    case 'defmacrop': {
       if (!argsNode) break;
       const fnName = getFunctionName(argsNode);
       if (!fnName) break;
@@ -258,16 +263,15 @@ function processCall(
         filePath,
         startByte: node.startIndex,
         endByte: node.endIndex,
-        signature: trunc(`defmacro ${head}`),
+        signature: trunc(`${kw} ${head}`),
         summary: extractDocstring(node) ?? '',
-        frameworkMeta: { elixir_macro: true },
+        frameworkMeta:
+          kw === 'defmacrop'
+            ? { elixir_macro: true, visibility: 'private' }
+            : { elixir_macro: true },
       });
       break;
     }
-
-    // ── defmacrop (private macro) — skip ──────────────────────────────────────
-    case 'defmacrop':
-      break;
 
     // ── defstruct ─────────────────────────────────────────────────────────────
     case 'defstruct': {

@@ -2063,6 +2063,16 @@ describe('rankSymbols — unexported visibility penalty', () => {
     expect(results[0]!.symbol.name).toBe('helperLookup');
   });
 
+  // Phase 103 (Task 643): Elixir defp / C++ private members ride the same penalty
+  it('applies -20 to symbols with visibility "private"', () => {
+    const defp: SymbolRecord = {
+      ...sym('MyApp.User.sanitize', { filePath: 'lib/my_app/user.ex' }),
+      frameworkMeta: { visibility: 'private' },
+    };
+    const results = rankSymbols([defp], 'sanitize', true);
+    expect(results[0]!.debugScore?.unexportedPenalty).toBe(-20);
+  });
+
   // Phase 87: Rust module-private items ride the same penalty
   it('applies -20 to Rust symbols with visibility "module"', () => {
     const modSym: SymbolRecord = {

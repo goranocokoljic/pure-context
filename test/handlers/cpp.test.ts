@@ -143,19 +143,23 @@ public:
     expect(method!.name).toBe('AuthService::login');
   });
 
-  it('skips private methods', async () => {
+  it('indexes private methods tagged visibility private (Phase 103, Task 643)', async () => {
     const { tree, buf } = await parse(`
 class AuthService {
 public:
   void login();
 private:
   void helper();
+protected:
+  void hook();
 };
 `);
     const syms = cppHandler.extractSymbols(tree, buf, 'auth.hpp');
     const methods = syms.filter((s) => s.kind === 'method');
-    expect(methods.map((m) => m.name)).toContain('AuthService::login');
-    expect(methods.map((m) => m.name)).not.toContain('AuthService::helper');
+    const byName = new Map(methods.map((m) => [m.name, m]));
+    expect(byName.get('AuthService::login')?.frameworkMeta?.['visibility']).toBeUndefined();
+    expect(byName.get('AuthService::helper')?.frameworkMeta?.['visibility']).toBe('private');
+    expect(byName.get('AuthService::hook')?.frameworkMeta?.['visibility']).toBeUndefined();
   });
 
   it('emits public method with fully qualified name (namespace + class)', async () => {
@@ -184,14 +188,20 @@ struct Point {
     expect(method!.name).toBe('Point::reset');
   });
 
-  it('class methods are private by default (no access specifier)', async () => {
+  it('label-less class members are private by default and tagged; struct members stay public', async () => {
     const { tree, buf } = await parse(`
 class Foo {
   void hidden();
 };
+struct Bar {
+  void open();
+};
 `);
     const syms = cppHandler.extractSymbols(tree, buf, 'foo.hpp');
-    expect(syms.filter((s) => s.kind === 'method')).toHaveLength(0);
+    const methods = syms.filter((s) => s.kind === 'method');
+    expect(methods.map((m) => m.name).sort()).toEqual(['Bar::open', 'Foo::hidden']);
+    expect(methods.find((m) => m.name === 'Foo::hidden')!.frameworkMeta?.['visibility']).toBe('private');
+    expect(methods.find((m) => m.name === 'Bar::open')!.frameworkMeta?.['visibility']).toBeUndefined();
   });
 
   // ── Constructor and destructor ───────────────────────────────────────────────

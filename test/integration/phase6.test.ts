@@ -143,7 +143,7 @@ describe('3. C++: template<T> class Cache → kind "class" with template signatu
 
 // ─── 4. C++: access specifier filtering ──────────────────────────────────────
 
-describe('4. C++: private method not extracted; public method extracted', () => {
+describe('4. C++: private method tagged private; public method extracted', () => {
   it('public method login is extracted under Auth::AuthService', () => {
     const db = openDatabase(cppRepoId);
     const results = searchSymbols(db, cppRepoId, 'login', { kind: 'method' });
@@ -151,11 +151,12 @@ describe('4. C++: private method not extracted; public method extracted', () => 
     expect(results.some((s) => s.name.includes('AuthService') && s.name.includes('login'))).toBe(true);
   });
 
-  it('private method _validateCredentials is NOT extracted', () => {
+  it('private method _validateCredentials IS extracted, tagged visibility private (Phase 103)', () => {
     const db = openDatabase(cppRepoId);
     const results = searchSymbols(db, cppRepoId, '_validateCredentials');
     db.close();
-    expect(results).toHaveLength(0);
+    const priv = results.find((s) => s.name.includes('_validateCredentials'));
+    expect(priv?.frameworkMeta?.visibility).toBe('private');
   });
 });
 

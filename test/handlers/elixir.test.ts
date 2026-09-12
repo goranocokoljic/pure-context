@@ -52,13 +52,16 @@ describe('Elixir handler — extractSymbols', () => {
     expect(fn!.kind).toBe('function');
   });
 
-  it('skips defp (private function)', async () => {
+  it('indexes defp as a function tagged visibility private (Phase 103, Task 643)', async () => {
     const src = `defmodule Mod do\n  def public(x), do: x\n  defp private(x), do: x\nend\n`;
     const { tree, buf } = await parse(src);
     const syms = elixirHandler.extractSymbols(tree, buf, 'lib/mod.ex');
-    const names = syms.map((s) => s.name);
-    expect(names).toContain('Mod.public');
-    expect(names.some((n) => n.includes('private'))).toBe(false);
+    const pub = syms.find((s) => s.name === 'Mod.public');
+    const priv = syms.find((s) => s.name === 'Mod.private');
+    expect(pub?.frameworkMeta?.['visibility']).toBeUndefined();
+    expect(priv?.kind).toBe('function');
+    expect(priv?.frameworkMeta?.['visibility']).toBe('private');
+    expect(priv?.signature).toMatch(/^defp private/);
   });
 
   it('extracts defmacro as kind function with elixir_macro metadata', async () => {
@@ -71,11 +74,12 @@ describe('Elixir handler — extractSymbols', () => {
     expect(macro!.frameworkMeta?.['elixir_macro']).toBe(true);
   });
 
-  it('skips defmacrop (private macro)', async () => {
+  it('indexes defmacrop as a private macro', async () => {
     const src = `defmodule Mod do\n  defmacrop secret(x) do\n    quote do: :ok\n  end\nend\n`;
     const { tree, buf } = await parse(src);
     const syms = elixirHandler.extractSymbols(tree, buf, 'lib/mod.ex');
-    expect(syms.filter((s) => s.name.includes('secret'))).toHaveLength(0);
+    const macro = syms.find((s) => s.name === 'Mod.secret');
+    expect(macro?.frameworkMeta).toEqual({ elixir_macro: true, visibility: 'private' });
   });
 
   it('extracts defstruct as kind type with module name', async () => {
@@ -165,8 +169,8 @@ describe('Elixir handler — extractSymbols', () => {
     expect(names).toContain('MyApp.start_link');
     expect(names).toContain('MyApp.version');
     expect(names).toContain('MyApp.with_logging');
-    // defp init_state should be excluded
-    expect(names.some((n) => n.includes('init_state'))).toBe(false);
+    // defp init_state is indexed, tagged private (Phase 103)
+    expect(syms.find((s) => s.name === 'MyApp.init_state')?.frameworkMeta?.['visibility']).toBe('private');
   });
 
   it('extracts symbols from fixture lib/my_app/user.ex', async () => {
@@ -180,8 +184,8 @@ describe('Elixir handler — extractSymbols', () => {
     expect(names).toContain('MyApp.User.new');
     expect(names).toContain('MyApp.User.display_name');
     expect(names).toContain('MyApp.User.valid?');
-    // defp sanitize should be excluded
-    expect(names.some((n) => n.includes('sanitize'))).toBe(false);
+    // defp sanitize is indexed, tagged private (Phase 103)
+    expect(syms.find((s) => s.name === 'MyApp.User.sanitize')?.frameworkMeta?.['visibility']).toBe('private');
     // struct type
     const struct = syms.find((s) => s.kind === 'type' && s.name === 'MyApp.User');
     expect(struct).toBeDefined();

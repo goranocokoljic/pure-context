@@ -11,6 +11,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.36.0] - 2026-09-12 — Phase 103: Resolver Wave 3 (Ruby edges, Swift targets, Elixir `defp`, C++ private members)
+
+Four gaps the gap-analysis MEDIUM list left standing after Phases 82–98:
+every Ruby repo indexed to ZERO dependency edges, Swift edges never crossed
+a SwiftPM target, and Elixir `defp` / C++ label-less private members were
+skipped by rule (the Kotlin `internal` / Go unexported / Java package-private
+bug class: a false `no_match` becomes a confident wrong answer). Each lever
+was measured against a fresh baseline taken in a detached worktree; scores
+are byte-identical on 12 of 13 gate repos (the elixir repo moves one query
+at the ±4pp edge, see below).
+
+### Added
+- **Ruby dependency edges** (`src/graph/ruby-resolver.ts`, family `ruby`):
+  `require 'a/b'` resolves to `<root>/a/b.rb` for a LOAD-PATH ROOT — roots
+  are discovered by convention (repo root, every `lib/`, every `app/<x>/`
+  and `app/<x>/concerns/`) and by evidence (a directory A is a root when a
+  Ruby file below it requires `x/y` and `A/x/y.rb` is indexed — how
+  Homebrew's `Library/Homebrew/` earns its edges); `require_relative`
+  resolves against the importer; stdlib / default-gem names are reserved
+  (`graph.reservedRubyModules`, 93 names, `[]` to disable) so
+  `active_support/json.rb` can never capture `require "json"`. Zeitwerk
+  constant references — superclass, `include`/`extend`/`prepend`,
+  `belongs_to`/`has_one`/`has_many`/`has_and_belongs_to_many` (`class_name:`
+  honoured, `polymorphic: true` skipped) — are taken at CLASS-BODY level
+  only and resolved the way Ruby looks constants up: innermost lexical scope
+  first, as a path (`admin/user.rb`, ActiveSupport `underscore`) then as a
+  symbol-table match that must be unique over the whole index with every
+  segment declared in the one file; a constant the importer declares itself
+  makes no edge. Gate: brew 0 → 3,937 edges, rails 68 → 8,545, mastodon
+  3,331 → 5,028, discourse 5,075 → 8,041; P@1/P@3/R@5 identical; dangling 0.
+- **Swift cross-target edges** (`src/graph/swift-resolver.ts`, family
+  `swift`): every `Package.swift` is parsed for its targets (`.target` /
+  `.executableTarget` / `.macro` / `.testTarget` / `.plugin` /
+  `.systemLibrary`, `path:` or the `Sources|Tests|Plugins/<name>` default;
+  dependency references nested in another target are skipped); `import X`
+  (incl. `@testable`, `import struct X.Y`) resolves to EVERY indexed file of
+  target X (the Go package rule); the importer's own package wins a
+  module-name clash; `Sources/<X>` / `Tests/<X>` stand in without a
+  manifest. Gate: swift-nio 12 → 33,835 edges, vapor 4 → 13,602,
+  swift-composable-architecture 0 → 102,463 (546 importers × 536 files of
+  one module); scores identical; production → Tests edges 0.
+- **Elixir `defp` / `defmacrop`** are indexed as functions with
+  `frameworkMeta.visibility: 'private'` (phoenix 1,317 → 2,007 symbols,
+  elixir 5,627 → 9,361).
+- **C++ private members** — members under `private:` and label-less members
+  of a `class` (private by default; `struct` unchanged) — are indexed with
+  `frameworkMeta.visibility: 'private'` in all three class-body walkers
+  (plain, export-macro, ERROR-recovery).
+- **Ranker**: `'private'` joins the −20 "findable but not first" set
+  (no other handler emits it — per-language by construction).
+- `graph.reservedRubyModules` config key (`src/core/ruby-stdlib.ts`).
+
+### Changed
+- Ruby `extractImports`: `require` is collected anywhere in the file (a
+  lazy require inside a method is a dependency); `require_relative 'x'` is
+  stored as `./x`; dynamic arguments (`File.expand_path`, interpolation)
+  make no record; constant records carry their lexical nesting in
+  `importedNames`.
+- `.build/` (SwiftPM output + dependency checkouts) is a discovery exclude
+  and a foreign path segment.
+- `graphCoverage` note: the unresolved tail is now Protobuf / SQL-dbt /
+  GDScript / Gleam / Lua / R; Ruby (v1.36.0) and Dart (v1.31.0) listed as
+  resolvable.
+- LANGUAGE-SUPPORT / AGENT_REFERENCE / README / docs/09 rows updated.
+
+### Measured and accepted
+- elixir repo P@1 12 → 8 (one query: the `defp`
+  `Mix.Tasks.Profile.Eprof.sort_function` outranks `Enum.sort_by` on
+  "sort a collection using a custom key function" by word overlap despite
+  the −20), while P@3 24 → 32 and R@5 44 → 48; phoenix P@3 68 → 72, R@5
+  88 → 84. At the ±4pp gate edge; kept — a stronger per-language penalty is
+  a Phase 105 lever.
+
+### Re-index note
+- Ruby and Swift repos need one `index_folder` run to build the edges;
+  Elixir and C++ repos need one to index the private symbols. Everything
+  else is unchanged (no schema change).
+
+---
+
 ## [1.35.0] - 2026-09-11 — Phase 102: Cross-Index Completion (cycles, dead symbols, layers, coupling, renders, DI across links)
 
 Phase 99 made blast radius, importers, context bundle and risk centrality

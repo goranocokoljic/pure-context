@@ -153,9 +153,9 @@ describe('1. Elixir: defmodule extracted as kind "class"', () => {
   });
 });
 
-// ─── 2. Elixir: def extracted, defp skipped ───────────────────────────────────
+// ─── 2. Elixir: def extracted, defp tagged private (Phase 103) ───────────────────────────────────
 
-describe('2. Elixir: def extracted, defp skipped', () => {
+describe('2. Elixir: def extracted, defp tagged private', () => {
   it('MyApp.start_link is extracted as kind "function"', () => {
     const db = openDatabase(elixirRepoId);
     const results = searchSymbols(db, elixirRepoId, 'start_link', { kind: 'function' });
@@ -170,11 +170,12 @@ describe('2. Elixir: def extracted, defp skipped', () => {
     expect(results.some((s) => s.name === 'MyApp.version' && s.kind === 'function')).toBe(true);
   });
 
-  it('defp init_state is NOT extracted', () => {
+  it('defp init_state IS extracted, tagged visibility private (Phase 103)', () => {
     const db = openDatabase(elixirRepoId);
     const results = searchSymbols(db, elixirRepoId, 'init_state');
     db.close();
-    expect(results).toHaveLength(0);
+    const priv = results.find((s) => s.name === 'MyApp.init_state');
+    expect(priv?.frameworkMeta?.visibility).toBe('private');
   });
 
   it('defmacro with_logging extracted with elixir_macro: true', () => {
@@ -186,11 +187,12 @@ describe('2. Elixir: def extracted, defp skipped', () => {
     expect(macro!.frameworkMeta?.elixir_macro).toBe(true);
   });
 
-  it('defp sanitize in MyApp.User is NOT extracted', () => {
+  it('defp sanitize in MyApp.User IS extracted, tagged visibility private (Phase 103)', () => {
     const db = openDatabase(elixirRepoId);
     const results = searchSymbols(db, elixirRepoId, 'sanitize');
     db.close();
-    expect(results).toHaveLength(0);
+    const priv = results.find((s) => s.name === 'MyApp.User.sanitize');
+    expect(priv?.frameworkMeta?.visibility).toBe('private');
   });
 });
 

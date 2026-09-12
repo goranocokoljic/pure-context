@@ -16,6 +16,20 @@ const GRAMMARS_DIR = resolve(__dirname, '../../grammars');
 
 // ─── Symbol ID ────────────────────────────────────────────────────────────────
 
+/**
+ * Phase 103 (Task 643): members declared under `private:` (or label-less in a
+ * `class`, private by default) are INDEXED and tagged, never skipped — the
+ * Phase-98 visibility rule. The ranker's -20 penalty keeps them findable but
+ * not first. Merges existing meta (a nested class's own tag survives).
+ */
+function tagPrivate(symbols: SymbolRecord[], from: number): void {
+  for (let i = from; i < symbols.length; i++) {
+    const sym = symbols[i];
+    const meta = sym.frameworkMeta ?? {};
+    if (meta['visibility'] === undefined) sym.frameworkMeta = { ...meta, visibility: 'private' };
+  }
+}
+
 function makeId(filePath: string, name: string, kind: SymbolKind): string {
   return createHash('sha256')
     .update(`${filePath}:${name}:${kind}`)
@@ -1022,8 +1036,7 @@ function walkExportMacroClassBody(
         else if (label === 'protected') accessLevel = 'protected';
         else if (label === 'private') accessLevel = 'private';
       }
-      if (accessLevel === 'private') continue;
-
+      const before = symbols.length;
       // Walk the statement body (declarations / function definitions after label)
       for (const stmt of child.children) {
         if (!stmt.isNamed || stmt.type === 'statement_identifier') continue;
@@ -1033,10 +1046,15 @@ function walkExportMacroClassBody(
           emitDeclMethod(stmt, ctx, filePath, src, symbols);
         }
       }
-    } else if (child.type === 'function_definition' && accessLevel !== 'private') {
+      if (accessLevel === 'private') tagPrivate(symbols, before);
+    } else if (child.type === 'function_definition') {
+      const before = symbols.length;
       emitMethod(child, ctx, filePath, src, symbols, null);
-    } else if (child.type === 'declaration' && accessLevel !== 'private') {
+      if (accessLevel === 'private') tagPrivate(symbols, before);
+    } else if (child.type === 'declaration') {
+      const before = symbols.length;
       emitDeclMethod(child, ctx, filePath, src, symbols);
+      if (accessLevel === 'private') tagPrivate(symbols, before);
     }
   }
 }
@@ -1077,7 +1095,7 @@ function walkErrorClassBody(
         else if (label === 'protected') accessLevel = 'protected';
         else if (label === 'private') accessLevel = 'private';
       }
-      if (accessLevel === 'private') continue;
+      const before = symbols.length;
       // Walk statement body (declarations / definitions after the access label)
       for (const stmt of child.children) {
         if (!stmt.isNamed || stmt.type === 'statement_identifier') continue;
@@ -1087,11 +1105,17 @@ function walkErrorClassBody(
           emitDeclMethod(stmt, ctx, filePath, src, symbols);
         }
       }
-    } else if (child.type === 'function_definition' && accessLevel !== 'private') {
+      if (accessLevel === 'private') tagPrivate(symbols, before);
+    } else if (child.type === 'function_definition') {
+      const before = symbols.length;
       emitMethod(child, ctx, filePath, src, symbols, null);
-    } else if (child.type === 'declaration' && accessLevel !== 'private') {
+      if (accessLevel === 'private') tagPrivate(symbols, before);
+    } else if (child.type === 'declaration') {
+      const before = symbols.length;
       emitDeclMethod(child, ctx, filePath, src, symbols);
-    } else if (child.type === 'ERROR' && accessLevel !== 'private') {
+      if (accessLevel === 'private') tagPrivate(symbols, before);
+    } else if (child.type === 'ERROR') {
+      const before = symbols.length;
       // Method declarations misparsed as ERROR — look for function_declarator child
       const funcDecl = child.children.find((c) => c.type === 'function_declarator');
       if (funcDecl) {
@@ -1110,6 +1134,7 @@ function walkErrorClassBody(
           });
         }
       }
+      if (accessLevel === 'private') tagPrivate(symbols, before);
     }
   }
 }
@@ -1162,7 +1187,7 @@ function emitDeclMethod(
 /**
  * Walk the body of a class or struct, tracking the current access level.
  * Emits methods (definitions and declarations), nested classes/structs.
- * Skips private members.
+ * Private members are emitted too, tagged `visibility: 'private'` (Phase 103).
  *
  * @param isStruct  true → default access is public; false (class) → private
  */
@@ -1186,8 +1211,8 @@ function walkClassBody(
       continue;
     }
 
-    // Skip all private members
-    if (accessLevel === 'private') continue;
+    // Private members are indexed and tagged (Phase 103, Task 643) — see tagPrivate.
+    const before = symbols.length;
 
     switch (child.type) {
 
@@ -1329,6 +1354,7 @@ function walkClassBody(
       default:
         break;
     }
+    if (accessLevel === 'private') tagPrivate(symbols, before);
   }
 }
 

@@ -1191,7 +1191,17 @@ function score(
   let unexportedPenalty = 0;
   {
     const vis = (symbol.frameworkMeta as Record<string, unknown> | undefined)?.['visibility'];
-    if (vis === 'unexported' || vis === 'module' || vis === 'package' || vis === 'file' || vis === 'library') {
+    // Phase 103 (Task 643): 'private' — Elixir `defp` / `defmacrop` and C++
+    // members under `private:` (or label-less in a class). No other handler
+    // tags 'private', so this is a per-language gate by construction.
+    if (
+      vis === 'unexported' ||
+      vis === 'module' ||
+      vis === 'package' ||
+      vis === 'file' ||
+      vis === 'library' ||
+      vis === 'private'
+    ) {
       unexportedPenalty = -20;
       total += unexportedPenalty;
     }

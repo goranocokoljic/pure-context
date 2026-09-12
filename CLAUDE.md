@@ -123,9 +123,9 @@ dev-docs/          # Phase task files, benchmark notes (gitignored, not public)
 
 ## Current Status
 
-- **Version:** 1.35.0. Phases 1–102 are COMPLETE (latest: Phase 102 — Cross-Index Completion: one `workspaceAdjacency` over linked indexes; `crossIndex: true` on `find_cycles` / layer violations / snapshot + `compare_change_impact` (same-link-set rule) / coupling map / both renders; `find_dead_code.keptAliveByLinks` with per-symbol `referencedBy`; android DI edges into linked providers; `get_task_context` coverage + `externalImports` riders. No schema change).
-- **Next, in order:** Phase 103 Resolver Wave 3 (`dev-docs/PHASE103_TASKS.md`, 1.36.0) → 104 Test-Mapper Redesign → 105 Search-Quality Sweep 3. Plan files: `dev-docs/PHASE10{3..5}_TASKS.md`.
-- **Re-index note:** none forced since 1.31.0; symbol refs backfill on each repo's next whole-tree run (`list_repos.symbolRefs` = 0 until then); content migrates to the blob store the same way; cross-index DI edges appear on an android root's next run.
+- **Version:** 1.36.0. Phases 1–103 are COMPLETE (latest: Phase 103 — Resolver Wave 3: Ruby `require`/`require_relative`/Zeitwerk edges through discovered load-path roots + lexical constant lookup (`graph.reservedRubyModules`); Swift `import X` → every file of the SwiftPM target X; Elixir `defp`/`defmacrop` and C++ `private:`/label-less members indexed with `visibility: 'private'` (ranker −20). No schema change. Findings: `dev-docs/in-progress/phase103-findings.md`).
+- **Next, in order:** Phase 104 Test-Mapper Redesign (`dev-docs/PHASE104_TASKS.md`, 1.37.0) → 105 Search-Quality Sweep 3 (1.38.0; the elixir `defp` penalty strength is a candidate lever). Plan files: `dev-docs/PHASE10{4,5}_TASKS.md`.
+- **Re-index note:** none forced since 1.31.0; Ruby/Swift edges and Elixir/C++ private symbols appear on each repo's next whole-tree run (1.36.0); symbol refs backfill on each repo's next whole-tree run (`list_repos.symbolRefs` = 0 until then); content migrates to the blob store the same way; cross-index DI edges appear on an android root's next run.
 - **History:** phase summaries for 75–100 are in `dev-docs/PHASE-HISTORY.md`; earlier phases in `dev-docs/PHASE*_TASKS.md`; the full decision log (167 rows) is in `dev-docs/DECISION-LOG.md`. Read those before making an architectural decision, and append new decisions to `dev-docs/DECISION-LOG.md`.
 
 **Working rules that came out of the history (keep these):**
