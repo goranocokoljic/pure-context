@@ -259,6 +259,9 @@ function extractSchemas(spec: OpenApiSpec, source: Buffer, filePath: string, key
         properties: schema.properties ? Object.keys(schema.properties) : [],
         required: schema.required ?? [],
         type: schema.type ?? 'object',
+        // Phase 106 (Task 662): a schema object is a data shape, not behaviour —
+        // the ranker's data-definition identity scaling reads this tag.
+        openapi_schema: true,
       },
     });
   }

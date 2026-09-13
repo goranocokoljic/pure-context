@@ -11,6 +11,133 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.39.0] - 2026-09-13 — Phase 106: Regression Guard, Hold-Out Discipline, the Global One-Word Identity Rule
+
+Three things Phase 105 surfaced without asking for them are closed here. A
+five-minute **regression guard** now runs before every version bump
+(`npm run bench:guard`) — its first real use found that excalidraw's P@3
+0.44 → 0.32 was a Phase-103 penalty leaking into TypeScript, Java, Scala,
+Kotlin and C# private members. Ground truth written by **another author**
+(rule P6, `benchmarks/HOLDOUTS.md`) is now the gate for ranking levers, and
+the ranker's author-written scorecard is reported next to a **file-aware**
+hit metric. And the one-word-identity failure Phase 105 fixed language by
+language is fixed **globally**: the evidence bar (≥3 repos — zio, dotty-bot,
+listmonk, vapor, airodump, restic) was met, so the Scala-only ÷3 damp from
+Task 653c now applies to every language, with types exempt and Perl exempt.
+
+### Fixed
+
+- **Private-visibility penalty leaked into five languages** (Task 659,
+  excalidraw bisect over 1.34 / 1.35 / 1.36 worktrees). Phase 103 added
+  `visibility === 'private'` to the −20 unexported penalty "for Elixir
+  `defp` and C++ `private:` — no other handler tags 'private'". TypeScript
+  (Phase 94 class fields), Java, Scala, Kotlin and C# do. excalidraw's
+  `private handleCanvasPointerMove = …` lost 12pp P@3 in 1.36.0 and nobody
+  saw it. The `'private'` branch is now gated to Elixir + C/C++ files.
+  excalidraw 0.08 / 0.32 / 0.44 → **0.08 / 0.48 / 0.60**; jenkins 36 / 64 /
+  68 → **40 / 72 / 72**; zio, jhipster, origamicms up; nothing down.
+- **`-Only a,b,c` in the sweep drivers** bound one string under
+  `pwsh -File` and matched nothing — split on commas now.
+
+### Changed — ranking (`test/core/phase106-ranking.test.ts`)
+
+- **One-word identity damp is global** (Task 660). Kinds function /
+  method / const / property, a single name part, ≥8 production queryWords
+  (stems and synonyms included) → identityExact ÷3. Language fact: in code
+  generally a one-word symbol carries less identity evidence than a
+  compound name when the query is a long description; one shared word out
+  of many is context, not the target. Type definitions keep their identity
+  (a one-word TYPE named by the query is usually the target — `Queue`,
+  `Builder`, `Mutex`). **Perl and Erlang are exempt** (`.pm` / `.pl` / `.t`,
+  `.erl` / `.hrl`): a Perl package's interface IS one-word subs
+  (`$c->forward`, `$c->stash`) and an Erlang function is `module:name/arity`
+  with the module carrying the noun — catalyst-runtime and rabbitmq-server
+  each lost 8pp (0 wins, 3 losses) before the exemptions. Settings measured:
+  min words 6 / **8** / 10, divisor 2 / **3** — 8 and 3 kept (the others are
+  equal or weaker on the sum and cost more on Perl / C++).
+- **SQL tables and OpenAPI schemas are data definitions** (Task 662).
+  `CREATE TABLE | VIEW | MATERIALIZED VIEW` rows carry
+  `frameworkMeta.sql_table`, `components.schemas.X` / `definitions.X` rows
+  carry `openapi_schema`, and both join the data-definition identity
+  scaling — **only when the pool also holds code symbols**
+  (`RankOptions.poolHasCodeSymbols`, computed once in `rankSymbols`). In a
+  pure SQL / OpenAPI corpus the schema is the target (P5 audit:
+  kubernetes-openapi 9/9, stripe-openapi 14/14 one-word expected symbols
+  are schemas named by the query) and those repos stay byte-identical.
+  listmonk 0.28 / 0.48 / 0.68 → **0.40 / 0.64 / 0.76**; timescaledb +4.
+  SQL / OpenAPI repos need a whole-tree run to carry the tag.
+- **Measured and reverted** (Task 661): a −15 / −30 test-name packing
+  penalty (function/method named `Test*` / `test_*` / `it_` / `spec_` or in a
+  test file, query not asking for tests). jcodemunch +4pp; saleor −8pp at
+  both sizes because three ground-truth rows deliberately target a test
+  function or an e2e util with no "test" word in the query. The row that
+  targets a test helper decides the cap, and the cap is below any useful
+  size. Not carried.
+
+### Added — benchmark discipline
+
+- **`npm run bench:guard`** (Task 658, `benchmarks/harness/bench_guard.ps1`):
+  15 repos, one per ranker gate plus the hold-outs (nuxt, kurirfe,
+  vismedic, listmonk, restic-dev, dotty-bot, scala-steward-dev, vapor,
+  SparkleShare-iOS, airodump, serde, eu-za-tebe, brew + restic /
+  scala-steward intent-only), **2m36s** on this machine, compared against
+  the stored newest row per repo, one verdict each
+  (`byte-identical | improved | moved | REGRESSION >4pp | MISSING`), exit 2
+  on a regression, report `benchmarks/results/guard-<label>.md` with
+  `HOLDOUTS.md` appended. Rows live in `benchmarks/<repo>/results/guard-<label>/`
+  and count as stored rows for the scorecard. Rule P8: runs before the
+  version bump; a drop >4pp does not ship until explained or reverted.
+- **Hold-out rule P6** — `benchmarks/HOLDOUTS.md`: ground truth by another
+  author, written before any ranker run, never replayed while a lever is
+  designed; replaying burns it. Status: restic-dev burned (replayed to
+  diagnose), scala-steward-dev blind (flat this phase, by construction —
+  Scala was already damped in Phase 105); a second blind Go repo is owed.
+- **File-aware hits** (Task 663): `rank_found_file` / `p1_file` / `p3_file` /
+  `p5_file` per query and `precision_at_1_file` / `precision_at_3_file` /
+  `recall_at_5_file` per run — the same name rules plus `expected_file`
+  must match. Reported alongside (diff table, scorecard column); the guard's
+  ±4pp rule and every stored row stay on the name-only metric.
+- Tooling: `phase105_diff.mjs --pre <label>|newest --only --out
+  --fail-on-regression --title`; `phase106_qdiff.mjs` (per-query rank moves
+  between two labels); `phase106_audit.mts` (rule P5 audit of one-word
+  expected symbols against production `extractQueryWords` /
+  `splitNameParts`, now exported); `phase106_run.ps1` /
+  `phase106_settings.ps1` (one-lever-several-settings runs); sweep sets
+  `guard`, `holdout`, `p106`, `p105losers`.
+
+### Results (P@1 / P@3 / R@5; 1.38.0 → 1.39.0)
+
+Full sweep: Phase-95 + Phase-98 + the fixed Phase-105 non-win set, 53
+repos, fresh data dir, against the fresh 1.38.0 rows of Phase 105
+(`benchmarks/results/phase106-sweep.md`): **byte-identical 17, improved 11,
+moved 25, regression 0**. Guard on the finished tree
+(`benchmarks/results/guard-1.39.0.md`): 16 repos, 2m42s, no regression.
+
+| repo | 1.38.0 | 1.39.0 | lever |
+|---|---|---|---|
+| dokku | 32 / 56 / 68 | **48 / 60 / 72** | 660 |
+| listmonk | 24 / 48 / 64 | **40 / 64 / 76** | 660 + 662 |
+| gradle | 16 / 44 / 48 | **28 / 48 / 52** | 659 |
+| nuxt | 40 / 64 / 76 | **48 / 68 / 76** | 660 |
+| vismedic | 24 / 44 / 48 | **32 / 48 / 48** | 660 |
+| swift-nio | 8 / 12 / 20 | **16 / 20 / 28** | 660 |
+| jenkins | 36 / 64 / 68 | **40 / 72 / 72** | 659 |
+| excalidraw | 8 / 32 / 44 | 8 / **48 / 60** | 659 |
+| vapor, zio, libs-base, pandoc | — | +4 P@1 each | 660 / 659 |
+| facebook-folly | 8 / 12 / 12 | 4 / 16 / 16 | the P5-audited row (`Future` misparsed as a function) |
+| catalyst-runtime, rabbitmq-server, emqx | — | unchanged | exempted |
+
+Hold-outs (rule P6): scala-steward-dev 4 / 8 / 16 → 4 / 8 / 16 (flat by
+construction); **go-git-dev** (second blind Go repo, received after every
+lever was designed) 0 / 0 / 0 → 0 / 0 / 8 — not down. Three
+author-independent sets now sit at 0–4% P@1: the developer-vocabulary
+retrieval gap is the open problem for the next ranking phase.
+
+Generated scorecard (BENCHMARK-RESULTS §3): **PC 66/79 P@1** (was 65),
+72/79 P@3, 69/79 R@5.
+
+---
+
 ## [1.38.0] - 2026-09-12 — Phase 105: Search-Quality Sweep 3 (the repos PureContext did not win)
 
 The 16-row "non-win" table in the plan was rebuilt from the stored result

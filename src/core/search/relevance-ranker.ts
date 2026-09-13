@@ -106,6 +106,16 @@ export interface RankOptions {
    * failure, sweep labels phase95-593/593b).
    */
   poolScaledGenericNames?: ReadonlySet<string>;
+  /**
+   * Pool-derived flag (Phase 106, Task 662) — computed once inside rankSymbols,
+   * never by callers. True when the pool holds at least one symbol from a file
+   * that is NOT a SQL / OpenAPI document. Only then is a one-word SQL table or
+   * OpenAPI schema named by a query word treated as context (data-definition
+   * identity scaling): in a pure SQL / OpenAPI corpus (kubernetes-openapi,
+   * stripe-openapi, postgrest-sql — P5 audit: 9 / 14 / 3 expected symbols ARE
+   * one-word schemas or tables named by the query) the schema IS the target.
+   */
+  poolHasCodeSymbols?: boolean;
 }
 
 export interface ScoredSymbol {
@@ -498,6 +508,7 @@ export function rankSymbols(
   const effOpts: RankOptions = {
     ...(javaCount > symbols.length / 2 ? { ...opts, isJavaGroovyMixed: true } : opts),
     poolHasHookKind: symbols.some((s) => s.kind === 'hook' || s.kind === 'composable'),
+    poolHasCodeSymbols: symbols.some((s) => !DATA_DOCUMENT_EXTENSIONS.test(s.filePath)),
     hasFrontendVocabQuery: hasFrontendVocabQuery(query),
     // Phase 95 (Task 593): the bare generic names actually competing in this
     // pool via identity (name ∈ GENERIC set AND matches a query word).
@@ -725,11 +736,16 @@ function score(
     // Task 655 (listmonk replay) adds Go structs (`go_struct`): `Campaign`,
     // `Subscriber`, `User`, `Session` are data records named by one word of
     // nearly every query, and all 25 listmonk targets are methods.
+    // Phase 106 (Task 662, listmonk gt-04/06/09/11/18/23/25 after 655a): SQL
+    // `CREATE TABLE` rows (`subscribers`, `campaigns`, `lists`) and OpenAPI
+    // `components.schemas` entries are data definitions too — but only when
+    // the pool also holds code symbols (see RankOptions.poolHasCodeSymbols).
     const declFm = symbol.frameworkMeta;
     const isDataDecl =
       !!declFm &&
       (!!declFm['scala_case_class'] || !!declFm['scala_object'] ||
-        !!declFm['swift_extension'] || !!declFm['go_struct']);
+        !!declFm['swift_extension'] || !!declFm['go_struct'] ||
+        (!!opts?.poolHasCodeSymbols && (!!declFm['sql_table'] || !!declFm['openapi_schema'])));
     if ((DATA_KINDS.has(symbol.kind) || isDataDecl) && queryWords.length > 1) {
       identityExact = Math.max(10, Math.round(40 / queryWords.length));
     } else {
@@ -749,21 +765,38 @@ function score(
     if (queryWords.length >= 3 && GENERIC_METHOD_NAMES.has(nameLower)) {
       identityExact = Math.round(identityExact / 3);
     } else if (
-      // Phase 105 (Task 653, zio + dotty-bot replay): Scala one-word members
-      // and functions (`commit`, `post`, `take`, `offerAll`→no, `empty`,
-      // `service`, `log`, `instant`) took the full identity from ONE word of
-      // a ≥8-word descriptive query and held rank 1 on 23/25 zio queries
-      // and 9/25 dotty-bot queries — the generic-verb failure shape, but the
-      // names are domain words no global list can carry. Same ⅓ scaling,
-      // gated on the file extension + member kinds: type definitions
-      // (class/trait/enum/type) keep their identity because a one-word
-      // TYPE named by the query (Queue, Scope, Cached) is the target.
-      queryWords.length >= 8 &&
-      SCALA_MEMBER_KINDS.has(symbol.kind) &&
-      /\.scala$/i.test(symbol.filePath) &&
+      // One-word identity damp. Phase 105 (Task 653, zio + dotty-bot replay):
+      // Scala one-word members and functions (`commit`, `post`, `take`,
+      // `empty`, `service`, `log`, `instant`) took the full identity from ONE
+      // word of a ≥8-word descriptive query and held rank 1 on 23/25 zio
+      // queries and 9/25 dotty-bot queries — the generic-verb failure shape,
+      // but the names are domain words no global list can carry. Phase 106
+      // (Task 660) removed the `.scala` gate: the same shape held rank 1 on
+      // 19/25 restic queries (Go `Snapshot`, `Key`, `Parse`, `Match`,
+      // `Unlock`, `Delete`, `Root`, `Store`, `worker`), on listmonk (`Record`,
+      // `Verify`, `Push`), vapor (`routes`, `View`, `Session`) and airodump
+      // (`verify`) — the ≥3-repo bar for a global rule. Language fact: in
+      // code generally, a symbol whose name is a single word carries less
+      // identity evidence than a compound name when the query is a long
+      // description; one shared word out of many is context, not the target.
+      // Type definitions (class/struct/trait/enum/type) keep their identity
+      // because a one-word TYPE named by the query (Queue, Scope, Cached,
+      // Builder, Mutex) is usually the target.
+      // Perl and Erlang are exempt (Task 660 measurement: catalyst-runtime
+      // -8pp P@1 with `forward`, `stash`, `dispatch` displaced by the one-word
+      // CLASSES `Action`, `Request` the type exemption keeps whole; rabbitmq-
+      // server -8pp with `declare/6`, `exists/1`, `stop/1` — 0 wins, 3 losses
+      // in each). Language fact: in Perl a package's interface is a set of
+      // bare one-word subs called through the object (`$c->forward`,
+      // `$c->stash`); in Erlang a function is addressed as module:name/arity
+      // and the module carries the noun, so the name is conventionally a bare
+      // verb. In both, one-word-ness is the convention, not a signal.
+      queryWords.length >= ONE_WORD_IDENTITY_MIN_QUERY_WORDS &&
+      ONE_WORD_MEMBER_KINDS.has(symbol.kind) &&
+      !ONE_WORD_EXEMPT_EXTENSIONS.test(symbol.filePath) &&
       splitNameParts(symbol.name).length === 1
     ) {
-      identityExact = Math.round(identityExact / 3);
+      identityExact = Math.round(identityExact / ONE_WORD_IDENTITY_DIVISOR);
     }
     total += identityExact;
   }
@@ -1243,6 +1276,14 @@ function score(
     }
   }
 
+  // Phase 106 (Task 661) MEASURED AND REVERTED: a -15 / -30 "test-name packing"
+  // penalty (function/method whose name starts with Test/test_/it_/spec_ or whose
+  // file is a test file, query not asking for tests). jcodemunch +4pp P@1; saleor
+  // -8pp at both sizes because three of its ground-truth rows deliberately target
+  // a test function or an e2e util (gt-14/15/16) with no "test" word in the query
+  // — rule P5: the row that targets a test helper decides the cap, and the cap is
+  // below any useful size. Findings: dev-docs/in-progress/phase106-findings.md.
+
   // ── Unexported-visibility penalty (Phase 84, Task 520) ──────────────────────
   //
   // Go unexported names (lowercase first letter) are indexed since Phase 84 so
@@ -1261,15 +1302,21 @@ function score(
   {
     const vis = (symbol.frameworkMeta as Record<string, unknown> | undefined)?.['visibility'];
     // Phase 103 (Task 643): 'private' — Elixir `defp` / `defmacrop` and C++
-    // members under `private:` (or label-less in a class). No other handler
-    // tags 'private', so this is a per-language gate by construction.
+    // members under `private:` (or label-less in a class). Phase 106 (Task 659,
+    // excalidraw bisect): the Phase-103 comment "no other handler tags
+    // 'private'" was wrong — TypeScript (Phase 94 class fields), Java, Scala,
+    // Kotlin and C# record the declared modifier too, so the -20 silently hit
+    // `private handleCanvasPointerMove` on excalidraw's App class (P@3 0.44 →
+    // 0.32 between 1.35 and 1.36) and every private Java/Scala member. The
+    // language fact holds only for the two handlers it was written for, so the
+    // gate is now explicit: Elixir + C/C++ files.
     if (
       vis === 'unexported' ||
       vis === 'module' ||
       vis === 'package' ||
       vis === 'file' ||
       vis === 'library' ||
-      vis === 'private'
+      (vis === 'private' && PRIVATE_PENALTY_EXTENSIONS.test(symbol.filePath))
     ) {
       unexportedPenalty = -20;
       total += unexportedPenalty;
@@ -1398,10 +1445,22 @@ function score(
  * Rejected (single-query evidence): nuxt, trigger, route, calculate.
  */
 /**
- * Symbol kinds the Phase-105 Scala one-word identity damp applies to — members
- * and functions, never type definitions (see the identityExact block).
+ * One-word identity damp (Phase 105 Task 653 for Scala, made global in Phase 106
+ * Task 660): the symbol kinds it applies to — members and functions, never type
+ * definitions (see the identityExact block) — the minimum production queryWords
+ * count (stems and synonyms included) that makes a query "long", and the divisor.
+ * Settings measured in Phase 106: min words 6 / 8 / 10, divisor 2 / 3
+ * (dev-docs/in-progress/phase106-findings.md).
  */
-const SCALA_MEMBER_KINDS: ReadonlySet<string> = new Set(['function', 'method', 'const', 'property']);
+/** Files whose `visibility: 'private'` tag carries the -20 penalty (Elixir + C/C++, Phase 103 / Task 659). */
+const PRIVATE_PENALTY_EXTENSIONS = /[.](?:ex|exs|cpp|cxx|cc|c\+\+|hpp|hxx|hh|h\+\+|h)$/i;
+const ONE_WORD_MEMBER_KINDS: ReadonlySet<string> = new Set(['function', 'method', 'const', 'property']);
+const ONE_WORD_IDENTITY_MIN_QUERY_WORDS = 8;
+/** SQL scripts and OpenAPI documents — files whose symbols are data definitions by construction (Task 662). */
+const DATA_DOCUMENT_EXTENSIONS = /[.](?:sql|ya?ml|json)$/i;
+/** Languages whose conventional API is one-word functions — the damp does not apply (Perl, Erlang). */
+const ONE_WORD_EXEMPT_EXTENSIONS = /[.](?:pm|pl|t|erl|hrl)$/i;
+const ONE_WORD_IDENTITY_DIVISOR = 3;
 
 const GENERIC_METHOD_NAMES: ReadonlySet<string> = new Set([
   'run', 'execute', 'call', 'invoke', 'apply', 'main', 'start', 'stop',
@@ -1448,7 +1507,7 @@ function isGenericFamilyWord(w: string): boolean {
  *   'CIR_FrontController'              → ['cir', 'front', 'controller']
  *   'CI_DB_query_builder::_insert'     → ['ci', 'db', 'query', 'builder', 'insert']
  */
-function splitNameParts(name: string): string[] {
+export function splitNameParts(name: string): string[] {
   const parts: string[] = [];
   // Split on namespace/method-call separators: \ (PHP/Python paths), : (PHP ::), . (TS dot notation), @ (XML disambiguation)
   for (const segment of name.split(/[\\:.@]+/)) {
@@ -1533,7 +1592,7 @@ function addStemsOf(word: string, set: Set<string>): void {
  *   'updated homepage'     → ['updated', 'update', 'updat', 'homepage']
  *   'front-end controller' → ['front', 'end', 'controller']
  */
-function extractQueryWords(raw: string, domain?: string): string[] {
+export function extractQueryWords(raw: string, domain?: string): string[] {
   const words = new Set<string>();
 
   // Split on both whitespace and hyphens so "front-end" → ["front", "end"]

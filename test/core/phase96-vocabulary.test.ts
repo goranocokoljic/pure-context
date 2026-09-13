@@ -86,17 +86,26 @@ describe('Phase 96 Task 597 — register → add synonym', () => {
     expect(bare.debugScore!.identityExact).toBe(20);
   });
 
-  it('negative (registerUser shape): a bare `register` carrying identity still beats an addX competitor', () => {
-    const query = 'register a new user account with email and password';
+  it('negative (registerUser shape): a bare `register` carrying identity still beats an addX competitor on a SHORT query', () => {
+    // Phase 106 (Task 660) made the one-word identity damp global: on a ≥8-queryWord
+    // description the bare `register` is scaled to 20 and the compound `addUser`
+    // (add ← register synonym, user) wins — the intended trade-off (vismedic gt-19:
+    // `RegisterCFClientUserCommand` past `register`). The Phase-96 guarantee — the
+    // synonym alone must never lift addX over an exact `register` — holds where the
+    // damp does not fire: a short query.
     const pool = [
       sym('add', { filePath: 'src/users/util.ts' }),
       sym('addUser', { filePath: 'src/users/service.ts' }),
       sym('register', { filePath: 'src/auth/decorators.ts' }),
     ];
-    const ranked = rankSymbols(pool, query, true);
-    expect(ranked[0]!.symbol.name).toBe('register');
-    // register is NOT a generic word — full identity, never scaled
-    expect(ranked[0]!.debugScore!.identityExact).toBe(60);
+    const short = rankSymbols(pool, 'register user account', true);
+    expect(short[0]!.symbol.name).toBe('register');
+    // register is NOT a generic word — full identity on a short query
+    expect(short[0]!.debugScore!.identityExact).toBe(60);
+
+    const long = rankSymbols(pool, 'register a new user account with email and password', true);
+    expect(long[0]!.symbol.name).toBe('addUser');
+    expect(long.find((r) => r.symbol.name === 'register')!.debugScore!.identityExact).toBe(20);
   });
 
   it('nestjs gt-01 guard shape: the register-named service method still wins its real pool', () => {

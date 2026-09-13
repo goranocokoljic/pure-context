@@ -83,13 +83,13 @@ describe('Phase 105 Task 653 — Scala data definitions and one-word members', (
     expect(r!.debugScore!.identityExact).toBe(60);
   });
 
-  it('does not touch a one-word member in a non-Scala file', () => {
+  it('applies the same damp to a one-word member in a non-Scala file (Phase 106 Task 660 made the rule global)', () => {
     const [r] = rankSymbols(
       [sym('commit', { kind: 'method', filePath: 'src/repo/Service.kt', signature: 'fun commit(): Commit' })],
       LONG_QUERY,
       true,
     );
-    expect(r!.debugScore!.identityExact).toBe(60);
+    expect(r!.debugScore!.identityExact).toBe(20);
   });
 });
 
@@ -188,6 +188,8 @@ describe('Phase 105 Task 655 — Go structs, C structs and macros', () => {
     const [f] = rankSymbols([sym('packet', { kind: 'function', filePath: 'src/wpaclean.c' })], cq, true);
     expect(s!.debugScore!.identityExact).toBe(10);
     expect(m!.debugScore!.identityExact).toBe(10);
-    expect(f!.debugScore!.identityExact).toBe(60);
+    // Phase 106 (Task 660): the one-word FUNCTION is now damped to ⅓ too once the
+    // query expands to ≥8 queryWords (stems + synonyms) — it was 60 in Phase 105.
+    expect(f!.debugScore!.identityExact).toBe(20);
   });
 });

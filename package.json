@@ -1,6 +1,6 @@
 {
   "name": "purecontext-mcp",
-  "version": "1.38.0",
+  "version": "1.39.0",
   "description": "Change-aware code intelligence for AI coding agents (MCP): blast radius, temporal co-change, and per-symbol risk before the edit — built on token-efficient code navigation",
   "type": "module",
   "license": "MIT",
@@ -82,6 +82,7 @@
     "lint": "eslint src --ext .ts",
     "sync:rules": "node scripts/sync-agent-rules.mjs",
     "benchmark": "vitest bench --run",
+    "bench:guard": "pwsh -NoProfile -File benchmarks/harness/bench_guard.ps1",
     "benchmark:competitive": "vitest bench --run test/benchmarks/competitive.bench.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",

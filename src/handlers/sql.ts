@@ -48,6 +48,8 @@ interface SqlMatch {
   kind: SymbolKind;
   signature: string;
   startByte: number;
+  /** Phase 106 (Task 662): `CREATE TABLE` / `VIEW` / `MATERIALIZED VIEW` rows — a data definition, not behaviour. */
+  sqlTable?: string;
 }
 
 function extractDdlMatches(preprocessed: string): SqlMatch[] {
@@ -68,6 +70,7 @@ function extractDdlMatches(preprocessed: string): SqlMatch[] {
       kind,
       signature: `CREATE ${ddlType} ${name}`,
       startByte: stringIndexToByteOffset(preprocessed, m.index),
+      sqlTable: ddlType,
     });
   }
 
@@ -191,6 +194,10 @@ export const sqlHandler: LanguageHandler = {
         endByte: match.startByte + Buffer.byteLength(match.name, 'utf8'),
         signature: match.signature.slice(0, 120),
         summary: match.signature.slice(0, 200),
+        // Phase 106 (Task 662): lets the ranker treat a one-word table named by one
+        // query word as context (the data-definition identity scaling), the way it
+        // already treats Go structs and Scala case classes.
+        ...(match.sqlTable ? { frameworkMeta: { sql_table: match.sqlTable } } : {}),
       }));
       if (isDbtModel) {
         records.push({
