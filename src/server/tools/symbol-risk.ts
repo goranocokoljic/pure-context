@@ -30,6 +30,8 @@ import { getConfig } from '../../config/config-loader.js';
 import {
   coverageRider,
   ensureTestMappings,
+  getRefTestedSymbolIds,
+  type CoverageStrictness,
   getCoverageStatusMap,
   type CoverageStatus,
 } from '../../core/test-mapper.js';
@@ -66,6 +68,12 @@ export interface SymbolRiskResult {
   reasons: string[];
   /** "low" when the underlying signals are sparse (shallow history, tiny repo). */
   signalQuality: 'ok' | 'low';
+  /**
+   * Phase 107 (Task 666): what `testGap` rests on — 'mention' (a test file
+   * contains the name; the default) or 'ref' (a test symbol references it
+   * through a symbol-level `ref` edge; opt in with `strictness: 'ref'`).
+   */
+  coverageEvidence: CoverageStrictness;
 }
 
 const CHURN_DAY_WINDOW = 90;
@@ -141,9 +149,12 @@ export interface RiskContext {
   /** cyclomatic complexity across all symbols (the complexity percentile basis). */
   complexityDist: number[];
   /** symbol id → stored test mapping (the test-gap basis). */
-  coverage: Map<string, { status: CoverageStatus; testFiles: string[] }>;
+  coverage: Map<string, { status: CoverageStatus; testFileCount: number }>;
   /** Present when this context had to build the mapping on demand (P4). */
-  coverageRider: { coverage?: string };
+  coverageRider: { coverage?: string; coverageNote?: string };
+  /** Task 666: how `tested` is decided; `refTested` holds the ref answer under 'ref'. */
+  coverageEvidence: CoverageStrictness;
+  refTested: Set<string> | null;
   /** distinct commits captured for co-change (0 ⇒ no co-change data). */
   windowCommits: number;
   /** mega-commit exclusion threshold for co-change scoring. */
@@ -160,7 +171,16 @@ export interface RiskContext {
  * expensive part — callers should build it once and score many symbols against
  * it via {@link computeSymbolRiskWithContext}.
  */
-export function buildRiskContext(db: Database.Database, repoId: string): RiskContext {
+export interface RiskContextOptions {
+  /** Task 666: 'ref' narrows the test gap to symbol-level `ref` evidence (default 'mention'). */
+  strictness?: CoverageStrictness;
+}
+
+export function buildRiskContext(
+  db: Database.Database,
+  repoId: string,
+  options: RiskContextOptions = {},
+): RiskContext {
   // ── Churn: distinct commits per file in the 90d window. ─────────────────────
   const sinceTs = Math.floor(Date.now() / 1000) - CHURN_DAY_WINDOW * 86_400;
   const windowCommitRows = getCommitsInWindow(db, repoId, sinceTs);
@@ -225,6 +245,16 @@ export function buildRiskContext(db: Database.Database, repoId: string): RiskCon
   // ── Test mapping (stored; on-demand build only when absent / stale). ───────
   const ensured = ensureTestMappings(repoId, db);
   const coverage = getCoverageStatusMap(repoId, db);
+  // Task 666: the ref answer is a narrowing, never the default. Asked for on
+  // an index without refs, it falls back to mention and says so.
+  let coverageEvidence: CoverageStrictness = 'mention';
+  let refTested: Set<string> | null = null;
+  const rider: RiskContext['coverageRider'] = coverageRider(ensured);
+  if (options.strictness === 'ref') {
+    refTested = getRefTestedSymbolIds(repoId, db);
+    if (refTested) coverageEvidence = 'ref';
+    else rider.coverageNote = "strictness 'ref' requested but the index has no symbol refs — mention evidence used";
+  }
 
   return {
     fileCommitCounts,
@@ -234,7 +264,9 @@ export function buildRiskContext(db: Database.Database, repoId: string): RiskCon
     symbolCentrality,
     complexityDist,
     coverage,
-    coverageRider: coverageRider(ensured),
+    coverageRider: rider,
+    coverageEvidence,
+    refTested,
     windowCommits: countCommits(db, repoId),
     megaCommitThreshold: getConfig().git?.megaCommitThreshold ?? 30,
     weights: getConfig().risk.weights,
@@ -314,9 +346,11 @@ export function computeSymbolRiskWithContext(
   // ── Test gap ─────────────────────────────────────────────────────────────
   // "Some test file mentions the name" — for every kind (a structural
   // symbol is 'unknown' in the store but still lists its files).
-  const tested = (ctx.coverage.get(sym.id)?.testFiles.length ?? 0) > 0;
+  const tested = ctx.refTested
+    ? ctx.refTested.has(sym.id)
+    : (ctx.coverage.get(sym.id)?.testFileCount ?? 0) > 0;
   const testGapNorm = tested ? 0 : 1;
-  if (!tested) reasons.push('no direct test reference');
+  if (!tested) reasons.push(ctx.refTested ? 'no test symbol references it (ref evidence)' : 'no direct test reference');
 
   // ── Co-change spread ───────────────────────────────────────────────────────
   let coChangeNorm = 0;
@@ -369,6 +403,7 @@ export function computeSymbolRiskWithContext(
     },
     reasons,
     signalQuality,
+    coverageEvidence: ctx.coverageEvidence,
   };
 }
 

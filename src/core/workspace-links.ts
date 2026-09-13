@@ -49,6 +49,11 @@ export interface LinkedIndex {
   source: LinkSource;
   /** The linked index's stored HEAD sha (its `repos.git_tree_sha`), if any. */
   sha: string | null;
+  /**
+   * Phase 107 (Task 667): the linked index's graph stamp when this build
+   * opened it (`graphStamp`); set by `prepareLinkedBuild` for live links.
+   */
+  stamp?: string;
 }
 
 export type UnlinkReason =

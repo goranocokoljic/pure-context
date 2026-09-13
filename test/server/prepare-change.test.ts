@@ -31,6 +31,7 @@ vi.mock('../../src/server/tools/search-symbols.js', () => ({ handler: searchMock
 vi.mock('../../src/server/tools/find-references.js', () => ({ handler: findRefsMock }));
 
 import { openDatabase, computeRepoId } from '../../src/core/db/schema.js';
+import { writeSymbolCoverage } from '../../src/core/test-mapper.js';
 import { insertSymbols } from '../../src/core/db/symbol-store.js';
 import { upsertFile } from '../../src/core/db/file-store.js';
 import { insertCommitFiles } from '../../src/core/db/co-change-store.js';
@@ -61,10 +62,7 @@ beforeAll(() => {
     { id: 'sym-alpha', name: 'alpha', kind: 'function', filePath: 'src/a.ts', startByte: 0, endByte: 36, signature: 'function alpha()', summary: '' },
   ]);
   // alpha untested → coverage gap.
-  db.prepare(
-    `INSERT OR REPLACE INTO provider_metadata (repo_id, provider_name, entity_key, metadata, updated_at)
-     VALUES (?, 'test-mapper', ?, ?, ?)`,
-  ).run(REPO_ID, 'sym-alpha', JSON.stringify({ testFiles: [], testSymbolIds: [], coverageStatus: 'untested' }), NOW);
+  writeSymbolCoverage(REPO_ID, db, 'sym-alpha', [], 'untested');
 
   // Rich co-change: src/a.ts moves with the untouched src/shared.ts 6× + padding.
   const commits: RepoCommit[] = [];

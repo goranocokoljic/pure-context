@@ -298,8 +298,10 @@ export interface IndexResult {
   /**
    * Phase 104 (Task 647): what the test mapper did on this run. `mode` is
    * 'skipped' when `skipTestMapper` was set or nothing needed mapping,
-   * 'full' on a first build / rebuild, 'incremental' when only changed test
-   * files and new symbols were mapped. Absent only on remote paths.
+   * 'full' on a first build / rebuild, 'delta' (Phase 107) when a few test
+   * files moved and only the names they could have gained or lost were
+   * re-mapped, 'incremental' when only new symbols were mapped. Absent only
+   * on remote paths.
    */
   testMapper?: TestMapperStats;
 }
@@ -309,7 +311,7 @@ export interface TestMapperStats {
   ms: number;
   testFiles: number;
   symbols: number;
-  mode: 'full' | 'incremental' | 'skipped';
+  mode: 'full' | 'delta' | 'incremental' | 'skipped';
 }
 
 export interface DiscoveredFile {

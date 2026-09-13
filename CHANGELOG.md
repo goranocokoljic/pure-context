@@ -11,6 +11,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.40.0] - 2026-09-13 — Phase 107: Incremental Cost Follow-ups
+
+The four items Phases 101–105 measured and wrote down as "not done", plus one
+product bug found on the way. No ranking change (`bench:guard` byte-identical).
+Schema v16, additive: three new test-mapping tables and
+`repo_links.linked_stamp`; no forced re-index.
+
+### Added
+- **Compact test-mapping store** (`src/core/db/test-mapping-store.ts`, Task
+  665b). Found while measuring Task 665: the 1.37–1.39 mapper stored one JSON
+  row per production symbol with every matched test file path AND every test
+  symbol id of those files — flutter **560 MB of rows in a 133 MB index**,
+  jenkins 83 MB in 47 MB, written on the first coverage-needing call. Now one
+  row per symbol: status + file count + a bitset over stable test-file
+  ordinals (`test_mapper_files`), plus `test_name_runs` (word runs of
+  composite names). flutter **8.3 MB**, jenkins 0.8 MB; full builds faster
+  too (jenkins 1.6 s → 0.6 s, flutter 10.3 s → 4.0 s). Test symbol ids are
+  derived on read (no tool consumed them; the web API still returns them).
+  A 1.37–1.39 index rebuilds its mapping once (lazily) and drops the old
+  rows; the mapper's `algo` is 3.
+- **Token-delta remap** (Task 665). An `index_file` on a test file forms the
+  token delta (old ∪ new tokens of the touched files) and re-derives only the
+  names with a word run in it — files outside the touched set are kept from
+  the stored bitset, the touched files re-checked against their new tokens;
+  composite names when every run is in the delta, zero-run names always.
+  Target lookup through `test_name_runs` + `idx_symbols_repo_name` instead of
+  reading every symbol; the symbol-side anti-joins are skipped when
+  `MAX(rowid)` of `symbols` and the counts did not move. `testMapper.mode:
+  'delta'`. Measured (one edited / deleted / added / renamed test file, parity
+  with a forced rebuild on all 24 cases): jenkins 607–904 ms → **33–43 ms**,
+  flutter 4.2–9.5 s → **141–227 ms**, saleor 445–495 → 30–64 ms, novu 361–402 →
+  41–154 ms (`benchmarks/harness/phase107_mapper.mts`).
+- **`strictness: 'ref'`** on `find_untested_symbols` and `get_symbol_risk`
+  (Task 666): "tested" = some test SYMBOL references the production symbol
+  through a Phase-101 `ref` edge, instead of "some test file contains the
+  name". Additive and opt-in: responses carry `coverageEvidence: 'mention' |
+  'ref'`; under `'ref'` `find_untested_symbols` also reports
+  `mentionTestedCount`; an index without symbol refs falls back to mention
+  and adds `coverageNote`. `getSymbolCoverage` gains `testSymbolIdsByRef` /
+  `testFilePathsByRef` (absent, not empty, without refs). Measured gap
+  (`phase107_refgap.mts`): jenkins 7,056 mention-tested vs 1,159 ref-tested
+  (6,234 mention-only, 337 ref-only), saleor 4,474 vs 1,653, flutter 10,679 vs
+  1,886, novu 1,762 vs 46 — the ref answer stays a narrowing, never the
+  default.
+- **Per-link graph stamp** (Task 667). `repo_links.linked_stamp` = the linked
+  index's `graphStamp` (sha256 of its file set + edge set + symbol
+  write-mark; row ids excluded so a same-set re-resolve does not move it) at
+  resolve time. A whole-tree run re-resolves its graph and rebuilds all refs
+  only when a link's stamp moved; before, the rule compared the checkout's
+  HEAD (shared by every root of one checkout — any commit re-resolved every
+  root) and a linked root rebuilt ALL refs on EVERY run. Parity (edge + ref
+  fingerprints, 1.39.0 tree vs this tree): nuxt 10 roots and jenkins 5 roots,
+  0 mismatches (`phase107_links.mts`). No-op whole-tree run: jenkins `core`
+  3.3 s → 1.4 s (59k refs no longer rebuilt), `test` 2.0 → 0.9 s; nuxt roots
+  2.0–2.6 s → 1.3–1.5 s.
+
+### Fixed
+- **Whole-tree memory grew with the sum of every changed file** (Task 668).
+  `indexFolder` read every changed file's bytes into `toProcess` before the
+  first parse batch; rest-api-description under the benchmark's 32 MB
+  `maxFileSizeBytes` (289 OpenAPI files of 1–32 MB, ~2.9 GB) died at 3.9 GB
+  RSS after 22 min, and a first index of any large tree paid the same way.
+  Content is now carried up to 256 MB in total and re-read per batch past
+  that, and a parse/commit batch closes at 500 files OR 64 MB of content
+  (the count cap alone bounded nothing: all 289 files fit one batch and the
+  rerun still hit 3.8 GB). Measured after both: 0.7–0.84 GB flat over a
+  15-minute run (1.28 GB in the first minute). The harness baseline
+  (`run_benchmark.ts`) likewise streams one file at a time instead of
+  `getAllFilesWithContent`. Still open there: the OpenAPI handler is very
+  slow on 10–30 MB files (wall time, not memory).
+- `repo_links` on a v12 table created before Phase 102 gains its `built`
+  column in the v16 migration (defensive).
+
+### Changed
+- `getCoverageStatusMap` returns `{ status, testFileCount }` (was the file
+  list) — the two callers only needed the count.
+- Schema v16 (additive). `index_folder({ onlyChanged: true })` takes one full
+  walk on a v15 index (`schema_outdated`), hash-skipping unchanged files.
+
+---
+
 ## [1.39.0] - 2026-09-13 — Phase 106: Regression Guard, Hold-Out Discipline, the Global One-Word Identity Rule
 
 Three things Phase 105 surfaced without asking for them are closed here. A

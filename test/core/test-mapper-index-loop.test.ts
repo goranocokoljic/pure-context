@@ -68,7 +68,7 @@ describe('test mapper in the index loop', () => {
   it('reindexFiles (index_file) re-tokenizes a changed test file', async () => {
     writeFileSync(join(dir, 'test', 'a.test.ts'), "import { alpha, beta } from '../src/a';\nalpha(); beta();\n");
     const r = await reindexFiles(repoId, ['test/a.test.ts']);
-    expect(r.testMapper?.mode).toBe('full'); // token side moved → every symbol re-mapped
+    expect(r.testMapper?.mode).toBe('delta'); // one test file moved → only the names it can touch (Phase 107)
     expect(statusOf('beta')).toEqual({ status: 'tested', files: ['test/a.test.ts'] });
   });
 
@@ -83,7 +83,7 @@ describe('test mapper in the index loop', () => {
   it('reindexFiles with a deleted test file drops its mentions', async () => {
     unlinkSync(join(dir, 'test', 'a.test.ts'));
     const r = await reindexFiles(repoId, [], ['test/a.test.ts']);
-    expect(r.testMapper?.mode).toBe('full');
+    expect(r.testMapper?.mode).toBe('delta');
     expect(statusOf('alpha')).toEqual({ status: 'untested', files: [] });
     const db = openDatabase(repoId);
     try {

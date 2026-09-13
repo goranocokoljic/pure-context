@@ -43,7 +43,13 @@ import type { SymbolKind } from '../../core/types.js';
 import { isTestFilePath as isTestFile } from '../../core/test-paths.js';
 import { byteOffsetToLine } from './symbol-lines.js';
 import { getAllFileHashes, getFileContent } from '../../core/db/file-store.js';
-import { coverageRider, ensureTestMappings, getCoverageStatusMap } from '../../core/test-mapper.js';
+import {
+  coverageRider,
+  ensureTestMappings,
+  getCoverageStatusMap,
+  getRefTestedSymbolIds,
+  type CoverageStrictness,
+} from '../../core/test-mapper.js';
 
 export const name = 'find_untested_symbols';
 
@@ -105,6 +111,16 @@ export const inputSchema = {
     .number().int().min(1).max(500)
     .optional()
     .describe('Maximum number of untested symbols to return (default 50).'),
+  strictness: z
+    .enum(['mention', 'ref'])
+    .optional()
+    .describe(
+      "What counts as tested. 'mention' (default): some test file contains the symbol name. " +
+      "'ref': some test symbol references it through a symbol-level ref edge — a test that only " +
+      'names it in a string or comment no longer counts, so more symbols come back. The response ' +
+      'says which one was used in coverageEvidence (and, under ref, mentionTestedCount for the ' +
+      'default answer); an index without symbol refs falls back to mention and adds coverageNote.',
+    ),
 };
 
 // ─── Internal types ────────────────────────────────────────────────────────────
@@ -162,6 +178,7 @@ export async function handler(args: {
   minLineCount?: number;
   includeTestRefs?: boolean;
   limit?: number;
+  strictness?: CoverageStrictness;
 }): Promise<CallToolResult> {
   const t0 = Date.now();
   const {
@@ -192,6 +209,16 @@ export async function handler(args: {
     // ── Test mapping (stored; built on demand when absent / stale) ───────────
     const ensured = ensureTestMappings(repoId, db);
     const coverage = getCoverageStatusMap(repoId, db);
+    // Task 666: 'ref' narrows "tested" to symbol-level ref evidence; on an
+    // index without refs it falls back to mention and says so.
+    let coverageEvidence: CoverageStrictness = 'mention';
+    let refTested: Set<string> | null = null;
+    let coverageNote: string | undefined;
+    if (args.strictness === 'ref') {
+      refTested = getRefTestedSymbolIds(repoId, db);
+      if (refTested) coverageEvidence = 'ref';
+      else coverageNote = "strictness 'ref' requested but the index has no symbol refs — mention evidence used";
+    }
     const testFilePaths = new Set<string>();
     for (const path of getAllFileHashes(db, repoId).keys()) {
       if (isTestFile(path)) testFilePaths.add(path);
@@ -238,6 +265,7 @@ export async function handler(args: {
     // ── Classify each symbol ──────────────────────────────────────────────────
     const untestedSymbols: UntestedSymbol[] = [];
     let testedCount = 0;
+    let mentionTestedCount = 0;
 
     // Cache file buffers for line computation
     const fileBufferCache = new Map<string, Buffer>();
@@ -252,7 +280,9 @@ export async function handler(args: {
       // A structural kind (interface) is 'unknown' in the store but still
       // records the files that mention it — the tool's "tested" is "some
       // test file mentions the name", for every kind.
-      const isTested = (coverage.get(sym.id)?.testFiles.length ?? 0) > 0;
+      const mentioned = (coverage.get(sym.id)?.testFileCount ?? 0) > 0;
+      if (mentioned) mentionTestedCount++;
+      const isTested = refTested ? refTested.has(sym.id) : mentioned;
 
       if (isTested) {
         testedCount++;
@@ -321,6 +351,9 @@ export async function handler(args: {
             untestedCount,
             testCoverageRate,
             testFilesScanned: testFilePaths.size,
+            coverageEvidence,
+            ...(refTested ? { mentionTestedCount } : {}),
+            ...(coverageNote ? { coverageNote } : {}),
             ...coverageRider(ensured),
             truncated,
             untestedSymbols: visibleUntested,

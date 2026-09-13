@@ -13,6 +13,7 @@
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type { ImportRecord, IndexOptions, IndexResult } from './types.js';
 import { getIndexDir, openDatabase } from './db/schema.js';
@@ -37,12 +38,56 @@ function inverseRelation(r: LinkRelation): LinkRelation {
 }
 
 /**
+ * The graph stamp of an index (Phase 107, Task 667): what a LINKED root's
+ * resolution against this index depends on — its file set (path + content
+ * hash: symbols and import records derive from content), its edge SET
+ * (source, target, target repo, type — re-export chains read a sibling's
+ * edges; row ids deliberately left out so a re-resolve that produces the same
+ * set keeps the stamp, else two linked roots would re-resolve each other
+ * forever), and a symbol write-mark (count + MAX(indexed_at): a forced
+ * re-extraction with unchanged content still shows). Content-based, so a
+ * commit that touched nothing under the root does not move it — the
+ * pre-1.40 rule compared the checkout's HEAD, which every root of one
+ * checkout shares, so any commit re-resolved every linked root.
+ */
+export function graphStamp(db: Database.Database, repoId: string): string {
+  const h = createHash('sha256');
+  const SEP = String.fromCharCode(0);
+  for (const r of db
+    .prepare<[string], { path: string; content_hash: string }>(
+      'SELECT path, content_hash FROM files WHERE repo_id = ? ORDER BY path',
+    )
+    .iterate(repoId)) {
+    h.update(r.path + SEP + r.content_hash + SEP);
+  }
+  h.update('|edges|');
+  for (const r of db
+    .prepare<[string], { source_file: string; target_file: string; target_repo_id: string | null; edge_type: string }>(
+      `SELECT source_file, target_file, target_repo_id, edge_type FROM dep_edges WHERE repo_id = ?
+       ORDER BY source_file, target_file, target_repo_id, edge_type`,
+    )
+    .iterate(repoId)) {
+    h.update(r.source_file + SEP + r.target_file + SEP + (r.target_repo_id ?? '') + SEP + r.edge_type + SEP);
+  }
+  const sym = db
+    .prepare<[string], { c: number; m: number | null }>(
+      'SELECT COUNT(*) AS c, MAX(indexed_at) AS m FROM symbols WHERE repo_id = ?',
+    )
+    .get(repoId);
+  h.update(`|symbols|${sym?.c ?? 0}:${sym?.m ?? 0}`);
+  return h.digest('hex').slice(0, 32);
+}
+
+/**
  * Has the workspace changed since this index last built its graph? True when
  * a link appeared or vanished, when a stored link was recorded by the OTHER
- * side only (`built = 0`), or when a linked sibling's checkout moved. A
- * whole-tree run then re-resolves the WHOLE graph from stored import records
- * (no re-parse) instead of only the reprocessed files' — the documented
- * "run index_folder on this root" repair.
+ * side only (`built = 0`), or when a linked index's graph stamp moved (Task
+ * 667 — before 1.40: when the sibling's checkout HEAD moved, which every root
+ * of one checkout shares). A row without a stamp (pre-1.40, or the stamp
+ * could not be read) falls back to the HEAD comparison. A whole-tree run then
+ * re-resolves the WHOLE graph from stored import records (no re-parse)
+ * instead of only the reprocessed files' — the documented "run index_folder
+ * on this root" repair.
  */
 export function linksChangedSince(stored: RepoLink[], live: LinkedIndex[]): boolean {
   if (stored.length !== live.length) return true;
@@ -50,6 +95,10 @@ export function linksChangedSince(stored: RepoLink[], live: LinkedIndex[]): bool
   for (const l of live) {
     const s = byId.get(l.repoId);
     if (!s || !s.built) return true;
+    if (s.linkedStamp !== null && l.stamp !== undefined) {
+      if (s.linkedStamp !== l.stamp) return true;
+      continue;
+    }
     const now = existsSync(l.rootPath) ? gitHeadSha(l.rootPath) : null;
     if ((s.linkedSha ?? null) !== now) return true;
   }
@@ -138,7 +187,16 @@ export function prepareLinkedBuild(
     }
     handles.push(ldb);
     handleOf.set(link.repoId, ldb);
-    live.push(link);
+    // Task 667: the sibling's graph stamp as this build sees it — compared
+    // by `linksChangedSince`, stored by `commit`. Unreadable → undefined →
+    // the HEAD comparison decides and the row stores no stamp ("changed").
+    let stamp: string | undefined;
+    try {
+      stamp = graphStamp(ldb, link.repoId);
+    } catch (err) {
+      logger.debug(`cross-index: graph stamp of ${link.repoId} unreadable: ${String(err)}`);
+    }
+    live.push(stamp === undefined ? link : { ...link, stamp });
     let files: IndexedFileSet | null = null;
     let fams: FamilyResolvers | undefined;
     let famsBuilt = false;
@@ -199,6 +257,8 @@ export function prepareLinkedBuild(
           linkedRootPath: l.rootPath,
           // The sibling's CHECKOUT head now: drift = it moved since this build.
           linkedSha: existsSync(l.rootPath) ? gitHeadSha(l.rootPath) : null,
+          // Task 667: the sibling's graph as this build resolved against it.
+          linkedStamp: l.stamp ?? null,
           source: l.source,
           relation: l.relation,
         })),

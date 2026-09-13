@@ -6,6 +6,7 @@ import type { RepoMetadata } from '../types.js';
 import { EMBEDDINGS_DDL } from './embedding-store.js';
 import { CO_CHANGE_DDL } from './co-change-store.js';
 import { TEST_TOKEN_DDL } from './test-token-store.js';
+import { TEST_MAPPING_DDL } from './test-mapping-store.js';
 import { getSqliteFactory, type SqliteDatabase } from './sqlite-loader.js';
 
 // ─── SQLite backend ───────────────────────────────────────────────────────────
@@ -35,7 +36,16 @@ type DatabaseConstructor = new (filename: string) => SqliteDatabase;
 // content hash + deflated word-token set) that makes the test mapper
 // incremental. Created by the base DDL; a pre-v15 index builds its rows on
 // its next whole-tree run or on the first coverage-needing tool call.
-export const SCHEMA_VERSION = 15;
+// v16 (Phase 107): additive — the compact test-mapping store
+// (`test_mapper_files`, `test_mappings`, `test_name_runs`): per-symbol bitset
+// rows over stable test-file ordinals + composite-name word runs, replacing
+// the JSON rows in provider_metadata (flutter 560 MB -> ~7 MB). Created by the
+// base DDL; the mapper rebuilds itself (algo 3) on the next whole-tree run or
+// the first coverage-needing tool call and drops the old rows then. Also
+// `repo_links.linked_stamp` (nullable; migration ADD COLUMN) — the linked
+// index's graph stamp at resolve time, so an unchanged link no longer forces a
+// whole-graph re-resolve + ref rebuild on every whole-tree run.
+export const SCHEMA_VERSION = 16;
 
 const DDL = `
 PRAGMA journal_mode = WAL;
@@ -128,6 +138,7 @@ CREATE TABLE IF NOT EXISTS repo_links (
   linked_repo_id   TEXT    NOT NULL,
   linked_root_path TEXT    NOT NULL,
   linked_sha       TEXT,
+  linked_stamp     TEXT,
   linked_at        INTEGER NOT NULL,
   source           TEXT    NOT NULL DEFAULT 'auto',
   relation         TEXT    NOT NULL DEFAULT 'sibling',
@@ -255,6 +266,7 @@ export function initializeDatabase(db: InstanceType<DatabaseConstructor>): void 
   db.exec(EMBEDDINGS_DDL);
   db.exec(CO_CHANGE_DDL);
   db.exec(TEST_TOKEN_DDL);
+  db.exec(TEST_MAPPING_DDL);
   runMigrations(db);
   // Ensure source column exists — added after v7, using try-catch for existing DBs
   // (SQLite does not support ALTER TABLE ... ADD COLUMN IF NOT EXISTS)
@@ -480,6 +492,22 @@ function runMigrations(db: InstanceType<DatabaseConstructor>): void {
   // Migration v14 → v15 (Phase 104): `test_file_tokens` is likewise a NEW
   // table created by the base DDL. Nothing to run; the test mapper fills it
   // on the next whole-tree run or the first coverage-needing tool call.
+
+  // Migration v15 → v16 (Phase 107): the three compact test-mapping tables
+  // are NEW tables created by the base DDL (nothing to run; the mapper's algo
+  // bump 2 → 3 rebuilds them lazily and deletes the old JSON rows). Task 667
+  // adds `repo_links.linked_stamp` (nullable — NULL reads as "changed", so an
+  // old row simply re-resolves once more) and, defensively, `built` for a
+  // v12 table created before Phase 102 added it to the DDL.
+  if (dbVersion < 16) {
+    const linkCols = db.prepare("PRAGMA table_info(repo_links)").all() as Array<{ name: string }>;
+    if (!linkCols.some((c) => c.name === 'built')) {
+      db.exec('ALTER TABLE repo_links ADD COLUMN built INTEGER NOT NULL DEFAULT 1');
+    }
+    if (!linkCols.some((c) => c.name === 'linked_stamp')) {
+      db.exec('ALTER TABLE repo_links ADD COLUMN linked_stamp TEXT');
+    }
+  }
 }
 
 // ─── Repo operations ──────────────────────────────────────────────────────────

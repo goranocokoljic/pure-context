@@ -34,6 +34,7 @@ import {
   parseDeletedSymbolNames,
 } from '../../src/core/diff-parser.js';
 import { openDatabase, computeRepoId } from '../../src/core/db/schema.js';
+import { writeSymbolCoverage } from '../../src/core/test-mapper.js';
 import { insertSymbols } from '../../src/core/db/symbol-store.js';
 import { upsertFile } from '../../src/core/db/file-store.js';
 import { handler } from '../../src/server/tools/analyze-diff.js';
@@ -544,10 +545,7 @@ describe('handler — analyze_diff impact synthesis (fixture diff)', () => {
     insertCommitFiles(db, REPO_ID, commits);
 
     // ── Coverage gap: sym-existing is untested ───────────────────────────────
-    db.prepare(
-      `INSERT OR REPLACE INTO provider_metadata (repo_id, provider_name, entity_key, metadata, updated_at)
-       VALUES (?, 'test-mapper', 'sym-existing', ?, ?)`,
-    ).run(REPO_ID, JSON.stringify({ testFiles: [], testSymbolIds: [], coverageStatus: 'untested' }), NOW);
+    writeSymbolCoverage(REPO_ID, db, 'sym-existing', [], 'untested');
 
     // ── Import cycle: src/foo.ts <-> src/bar.ts ──────────────────────────────
     const edge = db.prepare(

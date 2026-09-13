@@ -72,6 +72,21 @@ import { maybeCloneWorktreeIndex } from './worktree-clone.js';
  * Index a folder end-to-end:
  * discover files → parse → extract symbols + imports → build dep graph → persist.
  */
+/**
+ * How many bytes of changed-file content a whole-tree run keeps in memory
+ * between the hash pass and the parse batches (Phase 107, Task 668). Past the
+ * budget, files are re-read per batch instead of held.
+ */
+const CARRIED_CONTENT_BUDGET_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Upper bound on the content bytes of ONE parse/commit batch (Task 668). The
+ * file-count cap (`indexing.commitBatchSize`, default 500) still applies; the
+ * smaller of the two closes the batch. Applies even with `commitBatchSize: 0`
+ * (single transaction) — memory safety over the legacy one-transaction shape.
+ */
+const BATCH_CONTENT_BUDGET_BYTES = 64 * 1024 * 1024;
+
 export async function indexFolder(
   rootPath: string,
   options: IndexOptions = {},
@@ -236,12 +251,22 @@ export async function indexFolder(
     }
   }
 
-  // ── 5. Filter to changed / new files (carry content to avoid double-read) ──
-  interface FileEntry { relPath: string; content: Buffer; hash: string }
+  // ── 5. Filter to changed / new files ─────────────────────────────────────
+  // Content is carried from the hash read to the parse only up to
+  // `CARRIED_CONTENT_BUDGET_BYTES` in total; past it the entry keeps hash +
+  // path and the batch loop re-reads the file (Phase 107, Task 668: before
+  // this, memory grew with the SUM of every changed file — rest-api-description
+  // under the benchmark's 32 MB cap held 2.9 GB of OpenAPI text in this array
+  // and the run died at 3.9 GB RSS; a first index of a large tree paid the
+  // same way). The re-read hits the OS file cache; a file that changed in
+  // between is processed with its new bytes and hash.
+  interface FileEntry { relPath: string; content: Buffer | null; hash: string; size: number }
   const toProcess: FileEntry[] = [];
+  const errors: Array<{ file: string; message: string }> = [];
   let filesSkipped = limitSkipped;
   let filesUnchanged = 0;
   let filesFailed = 0;
+  let carriedBytes = 0;
 
   for (const df of supportedFiles) {
     let content: Buffer;
@@ -258,15 +283,52 @@ export async function indexFolder(
       filesUnchanged++;
       continue;
     }
-    toProcess.push({ relPath: df.path, content, hash });
+    const carry = carriedBytes + content.length <= CARRIED_CONTENT_BUDGET_BYTES;
+    if (carry) carriedBytes += content.length;
+    toProcess.push({ relPath: df.path, content: carry ? content : null, hash, size: content.length });
   }
 
   logger.info(`${toProcess.length} files to process, ${filesSkipped} unchanged`);
 
+  /** The bytes of an entry: carried, or re-read now (see step 5). */
+  /**
+   * Batches of `toProcess`: at most `batchSize` files AND at most
+   * `BATCH_CONTENT_BUDGET_BYTES` of content each (Task 668: 289 OpenAPI files
+   * of 1–32 MB fit ONE 500-file batch, whose parse results + bytes reached
+   * 3.8 GB — a count cap alone bounds nothing on big files). A single
+   * oversized file is its own batch.
+   */
+  const batches = (): FileEntry[][] => {
+    const out: FileEntry[][] = [];
+    let cur: FileEntry[] = [];
+    let bytes = 0;
+    for (const e of toProcess) {
+      if (cur.length > 0 && (cur.length >= batchSize || bytes + e.size > BATCH_CONTENT_BUDGET_BYTES)) {
+        out.push(cur);
+        cur = [];
+        bytes = 0;
+      }
+      cur.push(e);
+      bytes += e.size;
+    }
+    if (cur.length > 0) out.push(cur);
+    return out;
+  };
+
+  const loadEntry = (e: FileEntry): { relPath: string; content: Buffer; hash: string } | null => {
+    if (e.content) return { relPath: e.relPath, content: e.content, hash: e.hash };
+    try {
+      const content = readFileSync(join(absRoot, e.relPath));
+      return { relPath: e.relPath, content, hash: computeHash(content) };
+    } catch (err) {
+      errors.push({ file: e.relPath, message: `re-read failed: ${err instanceof Error ? err.message : String(err)}` });
+      return null;
+    }
+  };
+
   // ── 6–9. Process each changed file ────────────────────────────────────────
   const resolver = createResolver(absRoot);
   const allImports: ImportRecord[] = [];
-  const errors: Array<{ file: string; message: string }> = [];
   let symbolsFound = 0;
 
   const concurrency = Math.min(options.concurrency ?? cpus().length, 8);
@@ -289,7 +351,7 @@ export async function indexFolder(
     options.commitBatchSize ?? getConfig().indexing?.commitBatchSize ?? 500;
   const batchSize =
     commitBatchSize > 0 ? commitBatchSize : Math.max(toProcess.length, 1);
-  const totalBatches = Math.max(Math.ceil(toProcess.length / batchSize), 0);
+  let totalBatches = Math.max(Math.ceil(toProcess.length / batchSize), 0);
   let batchesCommitted = 0;
 
   /** Write one batch of parse results in a single transaction. */
@@ -359,6 +421,8 @@ export async function indexFolder(
     }
   };
 
+  totalBatches = batches().length;
+
   if (concurrency > 1 && toProcess.length > 1 && canParallelize) {
     // ── Parallel path: dispatch to worker thread pool, one pool.run per batch ──
     // Batching pool.run also caps peak memory: parse results for at most one
@@ -366,8 +430,8 @@ export async function indexFolder(
     const pool = createWorkerPool(concurrency);
     try {
       const adapterNames = adapters.map((a) => a.name);
-      for (let start = 0; start < toProcess.length; start += batchSize) {
-        const chunk = toProcess.slice(start, start + batchSize);
+      for (const raw of batches()) {
+        const chunk = raw.map(loadEntry).filter((e): e is NonNullable<typeof e> => e !== null);
         const jobs: ParseJob[] = chunk.map(({ relPath, content }) => ({
           relPath,
           // Uint8Array view over the Buffer — structured clone copies just this slice.
@@ -406,10 +470,11 @@ export async function indexFolder(
     // Parsing is async so it happens outside the (synchronous) transaction;
     // each batch of results is then written in one transaction like the
     // parallel path.
-    for (let start = 0; start < toProcess.length; start += batchSize) {
-      const chunk = toProcess.slice(start, start + batchSize);
+    for (const chunk of batches()) {
       const batch: Parameters<typeof commitBatch>[0] = [];
-      for (const entry of chunk) {
+      for (const raw of chunk) {
+        const entry = loadEntry(raw);
+        if (!entry) continue;
         const { relPath, content, hash } = entry;
         try {
           const { symbols, imports, declaredPackage } = await processFile(relPath, content, adapters, { rootPath: absRoot });
@@ -433,9 +498,10 @@ export async function indexFolder(
   // Phase 99: a whole-tree run DISCOVERS the workspace links (same git
   // toplevel / explicit config) and resolves local misses across them. When
   // the link set changed since the last build (a sibling appeared, was
-  // recorded by the other side, or moved), the WHOLE graph is re-resolved
-  // from stored import records — otherwise unchanged files would keep their
-  // pre-link edges forever (a no-op walk only rebuilds reprocessed files).
+  // recorded by the other side, or its graph stamp moved — Task 667), the
+  // WHOLE graph is re-resolved from stored import records — otherwise
+  // unchanged files would keep their pre-link edges forever (a no-op walk
+  // only rebuilds reprocessed files).
   const storedLinks = getRepoLinks(db, repoId);
   let graphImports: ImportRecord[] = allImports;
   const linked = prepareLinkedBuild(db, repoId, absRoot, () => graphImports, {
@@ -471,16 +537,18 @@ export async function indexFolder(
     // ── 10'. Symbol-level ref edges (Phase 101) — same scope as the file
     //        edges (all when the whole graph was re-resolved, else the
     //        reprocessed files + their importers); the linked handles are
-    //        still open so cross refs see the same workspace. A LINKED root
-    //        always rebuilds everything: a ref that chains through a
-    //        sibling's re-export depends on the sibling's EDGES (nuxt: vite →
-    //        nuxt/schema.js → @nuxt/schema), which can change without any
-    //        file of this root changing.
+    //        still open so cross refs see the same workspace. A ref that
+    //        chains through a sibling's re-export depends on the sibling's
+    //        EDGES (nuxt: vite → nuxt/schema.js → @nuxt/schema), which can
+    //        change without any file of this root changing — before 1.40 a
+    //        linked root therefore always rebuilt everything; since Phase
+    //        107 (Task 667) the sibling's edge set is part of its graph
+    //        stamp, so that case is exactly `reresolveAll`.
     if (symbolEdgesEnabled(options.skipSymbolEdges)) {
       symbolRefStats = rebuildSymbolRefs(
         db,
         repoId,
-        reresolveAll || linked.links.length > 0 ? 'all' : toProcess.map((e) => e.relPath),
+        reresolveAll ? 'all' : toProcess.map((e) => e.relPath),
         linked.targets,
       );
     }

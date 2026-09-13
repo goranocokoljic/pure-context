@@ -288,6 +288,8 @@ Composite, explainable change-risk verdict for a symbol: `riskScore` 0–100, ba
 
 **Guardrail:** before broad automated edits to a symbol, consult its risk. For a `high` symbol, inspect its callers (`get_blast_radius`) and co-changers (`get_co_change`) *first* — those are the second-order edits most likely to break. `search_symbols` and `get_symbol_source` accept `includeRisk: true` to attach a compact `{ band, riskScore }` inline (opt-in, default off). `get_context_bundle` returns `historicalNeighbors` — co-changing files not reachable via imports — when co-change data exists.
 
+- `strictness` (optional, 1.40.0): `'mention'` (default) — the `testGap` factor counts a symbol as tested when some test file contains its name; `'ref'` — only when a test SYMBOL references it through a symbol-level `ref` edge (a test that names it in a string or comment no longer counts). The response says which one was used in `coverageEvidence`; an index without symbol refs falls back to mention and adds `coverageNote`. The default numbers are unchanged — measured on jenkins, 88% of mention-tested symbols have no ref-backed test (findings, Phase 107), so `'ref'` is a deliberate narrowing, not a better default.
+
 > Risk and co-change are **code-centered** — they intentionally model no author/ownership/productivity metrics.
 
 ### `analyze_diff`
@@ -576,6 +578,9 @@ Type dependency graph — which types reference which other types.
 Exported symbols that no test file mentions (name-based heuristic, not runtime coverage). Reads the stored test mapping (1.37.0: built incrementally at index time — every test file tokenized once, keyed by content hash; a production symbol is "tested" when a test file contains its name with word boundaries on both sides). If the repo was indexed with `skipTestMapper` (or the mapping is stale), the tool builds it on first use and says so: `coverage: 'built on demand (N ms, full; index had no test mapping)'`. The same store feeds the `testGap` factor of `get_symbol_risk` and the `coverageGaps` / `recommendedTests` of `analyze_diff` / `prepare_change`.
 
 - `scope` (optional), `filePath` (optional), `kinds` (optional), `minLineCount` (optional, default 3), `includeTestRefs` (optional), `limit` (optional, default 50)
+- `strictness` (optional, 1.40.0): `'mention'` (default) or `'ref'` — under `'ref'` a symbol is tested only when a test symbol references it through a symbol-level `ref` edge; the response carries `coverageEvidence` and, under `'ref'`, `mentionTestedCount` (the default answer beside it). An index without symbol refs falls back to mention and adds `coverageNote`.
+
+Since 1.40.0 the mapping lives in a compact bitset store (`test_mappings`; flutter 560 MB of JSON rows → 8 MB) and an `index_file` on a test file re-maps only the names that file could have gained or lost (`testMapper.mode: 'delta'`; jenkins 0.9 s → 40 ms, flutter 5 s → 0.2 s). The per-symbol web API (`/api/repos/:id/coverage?symbolId=`) also returns `testSymbolIdsByRef` / `testFilePathsByRef` when the index has symbol refs.
 
 ### `get_test_coverage_map`
 Per-file coverage map with `coverageRatio` per file and aggregated totals.

@@ -50,6 +50,30 @@ export function getAllTestTokens(db: Database.Database, repoId: string): Map<str
   return out;
 }
 
+/**
+ * path → token set for ONLY the given paths (Phase 107, Task 665): the old
+ * token sets of the test files a run is about to re-tokenize or drop, read
+ * before the rows are overwritten so the run can form its token delta.
+ */
+export function getTestTokensFor(
+  db: Database.Database,
+  repoId: string,
+  filePaths: readonly string[],
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  const CHUNK = 500;
+  for (let i = 0; i < filePaths.length; i += CHUNK) {
+    const slice = filePaths.slice(i, i + CHUNK);
+    const rows = db
+      .prepare<string[], { file_path: string; tokens: Buffer }>(
+        `SELECT file_path, tokens FROM test_file_tokens WHERE repo_id = ? AND file_path IN (${slice.map(() => '?').join(',')})`,
+      )
+      .all(repoId, ...slice);
+    for (const r of rows) out.set(r.file_path, decodeTokens(r.tokens));
+  }
+  return out;
+}
+
 export function upsertTestTokens(
   db: Database.Database,
   repoId: string,

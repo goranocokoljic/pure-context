@@ -21,7 +21,7 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 import { openDatabase, computeRepoId } from '../../src/core/db/schema.js';
-import { TEST_MAPPER_ALGO } from '../../src/core/test-mapper.js';
+import { TEST_MAPPER_ALGO, writeSymbolCoverage } from '../../src/core/test-mapper.js';
 import { insertSymbols } from '../../src/core/db/symbol-store.js';
 import { upsertFile } from '../../src/core/db/file-store.js';
 import { insertCommitFiles } from '../../src/core/db/co-change-store.js';
@@ -87,10 +87,7 @@ beforeAll(() => {
     { id: 'sym-alpha', name: 'alpha', kind: 'function', filePath: 'src/a.ts', startByte: 0, endByte: 39, signature: 'function alpha()', summary: '' },
   ]);
   // alpha is TESTED → isolates the co-change signal from coverage gaps.
-  db.prepare(
-    `INSERT OR REPLACE INTO provider_metadata (repo_id, provider_name, entity_key, metadata, updated_at)
-     VALUES (?, 'test-mapper', ?, ?, ?)`,
-  ).run(REPO_ID, 'sym-alpha', JSON.stringify({ testFiles: ['test/a.test.ts'], testSymbolIds: [], coverageStatus: 'tested' }), NOW);
+  writeSymbolCoverage(REPO_ID, db, 'sym-alpha', ['test/a.test.ts'], 'tested');
   // Phase 104: a hand-built mapping needs the mapper's meta row, or the lazy
   // build treats it as absent and rebuilds from the (fixture-less) files.
   db.prepare(

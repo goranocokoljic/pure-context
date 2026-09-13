@@ -104,9 +104,37 @@ Useful `index_folder` options:
   `prepare_change` (the response carries `coverage: 'built on demand (N
   ms, …)'`); `check_index_staleness` reports `testMapper: fresh | stale |
   absent`. `IndexResult.testMapper` / the `index_folder` response show
-  `{ ms, testFiles, symbols, mode: full | incremental | skipped }`.
+  `{ ms, testFiles, symbols, mode: full | delta | incremental | skipped }` —
+  `delta` (1.40.0) is the path an `index_file` on a test file takes: only
+  the production names whose word runs meet the touched files' old ∪ new
+  tokens are re-derived (jenkins 0.9 s → 40 ms, flutter 5 s → 0.2 s), rows
+  are bitsets over stable test-file ordinals (`test_mappings`, schema v16;
+  flutter 560 MB of 1.37-style JSON rows → 8 MB). A 1.37–1.39 index rebuilds
+  its mapping once (lazily, on the next whole-tree run or coverage-needing
+  call) and drops the old rows then.
+- `strictness: 'ref'` on `find_untested_symbols` / `get_symbol_risk`
+  (1.40.0) narrows "tested" to symbol-level `ref` evidence; the response's
+  `coverageEvidence` says which rule applied. Opt-in — the gap is large
+  (jenkins: 7,056 mention-tested vs 1,159 ref-tested).
 - `onlyChanged: true` — after the first index, re-index from git's change
   list instead of walking the tree (see Branch discipline).
+
+**Memory.** A whole-tree run keeps changed-file content in memory between the
+hash pass and the parse batches only up to 256 MB in total (1.40.0), and a
+parse/commit batch closes at `indexing.commitBatchSize` files (500) OR 64 MB
+of content, whichever comes first; past the budget, files are re-read per
+batch from the OS cache. Before 1.40.0 the run held EVERY changed file's
+bytes at once — rest-api-description under a 32 MB `maxFileSizeBytes` (289
+OpenAPI files of 1–32 MB) reached 3.9 GB RSS; after: 0.7–0.84 GB.
+
+**Linked roots (split build trees).** A whole-tree run on a linked root
+re-resolves its whole graph and rebuilds every symbol ref only when a
+linked index's *graph stamp* moved (1.40.0: a content hash of the
+sibling's file set + edge set + symbol write-mark, stored per link in
+`repo_links.linked_stamp`). Before 1.40.0 the rule compared the checkout's
+HEAD — which every root of one checkout shares — so any commit re-resolved
+every linked root, and a linked root rebuilt all its refs on every run
+(jenkins `core`: 59k refs, 3.3 s → 1.4 s no-op run).
 
 ## Exclusions
 

@@ -9,6 +9,9 @@
  * broad automated edits to a `high` symbol (inspect callers + co-changers first).
  *
  * Code-centered only — no author/ownership/productivity metrics.
+ *
+ * Phase 107 (Task 666): `strictness: 'ref'` narrows the test-gap evidence to
+ * symbol-level `ref` edges; the default numbers are unchanged.
  */
 
 import { z } from 'zod';
@@ -33,9 +36,23 @@ export const description =
 export const inputSchema = {
   repoId: z.string().describe('Repo ID from index_folder or resolve_repo'),
   symbolId: z.string().describe('Symbol ID from search_symbols or get_file_outline'),
+  strictness: z
+    .enum(['mention', 'ref'])
+    .optional()
+    .describe(
+      "What counts as tested for the testGap factor. 'mention' (default): some test file " +
+      "contains the symbol name. 'ref': some test symbol references it through a symbol-level " +
+      "ref edge (a test that only names it in a string or comment no longer counts). The " +
+      'response says which one was used in coverageEvidence; an index without symbol refs ' +
+      'falls back to mention and adds coverageNote.',
+    ),
 };
 
-export async function handler(args: { repoId: string; symbolId: string }): Promise<CallToolResult> {
+export async function handler(args: {
+  repoId: string;
+  symbolId: string;
+  strictness?: 'mention' | 'ref';
+}): Promise<CallToolResult> {
   const t0 = Date.now();
   const { repoId, symbolId } = args;
 
@@ -51,7 +68,7 @@ export async function handler(args: { repoId: string; symbolId: string }): Promi
 
     // Phase 104: the context carries the `coverage` rider when the test
     // mapping had to be built on demand (a `skipTestMapper` index).
-    const ctx = buildRiskContext(db, repoId);
+    const ctx = buildRiskContext(db, repoId, { strictness: args.strictness });
     const risk = computeSymbolRiskWithContext(db, repoId, symbolId, ctx);
     if (!risk) {
       return {

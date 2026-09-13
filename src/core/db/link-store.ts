@@ -16,6 +16,15 @@ export interface RepoLink {
   linkedRootPath: string;
   /** The linked index's stored HEAD when the edges were built (null: not git / unknown). */
   linkedSha: string | null;
+  /**
+   * Phase 107 (Task 667): the linked index's graph stamp (`graphStamp` in
+   * cross-index.ts — a content hash of its file set + edge set + symbol
+   * write-marks) at the moment this index resolved against it. A whole-tree
+   * run compares it with the sibling's CURRENT stamp: unchanged → the link
+   * contributed nothing new, no re-resolve and no ref rebuild for it. Null =
+   * unknown (pre-1.40 row, or written by the other side) = "changed" (R3).
+   */
+  linkedStamp: string | null;
   linkedAt: number;
   source: LinkSource;
   relation: LinkRelation;
@@ -34,6 +43,7 @@ interface Row {
   linked_repo_id: string;
   linked_root_path: string;
   linked_sha: string | null;
+  linked_stamp?: string | null;
   linked_at: number;
   source: string;
   relation: string;
@@ -46,6 +56,7 @@ function rowToLink(r: Row): RepoLink {
     linkedRepoId: r.linked_repo_id,
     linkedRootPath: r.linked_root_path,
     linkedSha: r.linked_sha,
+    linkedStamp: r.linked_stamp ?? null,
     linkedAt: r.linked_at,
     source: r.source === 'config' ? 'config' : 'auto',
     relation: (['nested', 'parent', 'sibling', 'config'] as const).includes(r.relation as LinkRelation)
@@ -67,12 +78,12 @@ export function getRepoLinks(db: Database.Database, repoId: string): RepoLink[] 
 export function replaceRepoLinks(
   db: Database.Database,
   repoId: string,
-  links: Array<Omit<RepoLink, 'repoId' | 'linkedAt' | 'built'>>,
+  links: Array<Omit<RepoLink, 'repoId' | 'linkedAt' | 'built' | 'linkedStamp'> & { linkedStamp?: string | null }>,
 ): void {
   const del = db.prepare('DELETE FROM repo_links WHERE repo_id = ?');
   const ins = db.prepare(`
-    INSERT INTO repo_links (repo_id, linked_repo_id, linked_root_path, linked_sha, linked_at, source, relation, built)
-    VALUES (@repoId, @linkedRepoId, @linkedRootPath, @linkedSha, @linkedAt, @source, @relation, 1)
+    INSERT INTO repo_links (repo_id, linked_repo_id, linked_root_path, linked_sha, linked_stamp, linked_at, source, relation, built)
+    VALUES (@repoId, @linkedRepoId, @linkedRootPath, @linkedSha, @linkedStamp, @linkedAt, @source, @relation, 1)
   `);
   const now = Date.now();
   db.transaction(() => {
@@ -83,6 +94,7 @@ export function replaceRepoLinks(
         linkedRepoId: l.linkedRepoId,
         linkedRootPath: l.linkedRootPath,
         linkedSha: l.linkedSha,
+        linkedStamp: l.linkedStamp ?? null,
         linkedAt: now,
         source: l.source,
         relation: l.relation,
@@ -103,11 +115,11 @@ export function replaceRepoLinks(
 export function recordReverseLink(
   db: Database.Database,
   repoId: string,
-  link: Omit<RepoLink, 'repoId' | 'linkedAt' | 'built'>,
+  link: Omit<RepoLink, 'repoId' | 'linkedAt' | 'built' | 'linkedStamp'>,
 ): void {
   db.prepare(`
-    INSERT INTO repo_links (repo_id, linked_repo_id, linked_root_path, linked_sha, linked_at, source, relation, built)
-    VALUES (@repoId, @linkedRepoId, @linkedRootPath, @linkedSha, @linkedAt, @source, @relation, 0)
+    INSERT INTO repo_links (repo_id, linked_repo_id, linked_root_path, linked_sha, linked_stamp, linked_at, source, relation, built)
+    VALUES (@repoId, @linkedRepoId, @linkedRootPath, @linkedSha, NULL, @linkedAt, @source, @relation, 0)
     ON CONFLICT(repo_id, linked_repo_id) DO UPDATE SET
       linked_root_path = excluded.linked_root_path
   `).run({

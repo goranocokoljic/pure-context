@@ -29,6 +29,7 @@ import { typescriptHandler } from '../../src/handlers/typescript.js';
 import { initParser } from '../../src/core/parse-dispatcher.js';
 import { openDatabase, computeRepoId, getRepo, SCHEMA_VERSION } from '../../src/core/db/schema.js';
 import { getRepoLinks } from '../../src/core/db/link-store.js';
+import { graphStamp } from '../../src/core/cross-index.js';
 import { resolveLinks, describeLinkDrift } from '../../src/core/workspace-links.js';
 import { getBlastRadius, getContextBundle, findDeadCode } from '../../src/graph/graph-traversal.js';
 import { openWorkspace, findLinkedImporters } from '../../src/graph/workspace-graph.js';
@@ -416,6 +417,46 @@ describe('Task 617 — coverage, staleness, honesty', () => {
     db.close();
     expect(describeLinkDrift(raw).status).toBe('moved');
   });
+
+  it('Task 667: a sibling commit its index has not seen does NOT re-resolve this root; a sibling re-index does', async () => {
+    // Converge first: libs re-resolved (pending → built) after app's last
+    // whole-tree build, so app legitimately re-resolves once here.
+    await indexFolder(appRoot, { fileLimit: 100, concurrency: 1, cloneFromWorktree: false, crossIndex: 'auto' });
+    const appDb0 = openDatabase(appId);
+    const before = getRepoLinks(appDb0, appId)[0];
+    appDb0.close();
+    expect(before.linkedStamp).toMatch(/^[0-9a-f]{32}$/);
+    // A commit that touches neither index moves the checkout's HEAD (drift
+    // says `moved`) but not the libs INDEX — its graph stamp is what app
+    // compares against.
+    write(base, 'README.md', '# moved' + String.fromCharCode(10));
+    git(base, 'add', '.');
+    git(base, 'commit', '-q', '-m', 'unrelated');
+    const noop = await indexFolder(appRoot, { fileLimit: 100, concurrency: 1, cloneFromWorktree: false, crossIndex: 'auto' });
+    expect(noop.filesIndexed).toBe(0);
+    expect(noop.crossEdgesFound).toBe(0); // no re-resolve (pre-1.40: HEAD moved → whole graph re-resolved)
+    expect(noop.symbolRefsBuilt ?? 0).toBe(0); // and no ref rebuild for a linked root that did not change
+    const appEdges = edges(appId);
+
+    // Now libs re-indexes (picks up src/new.ts → its file set, hence its
+    // stamp, moves); app's next whole-tree run re-resolves and rebuilds refs.
+    await indexFolder(libsRoot, { fileLimit: 100, concurrency: 1, cloneFromWorktree: false, crossIndex: 'auto' });
+    const appDb1 = openDatabase(appId);
+    const stored = getRepoLinks(appDb1, appId)[0];
+    const libsDb = openDatabase(libsId);
+    const live = graphStamp(libsDb, libsId);
+    libsDb.close();
+    appDb1.close();
+    expect(live).not.toBe(stored.linkedStamp);
+    const rerun = await indexFolder(appRoot, { fileLimit: 100, concurrency: 1, cloneFromWorktree: false, crossIndex: 'auto' });
+    expect(rerun.filesIndexed).toBe(0);
+    expect(rerun.crossEdgesFound).toBeGreaterThan(0); // re-resolved from stored import records
+    expect(rerun.symbolRefsBuilt ?? 0).toBeGreaterThan(0);
+    expect(edges(appId)).toEqual(appEdges); // …to the same edge set (parity)
+    const appDb2 = openDatabase(appId);
+    expect(getRepoLinks(appDb2, appId)[0].linkedStamp).toBe(live);
+    appDb2.close();
+  }, 60_000);
 
   it('externalImports on the libs side names nothing (fully resolved) and is unchanged on an unlinked seam', () => {
     const db = openDatabase(appId);
