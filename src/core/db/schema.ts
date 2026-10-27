@@ -593,6 +593,39 @@ export function setGitTreeSha(
   db.prepare('UPDATE repos SET git_tree_sha = ? WHERE id = ?').run(treeSha, repoId);
 }
 
+const RESOLVER_STAMP_PROVIDER = 'purecontext';
+const RESOLVER_STAMP_KEY = 'resolver_stamp';
+
+/**
+ * Phase 108: the path resolver's config stamp (tsconfig `extends` chain +
+ * Nuxt defaults + rule version) as of the last graph build. Lives in
+ * `provider_metadata` so no schema bump is needed; null on a pre-1.41 index,
+ * which makes its next whole-tree run re-resolve the whole graph once.
+ */
+export function getResolverStamp(
+  db: InstanceType<DatabaseConstructor>,
+  repoId: string,
+): string | null {
+  const row = db
+    .prepare<[string, string, string], { metadata: string }>(
+      'SELECT metadata FROM provider_metadata WHERE repo_id = ? AND provider_name = ? AND entity_key = ?',
+    )
+    .get(repoId, RESOLVER_STAMP_PROVIDER, RESOLVER_STAMP_KEY);
+  return row?.metadata ?? null;
+}
+
+export function setResolverStamp(
+  db: InstanceType<DatabaseConstructor>,
+  repoId: string,
+  stamp: string,
+): void {
+  db.prepare(
+    `INSERT INTO provider_metadata (repo_id, provider_name, entity_key, metadata, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(repo_id, provider_name, entity_key) DO UPDATE SET metadata = excluded.metadata, updated_at = excluded.updated_at`,
+  ).run(repoId, RESOLVER_STAMP_PROVIDER, RESOLVER_STAMP_KEY, stamp, Date.now());
+}
+
 /**
  * Get the stored Git tree SHA for a repo, or null if not set.
  */

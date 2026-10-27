@@ -376,3 +376,132 @@ describe('real fixture project', () => {
     expect(result).toBe('src/utils.ts');
   });
 });
+
+// ─── tsconfig `extends` chains (Phase 108) ────────────────────────────────────
+
+describe('tsconfig extends chain', () => {
+  it('follows a relative extends and resolves paths relative to the declaring config', () => {
+    // Stock Nuxt layout: the root tsconfig is only `extends`, the aliases live
+    // in the generated .nuxt/tsconfig.json and are relative to .nuxt/.
+    const root = makeTempProject({
+      'app/components/Foo.vue': '',
+      'app/utils/helper.ts': '',
+      '.nuxt/tsconfig.json': JSON.stringify({
+        compilerOptions: { paths: { '~/*': ['../app/*'], '@/*': ['../app/*'], '~~/*': ['../*'] } },
+      }),
+    }, { extends: './.nuxt/tsconfig.json' });
+    const r = createResolver(root);
+    expect(r.resolve('~/utils/helper', 'app/pages/index.ts')).toBe('app/utils/helper.ts');
+    expect(r.resolve('@/utils/helper', 'app/pages/index.ts')).toBe('app/utils/helper.ts');
+    expect(r.resolve('~~/app/utils/helper', 'app/pages/index.ts')).toBe('app/utils/helper.ts');
+    rmSync(root, { recursive: true });
+  });
+
+  it('lets the child paths override the parent paths wholesale', () => {
+    const root = makeTempProject({
+      'lib/a.ts': '',
+      'src/a.ts': '',
+      'base/tsconfig.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['../lib/*'] } } }),
+    }, { extends: './base/tsconfig.json', compilerOptions: { paths: { '@/*': ['src/*'] } } });
+    const r = createResolver(root);
+    expect(r.resolve('@/a', 'x.ts')).toBe('src/a.ts');
+    rmSync(root, { recursive: true });
+  });
+
+  it('uses the nearest baseUrl, resolved against its own config directory', () => {
+    const root = makeTempProject({
+      'packages/web/src/a.ts': '',
+      'packages/web/tsconfig.base.json': JSON.stringify({
+        compilerOptions: { baseUrl: './src', paths: { '@/*': ['*'] } },
+      }),
+    }, { extends: './packages/web/tsconfig.base.json' });
+    const r = createResolver(root);
+    expect(r.resolve('@/a', 'x.ts')).toBe('packages/web/src/a.ts');
+    rmSync(root, { recursive: true });
+  });
+
+  it('resolves a bare extends through node_modules (file, .json, or package dir)', () => {
+    const root = makeTempProject({
+      'src/a.ts': '',
+      'node_modules/@acme/tsconfig/tsconfig.json': JSON.stringify({
+        compilerOptions: { baseUrl: '../../..', paths: { '@/*': ['src/*'] } },
+      }),
+    }, { extends: '@acme/tsconfig' });
+    const r = createResolver(root);
+    expect(r.resolve('@/a', 'x.ts')).toBe('src/a.ts');
+    rmSync(root, { recursive: true });
+  });
+
+  it('honours array extends with the last entry winning', () => {
+    const root = makeTempProject({
+      'one/a.ts': '',
+      'two/a.ts': '',
+      'first.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['one/*'] } } }),
+      'second.json': JSON.stringify({ compilerOptions: { paths: { '@/*': ['two/*'] } } }),
+    }, { extends: ['./first.json', './second.json'] });
+    const r = createResolver(root);
+    expect(r.resolve('@/a', 'x.ts')).toBe('two/a.ts');
+    rmSync(root, { recursive: true });
+  });
+
+  it('survives a missing extends target and a cycle', () => {
+    const root = makeTempProject({
+      'src/a.ts': '',
+      'loop.json': JSON.stringify({ extends: './tsconfig.json' }),
+    }, { extends: ['./nope.json', './loop.json'], compilerOptions: { paths: { '@/*': ['src/*'] } } });
+    const r = createResolver(root);
+    expect(r.resolve('@/a', 'x.ts')).toBe('src/a.ts');
+    rmSync(root, { recursive: true });
+  });
+});
+
+// ─── Nuxt default aliases (Phase 108) ─────────────────────────────────────────
+
+describe('Nuxt default aliases without .nuxt/tsconfig.json', () => {
+  it('maps ~ / @ to app/ (Nuxt 4 layout) and ~~ / @@ / #shared to the root', () => {
+    const root = makeTempProject({
+      'nuxt.config.ts': 'export default defineNuxtConfig({})',
+      'app/utils/helper.ts': '',
+      'app/components/index.ts': '',
+      'shared/types.ts': '',
+      'server/api/x.ts': '',
+    }, { extends: './.nuxt/tsconfig.json' }); // target absent: fresh checkout
+    const r = createResolver(root);
+    expect(r.resolve('~/utils/helper', 'app/pages/index.ts')).toBe('app/utils/helper.ts');
+    expect(r.resolve('@/utils/helper', 'app/pages/index.ts')).toBe('app/utils/helper.ts');
+    expect(r.resolve('~/components', 'app/pages/index.ts')).toBe('app/components/index.ts');
+    expect(r.resolve('~~/server/api/x', 'app/pages/index.ts')).toBe('server/api/x.ts');
+    expect(r.resolve('@@/server/api/x', 'app/pages/index.ts')).toBe('server/api/x.ts');
+    expect(r.resolve('#shared/types', 'server/api/x.ts')).toBe('shared/types.ts');
+    expect(r.resolve('#imports', 'app/pages/index.ts')).toBeNull();
+    rmSync(root, { recursive: true });
+  });
+
+  it('maps ~ to the root when there is no app/ directory (Nuxt 3 layout)', () => {
+    const root = makeTempProject({
+      'nuxt.config.js': 'export default {}',
+      'composables/useFoo.ts': '',
+    });
+    const r = createResolver(root);
+    expect(r.resolve('~/composables/useFoo', 'pages/index.vue')).toBe('composables/useFoo.ts');
+    rmSync(root, { recursive: true });
+  });
+
+  it('never overrides an alias the tsconfig chain declared', () => {
+    const root = makeTempProject({
+      'nuxt.config.ts': '',
+      'app/a.ts': '',
+      'custom/a.ts': '',
+    }, { compilerOptions: { paths: { '~/*': ['custom/*'] } } });
+    const r = createResolver(root);
+    expect(r.resolve('~/a', 'x.ts')).toBe('custom/a.ts');
+    rmSync(root, { recursive: true });
+  });
+
+  it('adds nothing for a non-Nuxt project', () => {
+    const root = makeTempProject({ 'app/a.ts': '' });
+    const r = createResolver(root);
+    expect(r.resolve('~/a', 'x.ts')).toBeNull();
+    rmSync(root, { recursive: true });
+  });
+});

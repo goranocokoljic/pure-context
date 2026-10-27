@@ -12,7 +12,7 @@ import { buildGraph } from '../../src/graph/graph-builder.js';
 import type { PathResolver } from '../../src/graph/path-resolver.js';
 import type { ImportRecord } from '../../src/core/types.js';
 
-const nullResolver: PathResolver = { projectRoot: '/repo', resolve: () => null };
+const nullResolver: PathResolver = { projectRoot: '/repo', configStamp: '', resolve: () => null };
 
 function rec(sourceFile: string, resolvedPath: string, specifier = resolvedPath): ImportRecord {
   return { sourceFile, specifier, resolvedPath, importedNames: [], isTypeOnly: false };
@@ -61,7 +61,7 @@ describe('resolvePrefilledTarget', () => {
 
   it('falls back to the disk resolver but only accepts an indexed hit', () => {
     const idx = buildIndexedFileSet(['src/a.ts', 'src/b.ts']);
-    const resolver: PathResolver = { projectRoot: '/repo', resolve: (s) => (s === './b' ? 'src/b.ts' : s === './zz' ? 'src/zz.ts' : null) };
+    const resolver: PathResolver = { projectRoot: '/repo', configStamp: '', resolve: (s) => (s === './b' ? 'src/b.ts' : s === './zz' ? 'src/zz.ts' : null) };
     expect(resolvePrefilledTarget(rec('src/a.ts', 'b', './b'), idx, resolver)).toEqual(['src/b.ts']);
     expect(resolvePrefilledTarget(rec('src/a.ts', 'zz', './zz'), idx, resolver)).toEqual([]);
   });

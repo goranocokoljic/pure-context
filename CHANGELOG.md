@@ -11,6 +11,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.40.1] - 2026-10-27 — Phase 108: Nuxt Alias Edges, Task-Context Discovery, Resolver Stamp
+
+Two limits reported from a Claude Code session on a production Nuxt 4 repo
+(kurirfe, 1,012 files), plus the staleness bug that surfaced while verifying
+the first fix. No schema change; no ranking change (`bench:guard` 16 repos
+byte-identical).
+
+### Fixed
+- **tsconfig `extends` is followed** (`src/graph/path-resolver.ts`). The
+  resolver read only the root `tsconfig.json` / `jsconfig.json`. A stock Nuxt
+  root config is `{ "extends": "./.nuxt/tsconfig.json" }`, so every `~/`,
+  `@/`, `~~/`, `@@/`, `#shared/` import was "external" and `get_blast_radius`
+  showed one file. The chain is now walked (relative targets, `.json`
+  optional, bare targets through `node_modules`, array `extends` with the
+  last entry winning, cycles and missing targets skipped). TypeScript
+  semantics: the nearest config declaring `paths` wins the whole map,
+  `baseUrl` likewise, and a `paths` map without any `baseUrl` is relative to
+  the config that declares it (`.nuxt/tsconfig.json` says `"~/*": ["../app/*"]`).
+  kurirfe: **420 → 1,174 edges**; `ResponsiveImage.vue` 0 → 26 importers.
+- **Nuxt default aliases without `.nuxt/`.** The generated
+  `.nuxt/tsconfig.json` is gitignored and only exists after `nuxt prepare`.
+  When `nuxt.config.{ts,mts,js,mjs}` is present, aliases the chain did not
+  declare get Nuxt's documented defaults: `~` / `@` → `app/` when that
+  directory exists (Nuxt 4 layout) else the root, `~~` / `@@` → root,
+  `#shared` → `shared/`. Every candidate is still probed on disk, so a
+  default that does not fit yields no edge, never a wrong one. Virtual
+  aliases (`#imports`, `#app`, `#components`) stay external.
+- **`get_task_context` found nothing for a multi-word task.** Its FTS5
+  fallback passed the raw task text to `MATCH`, which is an implicit AND of
+  every word — "login form" needs one symbol carrying both (0 hits; `login OR
+  form` → 9). The reporter's "no AI summaries set up" was a red herring.
+  Discovery now uses the `search_symbols` shape (`preprocessQuery` +
+  `toOrFallbackQuery`, OR pool merged in when the AND pool has fewer than 5
+  hits, AND hits first). kurirfe "login form" → 15 context items in 7 files
+  (`loginFunction`, `ssoLogin`, …).
+
+### Added
+- **Resolver config stamp** (`PathResolver.configStamp`, stored in
+  `provider_metadata` — no schema bump). Fixing the resolver alone did not
+  help an existing index: a whole-tree run skips unchanged files, so their
+  import records kept the old (null) targets forever — only a link-set change
+  triggered a full re-resolve. The stamp hashes the resolver rule version,
+  every config in the `extends` chain (path + content) and the Nuxt
+  default-alias inputs; when it differs from the stored one, the next
+  `index_folder` (or an `index_file` that sees it) re-resolves every stored
+  import record — no re-parse (kurirfe: 1,786 records in 1.4 s). A tsconfig
+  edit, a `.nuxt/` directory appearing, or a resolver upgrade now reaches
+  unchanged files. Every pre-1.40.1 index re-resolves once on its next
+  whole-tree run ("first stamped run" in the log).
+
+### Tests
+- `test/graph/path-resolver.test.ts`: extends chains (relative, node_modules,
+  array, nearest `baseUrl`, child override, cycle + missing target) and the
+  Nuxt defaults (Nuxt 4 `app/`, Nuxt 3 root, declared alias wins, non-Nuxt
+  untouched).
+- `test/core/resolver-stamp-reresolve.test.ts`: tsconfig added → edge
+  appears on an unchanged importer; no-op run keeps stamp + edges; targeted
+  re-index honours a changed stamp; a PARENT config edit alone changes it.
+- `test/server/get-task-context.test.ts`: raw AND misses / OR shape finds
+  the seeds; dedupe; punctuation-only task; handler end to end.
+
+---
+
 ## [1.40.0] - 2026-09-13 — Phase 107: Incremental Cost Follow-ups
 
 The four items Phases 101–105 measured and wrote down as "not done", plus one

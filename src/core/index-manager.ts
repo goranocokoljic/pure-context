@@ -62,7 +62,7 @@ import { updateFileGitMeta } from './db/file-store.js';
 import { insertGitCommits, deleteGitMetadataForFile } from './db/git-metadata-store.js';
 import { insertCommitFiles, deleteCommitFilesForRepo } from './db/co-change-store.js';
 import { buildTestMappings, getTestMapperMeta, TEST_MAPPER_ALGO } from './test-mapper.js';
-import { setGitTreeSha } from './db/schema.js';
+import { setGitTreeSha, getResolverStamp, setResolverStamp } from './db/schema.js';
 import { gitHeadSha } from './git-head.js';
 import { maybeCloneWorktreeIndex } from './worktree-clone.js';
 
@@ -510,14 +510,25 @@ export async function indexFolder(
     linkedRepos: options.linkedRepos,
     maxLinkedRepos: options.maxLinkedRepos,
   });
-  const reresolveAll =
+  // Phase 108: the same full re-resolve when the alias inputs moved — a
+  // tsconfig / jsconfig edit anywhere in the `extends` chain, a Nuxt
+  // `.nuxt/tsconfig.json` appearing after `nuxt prepare`, or a resolver rule
+  // upgrade. Unchanged files are never re-parsed, so without this their
+  // import records would keep resolving against the old aliases forever
+  // (kurirfe: 420 edges for 1,012 files until the index was deleted).
+  const storedStamp = getResolverStamp(db, repoId);
+  const resolverChanged =
+    storedStamp !== resolver.configStamp && (preRunSchemaVersion ?? SCHEMA_VERSION) >= 10;
+  const linksChanged =
     (storedLinks.length > 0 || linked.links.length > 0) &&
     linksChangedSince(storedLinks, linked.links) &&
     (preRunSchemaVersion ?? SCHEMA_VERSION) >= 10;
+  const reresolveAll = linksChanged || resolverChanged;
   if (reresolveAll) graphImports = getAllImportRecords(db, repoId);
   if (reresolveAll) {
     deleteEdgesExceptType(db, repoId, 'di');
-    logger.info(`cross-index: link set changed — re-resolving all ${graphImports.length} import records`);
+    const why = linksChanged ? 'link set changed' : storedStamp === null ? 'first stamped run' : 'resolver config changed';
+    logger.info(`graph: ${why} — re-resolving all ${graphImports.length} import records`);
   }
   const familyResolvers = buildFamilyResolvers(db, repoId, absRoot, graphImports);
   let edges: DepEdge[];
@@ -534,6 +545,7 @@ export async function indexFolder(
       insertEdges(db, edges);
     }
     linked.commit(db, repoId);
+    setResolverStamp(db, repoId, resolver.configStamp);
     // ── 10'. Symbol-level ref edges (Phase 101) — same scope as the file
     //        edges (all when the whole graph was re-resolved, else the
     //        reprocessed files + their importers); the linked handles are
@@ -961,8 +973,11 @@ export async function reindexFiles(
   let linksUsed: IndexResult['linksUsed'];
   let symbolRefStats: ReturnType<typeof rebuildSymbolRefs> = null;
   const processedPaths = changedPaths.filter((p) => !errors.some((e) => e.file === p));
+  // Phase 108: a resolver-config change (tsconfig edit) seen by a targeted
+  // re-index takes the same full path — the stamp is cheap to compare.
+  const resolverChanged = repo.schemaVersion >= 10 && getResolverStamp(db, repoId) !== resolver.configStamp;
   const fullReresolve =
-    (newFiles.length > 0 && repo.schemaVersion >= 10) || options?.refreshLinks === true;
+    (newFiles.length > 0 && repo.schemaVersion >= 10) || options?.refreshLinks === true || resolverChanged;
   if (fullReresolve) {
     // A new file can be the TARGET of imports that unchanged files wrote
     // before it existed — batch-only edges would miss those forever
@@ -991,6 +1006,7 @@ export async function reindexFiles(
         insertEdges(db, rebuilt);
       }
       linked.commit(db, repoId);
+      setResolverStamp(db, repoId, resolver.configStamp);
       if (symbolEdgesEnabled(options?.skipSymbolEdges)) {
         symbolRefStats = rebuildSymbolRefs(db, repoId, 'all', linked.targets);
       }

@@ -17,6 +17,7 @@ import { openDatabase, getRepo } from '../../core/db/schema.js';
 import { getFileContent } from '../../core/db/file-store.js';
 import { countEmbeddings } from '../../core/db/embedding-store.js';
 import { ftsSearchSymbols, getSymbolsByFile } from '../../core/db/symbol-store.js';
+import { preprocessQuery, toOrFallbackQuery } from '../../core/search/query-preprocessor.js';
 import { countCommits } from '../../core/db/co-change-store.js';
 import { getContextBundle, getBlastRadius } from '../../graph/graph-traversal.js';
 import { getCoChange } from './co-change.js';
@@ -151,6 +152,8 @@ interface AiPlanResponse {
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
 const DISCOVERY_CANDIDATES = 30;
+/** AND pools thinner than this get the OR pool merged in (mirrors search_symbols). */
+const OR_FALLBACK_BELOW = 5;
 const DEFAULT_MAX_SYMBOLS = 15;
 
 // ─── AI caller ─────────────────────────────────────────────────────────────────
@@ -519,6 +522,39 @@ export function parsePlanResponse(text: string): AiPlanResponse | null {
 
 // ─── Symbol source retrieval ───────────────────────────────────────────────────
 
+/**
+ * FTS5 discovery with the search_symbols query shape: preprocessed AND query
+ * first, OR-fallback merged in when the AND pool holds fewer than
+ * `OR_FALLBACK_BELOW` hits. Exported for tests.
+ */
+export function discoverViaFts(
+  db: Database.Database,
+  repoId: string,
+  task: string,
+  limit: number = DISCOVERY_CANDIDATES,
+): SymbolRecord[] {
+  const andQuery = preprocessQuery(task);
+  if (!andQuery) return [];
+  const run = (q: string): SymbolRecord[] => {
+    try {
+      return ftsSearchSymbols(db, repoId, q, { limit });
+    } catch (err) {
+      logger.warn(`get_task_context: FTS query failed (${String(err)})`);
+      return [];
+    }
+  };
+  const andHits = run(andQuery);
+  if (andHits.length >= OR_FALLBACK_BELOW) return andHits;
+  const orQuery = toOrFallbackQuery(andQuery);
+  if (orQuery === andQuery) return andHits;
+  const seen = new Set(andHits.map((s) => s.id));
+  const merged = [...andHits];
+  for (const s of run(orQuery)) {
+    if (!seen.has(s.id) && merged.length < limit) merged.push(s);
+  }
+  return merged;
+}
+
 function fetchSymbolSources(
   db: Database.Database,
   repoId: string,
@@ -608,9 +644,13 @@ export async function handler(args: GetTaskContextArgs): Promise<CallToolResult>
     }
 
     if (candidates.length === 0) {
-      // FTS5 fallback
-      const ftsResults = ftsSearchSymbols(db, repoId, args.task, { limit: DISCOVERY_CANDIDATES });
-      candidates = ftsResults;
+      // FTS5 fallback — the same query shape search_symbols uses (Phase 108).
+      // The raw task text is an implicit-AND MATCH: a multi-word task almost
+      // never names one symbol carrying every word ("login form" → 0 hits on a
+      // stock Nuxt repo; "login OR form" → 9). Preprocess (FTS5 operator
+      // escaping, stop words, synonyms), then merge the OR pool in whenever the
+      // AND pool is thin. AND hits stay first.
+      candidates = discoverViaFts(db, repoId, args.task);
       logger.debug('get_task_context: discovery via FTS5', { candidates: candidates.length });
     }
 

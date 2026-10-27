@@ -24,6 +24,7 @@ import {
   buildPlanningPrompt,
   parsePlanResponse,
   expandSeeds,
+  discoverViaFts,
 } from '../../src/server/tools/get-task-context.js';
 import { openDatabase } from '../../src/core/db/schema.js';
 import { ftsSearchSymbols } from '../../src/core/db/symbol-store.js';
@@ -485,5 +486,54 @@ describe('expandSeeds', () => {
     } finally {
       db.close();
     }
+  });
+});
+
+// ─── FTS discovery query shape (Phase 108) ────────────────────────────────────
+
+describe('discoverViaFts', () => {
+  // A natural-language task names no single symbol with every word. The raw
+  // text as an FTS5 MATCH is an implicit AND and finds nothing; the
+  // search_symbols shape (preprocess + OR fallback) finds the seeds.
+  const task = 'format the diagnostic output and filter by severity before searching symbols';
+
+  it('raw AND MATCH misses while the OR-fallback shape finds seeds', () => {
+    const db = openDatabase(repoId);
+    try {
+      expect(ftsSearchSymbols(db, repoId, task, { limit: 30 })).toHaveLength(0);
+      const found = discoverViaFts(db, repoId, task);
+      const names = found.map((s) => s.name);
+      expect(names).toContain('formatDiagnostic');
+      expect(names).toContain('filterBySeverity');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('keeps AND hits first and dedupes the merged OR pool', () => {
+    const db = openDatabase(repoId);
+    try {
+      const found = discoverViaFts(db, repoId, 'formatDiagnostic severity');
+      const ids = found.map((s) => s.id);
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(found.length).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('returns no seeds for an all-punctuation task instead of throwing', () => {
+    const db = openDatabase(repoId);
+    try {
+      expect(discoverViaFts(db, repoId, '??? --- !!!')).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('the handler finds context for a multi-word task (the kurirfe report)', async () => {
+    const data = parse(await handler({ repoId, task }));
+    expect((data['contextItems'] as unknown[]).length).toBeGreaterThan(0);
+    expect((data['_meta'] as Record<string, unknown>)['candidatesDiscovered']).toBeGreaterThan(0);
   });
 });

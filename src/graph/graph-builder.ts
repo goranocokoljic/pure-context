@@ -273,7 +273,7 @@ export function buildGraph(
 // ─── Cross-index helpers (Phase 99) ──────────────────────────────────────────
 
 /** The disk resolver is LOCAL; a linked probe must never consult it. */
-const NULL_RESOLVER: PathResolver = { projectRoot: '', resolve: () => null };
+const NULL_RESOLVER: PathResolver = { projectRoot: '', configStamp: '', resolve: () => null };
 
 /**
  * The importer's path as seen by a LINKED resolver. Family resolvers use the
